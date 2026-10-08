@@ -163,25 +163,73 @@ func TestTreeHashIgnoresGitDir(t *testing.T) {
 	}
 }
 
-func TestTreeHashIsByteOrderSorted(t *testing.T) {
-	// 排序必须按字节序，不依赖本地化排序 —— 排序结果会进入 hash
+func TestTreeHashIsOrderIndependent(t *testing.T) {
+	// 同一个文件集合、不同的创建顺序（遍历顺序随之不同）必须得到同一个
+	// hash —— 这才是排序确定性的可观测后果。原来的写法只对同一目录调用
+	// 两次，与 TestTreeHashStableAcrossRuns 重复，测不到排序。
+	mk := func(order []string) string {
+		dir := t.TempDir()
+		for _, name := range order {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	h1, err := TreeHashOf(mk([]string{"B.go", "a.go", "Z.go"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2, err := TreeHashOf(mk([]string{"Z.go", "B.go", "a.go"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h1 != h2 {
+		t.Errorf("创建顺序不应影响树 hash: %q != %q", h1, h2)
+	}
+}
+
+func TestTreeHashHandlesSymlinks(t *testing.T) {
+	// 符号链接按链接文本 hash。三条子路径都必须不炸：
+	// 指向目录、悬空、指向文件；且「指向两个内容相同的不同文件」必须
+	// 产生不同的树 hash —— hash 目标内容会让它们相同。
 	dir := writeTree(t, map[string]struct {
 		data string
 		mode os.FileMode
 	}{
-		"B.go": {"b", 0o644},
-		"a.go": {"a", 0o644},
-		"Z.go": {"z", 0o644},
+		"target.txt": {"t\n", 0o644},
+		"twin.txt":   {"t\n", 0o644},
 	})
+	if err := os.MkdirAll(filepath.Join(dir, "realdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target.txt", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("本机不支持创建 symlink: %v", err)
+	}
+	if err := os.Symlink("nowhere", filepath.Join(dir, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("realdir", filepath.Join(dir, "dirlink")); err != nil {
+		t.Fatal(err)
+	}
+
 	h1, err := TreeHashOf(dir)
 	if err != nil {
+		t.Fatalf("含 symlink 的目录不应整体失败: %v", err)
+	}
+
+	// 只改链接文本（twin.txt 与 target.txt 内容相同）
+	if err := os.Remove(filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("twin.txt", filepath.Join(dir, "link")); err != nil {
 		t.Fatal(err)
 	}
 	h2, err := TreeHashOf(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h1 != h2 {
-		t.Error("排序必须完全确定")
+	if h1 == h2 {
+		t.Error("链接文本变化应改变树 hash（hash 目标内容会让二者相同）")
 	}
 }

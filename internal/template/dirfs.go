@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 
 	"github.com/xbcio/xinit/internal/fsutil"
 )
@@ -12,7 +13,8 @@ import (
 // implicitExcluded 与 render.implicitExcludes 保持一致。
 //
 // 这里重复一份而不是从 render 导入，是为了保持 template 包不反向依赖
-// render —— 两份定义由同一条测试覆盖（TestTreeHashIgnoresGitDir）。
+// render。TestTreeHashIgnoresGitDir 只钉住 .git 一条；跨包一致性没有
+// 测试能强制，改 render 侧名单时这份必须同步改 —— 靠这条注释提醒。
 var implicitExcluded = []string{".git", ".xinit", "xinit.yml"}
 
 // OpenDir 把一个本地目录当模板源，返回可遍历的 fs.FS 与树 hash。
@@ -69,9 +71,22 @@ func TreeHashOf(dir string) (string, error) {
 			return err
 		}
 
-		kind := "regular"
 		if d.Type()&fs.ModeSymlink != 0 {
-			kind = "symlink"
+			// 符号链接按**链接文本** hash —— 与 git 的模型一致（git 里
+			// symlink 的 blob 就是目标路径字符串）。绝不能 fs.ReadFile
+			// 跟随：指向目录或悬空时它会直接报错，把整棵树的 hash 拖垮；
+			// 指向文件时又会静默 hash 目标内容，让两个链接碰撞。
+			target, err := os.Readlink(filepath.Join(dir, filepath.FromSlash(p)))
+			if err != nil {
+				return err
+			}
+			entries = append(entries, fsutil.TreeEntry{
+				Src:  path.Clean(p),
+				Kind: "symlink",
+				Exec: false,
+				Hash: fsutil.CompareHash([]byte(target), false),
+			})
+			return nil
 		}
 
 		content, err := fs.ReadFile(fsys, p)
@@ -81,7 +96,7 @@ func TreeHashOf(dir string) (string, error) {
 
 		entries = append(entries, fsutil.TreeEntry{
 			Src:  path.Clean(p),
-			Kind: kind,
+			Kind: "regular",
 			Exec: info.Mode()&0o111 != 0,
 			Hash: fsutil.CompareHash(content, fsutil.IsBinary(content)),
 		})
