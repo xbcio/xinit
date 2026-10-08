@@ -2,6 +2,7 @@ package render
 
 import (
 	"io/fs"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -109,6 +110,35 @@ vars:
 	}
 }
 
+func TestEvalVarsConfigValueIsLiteral(t *testing.T) {
+	// --config 的值不再过模板：{{ }} 原样保留
+	c := compile(t, `
+manifest_version: 1
+vars:
+  - name: a
+    default: "x"
+  - name: b
+`)
+	v, err := EvalVars(c, map[string]string{"b": "{{ .a }}"})
+	if err != nil {
+		t.Fatalf("字面量含 {{ 不应报错: %v", err)
+	}
+	if v["b"] != "{{ .a }}" {
+		t.Errorf("配置值被当模板执行了: %q", v["b"])
+	}
+}
+
+func TestEvalVarsRejectsUndeclaredConfigKey(t *testing.T) {
+	c := compile(t, "manifest_version: 1\nvars:\n  - name: a\n")
+	_, err := EvalVars(c, map[string]string{"nope": "x"})
+	if err == nil {
+		t.Fatal("配置里出现清单未声明的变量应报错，而不是静默忽略")
+	}
+	if !strings.Contains(err.Error(), "nope") {
+		t.Errorf("错误信息应指认变量名: %v", err)
+	}
+}
+
 func TestPathsDeclaredVariableAlwaysPresentInMap(t *testing.T) {
 	// 未提供、无默认、非 required 的变量取值 ""，而不是缺席
 	c := compile(t, `
@@ -143,10 +173,15 @@ func TestPathsImplicitExcludes(t *testing.T) {
 }
 
 func TestPathsExcludeMatchesRawSrc(t *testing.T) {
+	// rename 让 Src ≠ Dst：exclude 必须匹配**原路径**。
+	// 若实现拿 Dst 匹配，"dist/**" 抓不到 Dst 为 "out/a.js" 的文件。
 	c := compile(t, `
 manifest_version: 1
 exclude:
   paths: ["dist/**"]
+rename:
+  - from: "dist"
+    to: "out"
 `)
 	fsys := fstest.MapFS{
 		"a.go":      &fstest.MapFile{Data: []byte("x")},
@@ -157,7 +192,7 @@ exclude:
 		t.Fatalf("Paths: %v", err)
 	}
 	if len(entries) != 1 || entries[0].Dst != "a.go" {
-		t.Errorf("exclude 未生效: %v", dsts(entries))
+		t.Errorf("exclude 必须匹配原 Src: %v", dsts(entries))
 	}
 }
 
@@ -355,14 +390,77 @@ func TestPathsRejectsDotDotSegment(t *testing.T) {
 }
 
 func TestPathsRejectsSymlink(t *testing.T) {
+	// 链接必须指向**存在**的文件：否则删掉检查后 MapFS 也会
+	// 因 "file does not exist" 报错，测试照样绿（空转夹具）。
 	c := compile(t, "manifest_version: 1\n")
 	fsys := fstest.MapFS{
-		"link": &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte("target")},
-		"a.go": &fstest.MapFile{Data: []byte("x")},
+		"link": {Mode: fs.ModeSymlink, Data: []byte("a.go")},
+		"a.go": {Data: []byte("x")},
 	}
 	_, _, err := Paths(fsys, c, Vars{})
 	if err == nil {
 		t.Fatal("symlink 必须报错拒绝，绝不跟随")
+	}
+	if !strings.Contains(err.Error(), "link") {
+		t.Errorf("错误必须指认这条 symlink，否则分不清是拒绝还是别的失败: %v", err)
+	}
+}
+
+func TestPathsExcludedDirBlocksNegation(t *testing.T) {
+	// 规范 §3.2：一旦目录被排除，其下的 ! 无法重新包含它
+	c := compile(t, `
+manifest_version: 1
+exclude:
+  paths: ["dist/**", "!dist/keep.js"]
+`)
+	fsys := fstest.MapFS{
+		"a.go":         &fstest.MapFile{Data: []byte("x")},
+		"dist/keep.js": &fstest.MapFile{Data: []byte("x")},
+	}
+	entries, _, err := Paths(fsys, c, Vars{})
+	if err != nil {
+		t.Fatalf("Paths: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Dst != "a.go" {
+		t.Errorf("被排除目录下的文件不得被 ! 重新包含: %v", dsts(entries))
+	}
+}
+
+func TestPathsSymlinkInExcludedDirIsSkipped(t *testing.T) {
+	// node_modules/.bin 里全是指向依赖包的链接；exclude 了它的模板
+	// 不该因此整个失败 —— 被排除的路径根本不进入派生项目
+	c := compile(t, `
+manifest_version: 1
+exclude:
+  paths: ["node_modules/**"]
+`)
+	fsys := fstest.MapFS{
+		"a.go":                  &fstest.MapFile{Data: []byte("x")},
+		"node_modules/.bin/tsc": &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte("../tsc/bin")},
+	}
+	entries, _, err := Paths(fsys, c, Vars{})
+	if err != nil {
+		t.Fatalf("被排除目录里的 symlink 应被跳过而不是失败: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Dst != "a.go" {
+		t.Errorf("exclude 未生效: %v", dsts(entries))
+	}
+}
+
+func TestPathsSymlinkedXinitYmlSkipped(t *testing.T) {
+	// 隐式排除先于 symlink 检查：xinit.yml 从不输出，
+	// 它的 symlink 变体应被跳过而不是让整个运行失败
+	c := compile(t, "manifest_version: 1\n")
+	fsys := fstest.MapFS{
+		"xinit.yml": &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte("real.yml")},
+		"a.go":      &fstest.MapFile{Data: []byte("x")},
+	}
+	entries, _, err := Paths(fsys, c, Vars{})
+	if err != nil {
+		t.Fatalf("xinit.yml 是 symlink 时应跳过而不是报错: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Dst != "a.go" {
+		t.Errorf("= %v", dsts(entries))
 	}
 }
 
@@ -389,10 +487,14 @@ func TestPathsBinaryAndExec(t *testing.T) {
 }
 
 func TestPathsGeneratedMatchesDst(t *testing.T) {
+	// rename 让 Src ≠ Dst：generated 必须匹配**最终 Dst**。
 	c := compile(t, `
 manifest_version: 1
+rename:
+  - from: "frontend"
+    to: "web"
 generated:
-  paths: ["frontend/bindings/**"]
+  paths: ["web/bindings/**"]
 `)
 	fsys := fstest.MapFS{
 		"frontend/bindings/a.js": &fstest.MapFile{Data: []byte("x")},
@@ -402,10 +504,10 @@ generated:
 	if err != nil {
 		t.Fatalf("Paths: %v", err)
 	}
-	if !find(t, entries, "frontend/bindings/a.js").Generated {
-		t.Error("generated 未标记")
+	if !find(t, entries, "web/bindings/a.js").Generated {
+		t.Error("generated 必须匹配最终 Dst")
 	}
-	if find(t, entries, "frontend/src/a.js").Generated {
+	if find(t, entries, "web/src/a.js").Generated {
 		t.Error("非 generated 路径被误标")
 	}
 }
@@ -423,21 +525,94 @@ func TestPathsCollisionDetectionOnCaseFold(t *testing.T) {
 	}
 }
 
-func TestPathsSortsByDst(t *testing.T) {
-	c := compile(t, "manifest_version: 1\n")
+func TestReplaceTokenRightLetterBoundary(t *testing.T) {
+	// 右侧字母边界："xkitoraX" 不该改
+	if got := replaceToken("xkitoraX", "xkitora", "xdesk"); got != "xkitoraX" {
+		t.Errorf("= %q, want 原串（右侧是字母）", got)
+	}
+	// 同一串里两种情形并存，防止只测了整体
+	if got := replaceToken("xkitora/xkitoraX", "xkitora", "xdesk"); got != "xdesk/xkitoraX" {
+		t.Errorf("= %q, want %q", got, "xdesk/xkitoraX")
+	}
+}
+
+func TestPathsVarsRenderBeforeRename(t *testing.T) {
+	// 路径 vars 渲染在 rename **之前**：变量值里含 from 记号时也要被改名
+	c := compile(t, `
+manifest_version: 1
+vars:
+  - name: dir
+rename:
+  - from: "xkitora"
+    to: "xdesk"
+`)
+	fsys := fstest.MapFS{"{{ .dir }}/main.go": &fstest.MapFile{Data: []byte("x")}}
+	entries, _, err := Paths(fsys, c, Vars{"dir": "xkitora"})
+	if err != nil {
+		t.Fatalf("Paths: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Dst != "xdesk/main.go" {
+		t.Errorf("变量渲染必须先于 rename: %v", dsts(entries))
+	}
+}
+
+func TestPathsRenderMatcherMatchesRawSrc(t *testing.T) {
+	// render 判定用**原 Src**（strip 前）：rename 把 xkitora → xdesk 后，
+	// 若拿改名后的路径匹配，"xkitora*" 就抓不到这个模板文件
+	c := compile(t, `
+manifest_version: 1
+rename:
+  - from: "xkitora"
+    to: "xdesk"
+render:
+  - paths: ["xkitora*"]
+    strip_suffix: ".tmpl"
+`)
+	fsys := fstest.MapFS{"xkitora.go.tmpl": &fstest.MapFile{Data: []byte("package {{ .p }}\n")}}
+	entries, _, err := Paths(fsys, c, Vars{"p": "main"})
+	if err != nil {
+		t.Fatalf("Paths: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Dst != "xdesk.go" || entries[0].Mode != ModeTemplate {
+		t.Errorf("render 必须匹配原 Src: %+v", entries)
+	}
+}
+
+func TestPathsRejectsFileDirCollision(t *testing.T) {
+	// config.tmpl → config（文件），而 config/a.go 要求 config 是目录
+	c := compile(t, `
+manifest_version: 1
+render:
+  - paths: ["*.tmpl"]
+    strip_suffix: ".tmpl"
+`)
 	fsys := fstest.MapFS{
-		"b.go": &fstest.MapFile{Data: []byte("x")},
-		"a.go": &fstest.MapFile{Data: []byte("x")},
-		"c.go": &fstest.MapFile{Data: []byte("x")},
+		"config.tmpl": &fstest.MapFile{Data: []byte("x")},
+		"config/a.go": &fstest.MapFile{Data: []byte("x")},
+	}
+	if _, _, err := Paths(fsys, c, Vars{}); err == nil {
+		t.Fatal("文件与目录同名必须在渲染阶段报冲突，而不是写盘时 I/O 失败")
+	}
+}
+
+func TestPathsSortsByDst(t *testing.T) {
+	// 必须有 rename 让 Dst 序 ≠ WalkDir 的 Src 序：
+	// Src 序是 xkitora.txt < y.txt，Dst 序是 y.txt < z.txt —— 相反
+	c := compile(t, `
+manifest_version: 1
+rename:
+  - from: "xkitora"
+    to: "z"
+`)
+	fsys := fstest.MapFS{
+		"xkitora.txt": &fstest.MapFile{Data: []byte("x")},
+		"y.txt":       &fstest.MapFile{Data: []byte("x")},
 	}
 	entries, _, err := Paths(fsys, c, Vars{})
 	if err != nil {
 		t.Fatalf("Paths: %v", err)
 	}
-	got := dsts(entries)
-	for i := 1; i < len(got); i++ {
-		if got[i-1] > got[i] {
-			t.Fatalf("输出未按 Dst 字节序排序: %v", got)
-		}
+	if got := dsts(entries); len(got) != 2 || got[0] != "y.txt" || got[1] != "z.txt" {
+		t.Fatalf("输出必须按 Dst 字节序排序: %v", got)
 	}
 }

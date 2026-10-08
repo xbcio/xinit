@@ -31,15 +31,17 @@ func EvalVars(c *manifest.Compiled, provided map[string]string) (Vars, error) {
 	for _, spec := range c.Raw.Vars {
 		val, ok := provided[spec.Name]
 		if !ok {
+			// 只有 default 走模板渲染（规范 §3.1）。--config 给的值是
+			// 字面量：用户写 "{{ .a }}" 时不该被静默改写，"lit{{" 也不该
+			// 报错（更不该把错误归咎于 default）。
 			val = spec.Default
-		}
-
-		if strings.Contains(val, "{{") {
-			rendered, err := RenderTemplate("vars."+spec.Name, []byte(val), vars)
-			if err != nil {
-				return nil, fmt.Errorf("vars.%s.default: %w", spec.Name, err)
+			if strings.Contains(val, "{{") {
+				rendered, err := RenderTemplate("vars."+spec.Name, []byte(val), vars)
+				if err != nil {
+					return nil, fmt.Errorf("vars.%s.default: %w", spec.Name, err)
+				}
+				val = string(rendered)
 			}
-			val = string(rendered)
 		}
 
 		if spec.Required && val == "" {
@@ -97,8 +99,12 @@ func Paths(fsys fs.FS, c *manifest.Compiled, v Vars) ([]Entry, []Warning, error)
 			return nil
 		}
 		if d.IsDir() {
-			// 隐式排除：整树跳过
+			// 隐式排除与 exclude 都要整树跳过：规范 §3.2 —— 目录被排除后
+			// 其下的 ! 无法重新包含（gitignore 语义）。
 			if isImplicitExcluded(p) {
+				return fs.SkipDir
+			}
+			if c.Exclude.Match(p) {
 				return fs.SkipDir
 			}
 			return nil
@@ -108,20 +114,21 @@ func Paths(fsys fs.FS, c *manifest.Compiled, v Vars) ([]Entry, []Warning, error)
 		// 所以这里直接用，不做任何分隔符转换（filepath 只出现在 IO 边界）
 		src := p
 
+		// 排除判定在 symlink 检查**之前**：被排除的路径根本不进入派生项目，
+		// 也就没有「跟随链接泄漏内容」可言。且 node_modules/.bin 这类目录
+		// 全是 symlink —— 让它们中止整个运行是不可接受的。
+		if isImplicitExcluded(src) {
+			return nil
+		}
+		if c.Exclude.Match(src) {
+			return nil
+		}
+
 		// 阶段 1：symlink 一律拒绝，绝不跟随。
 		// 必须看 DirEntry 的类型 —— os.DirFS 的 Open 会跟随链接，
 		// 用 Open/Stat 判断拒绝不生效，还会泄漏链接指向的内容。
 		if d.Type()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("模板包含符号链接 %q：xinit 拒绝跟随（会把链接指向的内容泄漏进派生项目）", src)
-		}
-
-		if isImplicitExcluded(src) {
-			return nil
-		}
-
-		// 阶段 2：exclude 判定，匹配模板内原路径
-		if c.Exclude.Match(src) {
-			return nil
 		}
 
 		// 阶段 3：路径 vars 渲染（作用于每一段）
@@ -200,6 +207,32 @@ func Paths(fsys fs.FS, c *manifest.Compiled, v Vars) ([]Entry, []Warning, error)
 		seen[key] = e.Dst
 	}
 
+	// 阶段 8b：文件与目录同名（折叠后亦然）。模板自相矛盾时必须在
+	// **写盘前**报出来，而不是等到 mkdir 失败再回删。
+	dirs := map[string]string{} // folded 目录路径 → 原目录
+	for _, e := range entries {
+		segs := strings.Split(e.Dst, "/")
+		cur := ""
+		for i := 0; i+1 < len(segs); i++ {
+			if i == 0 {
+				cur = segs[i]
+			} else {
+				cur += "/" + segs[i]
+			}
+			fk := fsutil.Fold(cur)
+			if prev, ok := dirs[fk]; ok && prev != cur {
+				return nil, nil, fmt.Errorf(
+					"模板内路径冲突：目录 %q 与 %q 在大小写不敏感的文件系统上是同一个",
+					prev, cur)
+			}
+			dirs[fk] = cur
+			if file, ok := seen[fk]; ok {
+				return nil, nil, fmt.Errorf(
+					"模板内路径冲突：%q 是文件，%q 又要求它是目录", file, e.Dst)
+			}
+		}
+	}
+
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Dst < entries[j].Dst })
 
 	return entries, warnings, nil
@@ -216,12 +249,7 @@ func isImplicitExcluded(p string) bool {
 
 // containsTemplateAction 报告字符串里是否含 {{ —— 用来决定要不要走模板渲染。
 func containsTemplateAction(s string) bool {
-	for i := 0; i+1 < len(s); i++ {
-		if s[i] == '{' && s[i+1] == '{' {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, "{{")
 }
 
 // renderPathVars 对路径的每一段做变量求值。
