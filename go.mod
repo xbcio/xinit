@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.10.2
+	github.com/goccy/go-yaml v1.19.2
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/text v0.34.0
 )
