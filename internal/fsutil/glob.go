@@ -29,7 +29,12 @@ func CompileGlob(patterns []string) (*Matcher, error) {
 		if strings.TrimSpace(p) == "" {
 			return nil, fmt.Errorf("glob 模式不能为空")
 		}
-		m.rules = append(m.rules, globRule{pat: EscapePattern(NormalizePattern(p)), neg: neg})
+		pat := EscapePattern(NormalizePattern(p))
+		if !doublestar.ValidatePattern(pat) {
+			return nil, fmt.Errorf(
+				"glob 模式 %q 语法错误（归一化后 %q 无法解析）", p, pat)
+		}
+		m.rules = append(m.rules, globRule{pat: pat, neg: neg})
 	}
 	return m, nil
 }

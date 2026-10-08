@@ -35,6 +35,36 @@ exclude:
 	}
 }
 
+// TestCompileRejectsInvalidExcludeGlob 钉住 F2 在 manifest 包的接线：
+// exclude.paths 里语法非法的 glob 必须在 Parse 阶段就报错（Parse 末端
+// 调 Compile，启动期拦截——不变量 5 精神），不能拖到渲染期才静默
+// 永不命中。
+func TestCompileRejectsInvalidExcludeGlob(t *testing.T) {
+	_, err := Parse([]byte(`
+manifest_version: 1
+exclude:
+  paths: ["[bad"]
+`))
+	if err == nil {
+		t.Fatal("exclude.paths 含语法非法的 glob 应在 Parse 阶段报错")
+	}
+}
+
+// TestCompileRejectsInvalidSubstituteGlob 同上，覆盖 substitute[].paths
+// 这条独立的编译路径。
+func TestCompileRejectsInvalidSubstituteGlob(t *testing.T) {
+	_, err := Parse([]byte(`
+manifest_version: 1
+substitute:
+  - from: "x"
+    to: "y"
+    paths: ["[bad"]
+`))
+	if err == nil {
+		t.Fatal("substitute[].paths 含语法非法的 glob 应在 Parse 阶段报错")
+	}
+}
+
 func TestCompileRejectsEmptyFrom(t *testing.T) {
 	// 空字面量会匹配到每个位置，产生无意义的全局改写
 	_, err := Parse([]byte("manifest_version: 1\nsubstitute:\n  - from: \"\"\n    to: x\n"))

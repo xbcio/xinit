@@ -140,3 +140,27 @@ func TestCompileGlobRejectsEmptyPattern(t *testing.T) {
 		t.Error("只有 ! 的模式应报错")
 	}
 }
+
+// TestCompileGlobRejectsInvalidPattern 钉住 F2：语法非法的 glob 模式
+// 必须在编译期报错，而不是静默编译成一个永不命中的 matcher
+// （doublestar.Match 对非法模式返回 err != nil，被 Match() 的
+// err == nil && ok 吞掉）。
+func TestCompileGlobRejectsInvalidPattern(t *testing.T) {
+	invalid := []string{"[a", "{a,b", "a/[/b"}
+	for _, p := range invalid {
+		t.Run(p, func(t *testing.T) {
+			if _, err := CompileGlob([]string{p}); err == nil {
+				t.Errorf("非法模式 %q 应在编译期报错", p)
+			}
+		})
+	}
+
+	valid := []string{"{a,b}", "**/*.go", "{{ .v }}/**", "!pat"}
+	for _, p := range valid {
+		t.Run(p, func(t *testing.T) {
+			if _, err := CompileGlob([]string{p}); err != nil {
+				t.Errorf("合法模式 %q 不应报错: %v", p, err)
+			}
+		})
+	}
+}
