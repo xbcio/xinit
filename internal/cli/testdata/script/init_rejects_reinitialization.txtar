@@ -15,6 +15,16 @@ stderr '已是 xinit 项目'
 # 关键回归断言：第二次调用之后，首次的文件条目仍在，不是空 {}
 grep 'go.mod' out/.xinit/state.json
 exists out/.xinit/base/go.mod
+
+# I1 复验残余：手删 state.json 而 base/ 尚存时，--force 仍不得清空
+# base/（旧 bug：writeTree 把全部文件判定为「已存在」而跳过，
+# state.files 写成 {}，SyncBase.removeStale 据此把 base/ 整棵删光）。
+rm out/.xinit/state.json
+! xinit init --template tpl --force out
+stderr '已是 xinit 项目'
+exists out/.xinit/base/go.mod
+! exists out/.xinit/state.json
+
 -- tpl/xinit.yml --
 manifest_version: 1
 -- tpl/go.mod --

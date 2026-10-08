@@ -294,12 +294,19 @@ func checkDestUsable(dest string, force bool) error {
 		return fmt.Errorf("目标 %s 不是目录", dest)
 	}
 
-	if pathExists(filepath.Join(dest, state.DirName, "state.json")) {
+	// checkDestUsable 只查 .xinit/state.json 不够：手删 state.json 而
+	// .xinit/base/ 尚存时，--force 仍会把 writeTree 的全部文件判定为
+	// 「已存在」而跳过，state.files 写成 {}，SyncBase.removeStale 据此
+	// 把 base/ 整棵清空（I1 复验残余）。两种残留命中同一个「拒绝」结论，
+	// 用统一措辞即可——用户要做的事（手动删 .xinit/ 后重试）相同。
+	stateExists := pathExists(filepath.Join(dest, state.DirName, "state.json"))
+	baseExists := pathExists(state.BaseDir(dest))
+	if stateExists || baseExists {
 		return fmt.Errorf(
-			"目标目录 %s 已是 xinit 项目（存在 %s/state.json）：init 不会重新初始化已初始化的项目"+
+			"目标目录 %s 已是 xinit 项目（存在 %s/state.json 或 %s/base）：init 不会重新初始化已初始化的项目"+
 				"（会破坏 %s/base 基线），--force 也不生效；如确需从头再来请手动删除 %s/ 后重试"+
 				"（update 将在后续版本提供）",
-			dest, state.DirName, state.DirName, state.DirName)
+			dest, state.DirName, state.DirName, state.DirName, state.DirName)
 	}
 
 	ents, err := os.ReadDir(dest)
