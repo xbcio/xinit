@@ -1,0 +1,19 @@
+# init 一个最小模板，核对派生树、state 与 base 三处产物一致
+
+xinit init --template tpl --yes out
+cmp out/xdesk/main.go want/main.go
+cmp out/.xinit/base/xdesk/main.go want/main.go
+exists out/.xinit/state.json
+! exists out/xkitora
+-- tpl/xinit.yml --
+manifest_version: 1
+vars:
+  - name: app_slug
+    default: "xdesk"
+rename:
+  - from: "xkitora"
+    to: "{{ .app_slug }}"
+-- tpl/xkitora/main.go --
+package main
+-- want/main.go --
+package main

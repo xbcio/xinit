@@ -1,0 +1,17 @@
+# --config 覆盖 vars 默认值，且覆盖值进入目录名
+
+xinit init --template tpl --config vars.yml --yes out
+exists out/myproj/main.go
+! exists out/xdesk
+-- tpl/xinit.yml --
+manifest_version: 1
+vars:
+  - name: app_slug
+    default: "xdesk"
+rename:
+  - from: "xkitora"
+    to: "{{ .app_slug }}"
+-- tpl/xkitora/main.go --
+package main
+-- vars.yml --
+app_slug: myproj

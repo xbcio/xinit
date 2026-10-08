@@ -1,0 +1,18 @@
+# --force 下同名文件不覆盖，且不留进 base
+
+xinit init --template tpl --yes --force out
+cmp out/README.md want-README.md
+! exists out/.xinit/base/README.md
+! grep 'README.md' out/.xinit/state.json
+exists out/main.go
+exists out/.xinit/base/main.go
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/main.go --
+package main
+-- tpl/README.md --
+TEMPLATE README
+-- out/README.md --
+USER README
+-- want-README.md --
+USER README

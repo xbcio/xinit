@@ -1,0 +1,11 @@
+# 非空目录（.git 除外）默认拒绝
+
+! xinit init --template tpl --yes out
+stderr '非空'
+! exists out/main.go
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/main.go --
+package main
+-- out/README.md --
+USER README
