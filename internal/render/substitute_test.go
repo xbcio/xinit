@@ -44,22 +44,24 @@ func TestApplyBasicRuleOrder(t *testing.T) {
 }
 
 func TestApplyOverlappingOccurrences(t *testing.T) {
-	// Test A：第 2 条规则的扫描指针不能落在已被第 1 条占用的位置上。
-	// 不重叠枚举实测得 "Q-x-x"，漏改了第二处。
+	// 候选必须逐字节偏移枚举：位置 1 的 "x-x" 因左邻是字母 'a' 被拒，
+	// 位置 3 与它重叠的 "x-x" 仍必须被考虑 —— 跳过被拒匹配的非重叠
+	// 扫描会漏掉它。
 	rules := []Rule{
-		{From: "x", To: "X", PrecededBy: nil},
+		{From: "x-x", To: "Y"},
 	}
-	out, _, _ := Apply([]byte("q-x-x-x"), rules, nil)
-	if string(out) != "q-X-X-X" {
-		t.Errorf("Apply = %q, want %q", out, "q-X-X-X")
+	out, _, _ := Apply([]byte("ax-x-x"), rules, nil)
+	if string(out) != "ax-Y" {
+		t.Errorf("Apply = %q, want %q", out, "ax-Y")
 	}
 }
 
 func TestApplyProtectedUsesOverlappingEnumeration(t *testing.T) {
-	// Test C：禁区也必须重叠枚举，否则第二个 1 会漏出禁区被改写
-	out, _, _ := Apply([]byte("-1-1-"), []Rule{{From: "1", To: "9"}}, []string{"1-1"})
-	if string(out) != "-1-1-" {
-		t.Errorf("Apply = %q, want %q（禁区内的内容不得被改写）", out, "-1-1-")
+	// 禁区也必须重叠枚举："1-1" 在 "-1-1-1-" 里出现于 [1,4) 与 [3,6)，
+	// 非重叠扫描只保护前者，偏移 5 的 "1" 会漏出禁区被改写。
+	out, _, _ := Apply([]byte("-1-1-1-"), []Rule{{From: "1", To: "9"}}, []string{"1-1"})
+	if string(out) != "-1-1-1-" {
+		t.Errorf("Apply = %q, want %q（禁区内的内容不得被改写）", out, "-1-1-1-")
 	}
 }
 
