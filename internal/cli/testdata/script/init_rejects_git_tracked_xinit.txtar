@@ -1,0 +1,36 @@
+# git 跟踪的 .xinit/ 必须报错拒绝（规范 §5.5），且在写任何文件之前
+# （不是像旧代码那样写完之后才警告）。
+
+# 占位文件故意不叫 state.json：避免撞上 F1（已初始化检查，见
+# init_rejects_reinitialization.txtar），单独钉住 F2 这条路径。
+exec git init -q out
+mkdir out/.xinit
+cp placeholder.txt out/.xinit/marker.txt
+exec git -C out add .xinit/marker.txt
+
+! xinit init --template tpl --force out
+stderr '已被 git 跟踪'
+
+# 写前拒绝：本次 init 不应产生任何模板产物
+! exists out/go.mod
+! exists out/main.go
+
+# 更强的写前断言：.xinit/state.json 与 .xinit/base/ 也不该出现 ——
+# 若检查被挪到写入之后（即便最终也报错退出），由于 .xinit/ 本次运行前
+# 就存在，rollback 不会清掉它名下新写的 state.json/base/，这两条断言
+# 能把「写后才查」与「写前就查」区分开来。
+! exists out/.xinit/state.json
+! exists out/.xinit/base
+
+# 占位内容必须原样保留（没有被写覆盖）
+grep 'PLACEHOLDER_MARKER' out/.xinit/marker.txt
+-- placeholder.txt --
+PLACEHOLDER_MARKER
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/go.mod --
+module demo
+
+go 1.24
+-- tpl/main.go --
+package main

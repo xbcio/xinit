@@ -1,0 +1,25 @@
+# 已初始化的项目拒绝重新 init（即便 --force）：
+# 旧 bug 是所有文件因「已存在」被跳过 -> state.json 写成 {} ->
+# SyncBase.removeStale 把 base/ 整棵删光。此处钉住：第二次调用
+# 必须在动手之前就被拒绝，首次产物（state.json 的文件条目、base/）
+# 必须原样保留。
+
+xinit init --template tpl --yes out
+exists out/.xinit/state.json
+exists out/.xinit/base/go.mod
+grep 'go.mod' out/.xinit/state.json
+
+! xinit init --template tpl --force out
+stderr '已是 xinit 项目'
+
+# 关键回归断言：第二次调用之后，首次的文件条目仍在，不是空 {}
+grep 'go.mod' out/.xinit/state.json
+exists out/.xinit/base/go.mod
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/go.mod --
+module demo
+
+go 1.24
+-- tpl/main.go --
+package main

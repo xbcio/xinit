@@ -93,6 +93,18 @@ func Init(
 		return err
 	}
 
+	// 写前安全检查（规范 §5.5）：.xinit/ 被 git 跟踪时报错。
+	// IsGitTracked 在非 git 仓/未跟踪时返回 (false, nil)；err 仅在
+	// 「dest 是 git 仓但 git 命令无法执行」这类异常态出现 —— 本检查
+	// fail-closed（旧代码在此吞错，属刻意收紧）。
+	if tracked, err := state.IsGitTracked(dest, state.DirName); err != nil {
+		return fmt.Errorf("无法确认 %s/ 是否被 git 跟踪: %w", state.DirName, err)
+	} else if tracked {
+		return fmt.Errorf(
+			"%s/ 已被 git 跟踪：拒绝写入被版本控制的 %s/（规范 §5.5）；请执行 `git rm -r --cached %s` 后重试",
+			state.DirName, state.DirName, state.DirName)
+	}
+
 	cacheRoot, err := template.DefaultCacheRoot()
 	if err != nil {
 		return err
@@ -236,11 +248,6 @@ func Init(
 		cleanup()
 		return fmt.Errorf("写 .git/info/exclude: %w", err)
 	}
-	if tracked, err := state.IsGitTracked(dest, state.DirName); err == nil && tracked {
-		fmt.Fprintf(os.Stderr,
-			"xinit: 警告: %s/ 已被 git 跟踪，请执行 `git rm -r --cached %s`\n",
-			state.DirName, state.DirName)
-	}
 
 	// 10. （M3）post_init
 
@@ -277,6 +284,14 @@ func checkDestUsable(dest string, force bool) error {
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("目标 %s 不是目录", dest)
+	}
+
+	if pathExists(filepath.Join(dest, state.DirName, "state.json")) {
+		return fmt.Errorf(
+			"目标目录 %s 已是 xinit 项目（存在 %s/state.json）：init 不会重新初始化已初始化的项目"+
+				"（会破坏 %s/base 基线），--force 也不生效；如确需从头再来请手动删除 %s/ 后重试"+
+				"（update 将在后续版本提供）",
+			dest, state.DirName, state.DirName, state.DirName)
 	}
 
 	ents, err := os.ReadDir(dest)

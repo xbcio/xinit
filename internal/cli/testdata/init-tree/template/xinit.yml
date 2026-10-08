@@ -1,0 +1,19 @@
+manifest_version: 1
+vars:
+  - name: project_name
+    default: "DemoApp"
+  - name: app_slug
+    default: "{{ .project_name | lower }}"
+    pattern: '^[a-z][a-z0-9-]*$'
+substitute:
+  - from: "Xkitora"
+    to: "{{ .project_name }}"
+    paths: ["**/*.go"]
+rename:
+  - from: "xkitora"
+    to: "{{ .app_slug }}"
+render:
+  - paths: ["**/*.tmpl"]
+    strip_suffix: ".tmpl"
+exclude:
+  paths: ["notes/draft.md"]

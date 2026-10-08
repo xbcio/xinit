@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -406,5 +409,136 @@ func TestLoadConfigFlatMap(t *testing.T) {
 	}
 	if got["project_name"] != "Xdesk" || got["app_slug"] != "xdesk" {
 		t.Errorf("= %+v", got)
+	}
+}
+
+// TestInitTreeMatchesExpectedByte 是验收标准 ③ 的落地：init 出的树与
+// testdata/init-tree/expected/ 必须逐字节一致（评审 D3）。
+//
+// 模板 testdata/init-tree/template/ 覆盖：
+//   - substitute（xkitora/main.go 里 Xkitora -> project_name）
+//   - rename（xkitora/ 目录 -> app_slug）
+//   - render + strip_suffix（README.md.tmpl -> README.md）
+//   - exclude（notes/draft.md 不输出）
+//   - exec 位（run.sh）
+//
+// expected/ 覆盖工作树产物 + .xinit/base/**（init 时二者字节相等）。
+//
+// 豁免：.xinit/state.json 不参与逐字节比较 —— 它含 hash、template.source
+// 等与运行环境相关的字段，expected/ 不收录它；但仍要求它存在，且反向
+// 扫描时单独放过它（而不是放宽整体比较强度）。
+func TestInitTreeMatchesExpectedByte(t *testing.T) {
+	tmplDir := "testdata/init-tree/template"
+	expectedDir := "testdata/init-tree/expected"
+	dest := t.TempDir()
+
+	if err := Init(dest, tmplDir, "", "", false, true, false, true); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// 正向：expected/ 里每个文件在 dest 下逐字节相等（含权限位，
+	// 尤其是 run.sh 与 .xinit/base/run.sh 的 exec 位）。
+	var expectedRel []string
+	err := filepath.WalkDir(expectedDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(expectedDir, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		expectedRel = append(expectedRel, rel)
+
+		wantData, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		wantInfo, err := os.Stat(p)
+		if err != nil {
+			return err
+		}
+
+		gotPath := filepath.Join(dest, filepath.FromSlash(rel))
+		gotData, err := os.ReadFile(gotPath)
+		if err != nil {
+			t.Errorf("期望存在 %s，但读取失败: %v", rel, err)
+			return nil
+		}
+		if !bytes.Equal(gotData, wantData) {
+			t.Errorf("%s 内容与 expected 不一致:\n got=%q\nwant=%q", rel, gotData, wantData)
+		}
+		gotInfo, err := os.Stat(gotPath)
+		if err != nil {
+			t.Errorf("stat %s: %v", rel, err)
+			return nil
+		}
+		if gotInfo.Mode().Perm() != wantInfo.Mode().Perm() {
+			t.Errorf("%s 权限 = %v, want %v", rel, gotInfo.Mode().Perm(), wantInfo.Mode().Perm())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("遍历 expected/: %v", err)
+	}
+	if len(expectedRel) == 0 {
+		t.Fatal("expected/ 下没有任何文件，夹具不完整")
+	}
+
+	// 反向：dest 里除 expected/ 之外，只允许 .xinit/state.json（豁免）
+	// 与 .git/（init 不产生，但保留以防未来夹具变化）；exclude 掉的
+	// notes/draft.md 和模板自身的 xinit.yml 都不得出现。
+	allowExtra := map[string]bool{
+		".xinit/state.json": true,
+	}
+	expectedSet := make(map[string]bool, len(expectedRel))
+	for _, rel := range expectedRel {
+		expectedSet[rel] = true
+	}
+
+	var extras []string
+	walkErr := filepath.WalkDir(dest, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dest, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == ".git" || strings.HasPrefix(rel, ".git/") {
+			return nil
+		}
+		if expectedSet[rel] || allowExtra[rel] {
+			return nil
+		}
+		extras = append(extras, rel)
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("遍历 dest: %v", walkErr)
+	}
+	if len(extras) > 0 {
+		sort.Strings(extras)
+		t.Errorf("dest 中出现了 expected/ 之外、未豁免的文件: %v", extras)
+	}
+
+	// exclude 路径与 xinit.yml 明确不得出现（反向断言已覆盖，这里再
+	// 显式点名，便于失败时直接定位）。
+	for _, forbidden := range []string{"notes/draft.md", "xinit.yml"} {
+		if _, err := os.Stat(filepath.Join(dest, forbidden)); err == nil {
+			t.Errorf("%s 不应出现在派生树中", forbidden)
+		}
+	}
+
+	// state.json 必须存在（init 的产物之一），只是不参与逐字节比较。
+	if _, err := state.Load(dest); err != nil {
+		t.Errorf("state.json 应可加载: %v", err)
 	}
 }

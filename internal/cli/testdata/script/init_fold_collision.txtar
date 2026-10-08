@@ -1,0 +1,30 @@
+# 折叠碰撞回归（评审 M1）：目标预置 out/README.md（用户内容），模板
+# 产出 readme.md（内容不同，大小写折叠后同名）。
+#
+# 核心断言——绝不能被覆盖，这是曾出过数据丢失的 bug 类：
+# 用户的 README.md 内容在任何情况下都必须保持原样，不论有无 --force。
+
+# 无 --force：非空目录先被 checkDestUsable 拦住
+! xinit init --template tpl --yes out
+stderr '非空'
+cmp out/README.md want-README.md
+
+# --force：核心断言在任何文件系统上都成立——用户内容不得被覆盖
+xinit init --template tpl --yes --force out
+cmp out/README.md want-README.md
+
+# 大小写不敏感文件系统（darwin 默认）才会触发折叠碰撞路径，
+# 在其上追加检查折叠碰撞的警告与「不记入 state/base」语义
+[darwin] stderr '同一个文件'
+[darwin] ! grep 'readme.md' out/.xinit/state.json
+[darwin] ! exists out/.xinit/base/readme.md
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/readme.md --
+TEMPLATE README (lowercase)
+-- tpl/main.go --
+package main
+-- out/README.md --
+user content
+-- want-README.md --
+user content
