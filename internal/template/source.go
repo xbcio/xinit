@@ -29,7 +29,13 @@ type Source struct {
 	Kind     Kind
 	FS       fs.FS
 	Revision string // 用户给的引用名（tag / sha / 分支）；dir 源为空
-	Commit   string // git：commit sha；dir：树 hash
+	// Commit 两段式填充：git 源在 Open 时就定下（commit sha）；
+	// dir 源的树 hash 要排除清单 exclude 命中的文件（规范 §5.4），
+	// 而 exclude 要等清单编译完才有 —— 此处留空，调用方须在编译清单
+	// 之后调用 TreeHashOf 补上。
+	Commit string
+	// DirRoot 是 dir 源的磁盘根目录，供清单编译后计算树 hash；git 源为空。
+	DirRoot string
 }
 
 // Open 打开一个模板源。
@@ -83,11 +89,11 @@ func isBareRepo(dir string) bool {
 }
 
 func openDirSource(dir string) (*Source, error) {
-	fsys, hash, err := OpenDir(dir)
+	fsys, err := OpenDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	return &Source{Kind: KindDir, FS: fsys, Commit: hash}, nil
+	return &Source{Kind: KindDir, FS: fsys, DirRoot: dir}, nil
 }
 
 func openGit(src, revision, cacheRoot string, fetch bool) (*Source, error) {

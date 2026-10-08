@@ -17,24 +17,20 @@ import (
 // 测试能强制，改 render 侧名单时这份必须同步改 —— 靠这条注释提醒。
 var implicitExcluded = []string{".git", ".xinit", "xinit.yml"}
 
-// OpenDir 把一个本地目录当模板源，返回可遍历的 fs.FS 与树 hash。
+// OpenDir 把一个本地目录当模板源，只做 stat 校验，返回可遍历的 fs.FS。
 //
-// 树 hash 是 dir 源的「commit」：目录会被就地改动，没有稳定的版本标识，
-// 只能对当前内容取指纹。
-func OpenDir(dir string) (fs.FS, string, error) {
+// 不再在这里算树 hash：dir 源的树 hash 要按清单 exclude 排除（规范
+// §5.4），而 exclude 要等清单编译完才有 —— 调用方须在编译清单之后另行
+// 调用 TreeHashOf。
+func OpenDir(dir string) (fs.FS, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
-		return nil, "", fmt.Errorf("模板目录 %s: %w", dir, err)
+		return nil, fmt.Errorf("模板目录 %s: %w", dir, err)
 	}
 	if !info.IsDir() {
-		return nil, "", fmt.Errorf("模板路径 %s 不是目录", dir)
+		return nil, fmt.Errorf("模板路径 %s 不是目录", dir)
 	}
-
-	hash, err := TreeHashOf(dir)
-	if err != nil {
-		return nil, "", err
-	}
-	return os.DirFS(dir), hash, nil
+	return os.DirFS(dir), nil
 }
 
 // TreeHashOf 计算一个目录的树 hash（规范 §5.4）。
@@ -45,7 +41,12 @@ func OpenDir(dir string) (fs.FS, string, error) {
 //
 // 每条记录带分隔符与类型（见 fsutil.RenderTreeHash），否则
 // a="ab", b="" 与 a="a", b="b" 会得到相同的 hash。
-func TreeHashOf(dir string) (string, error) {
+//
+// exclude 为 nil 时不额外排除（只应用隐式排除）。遍历顺序：先隐式排除
+// （现状不动），再 exclude —— 目录命中 → fs.SkipDir、文件命中 →
+// skip，与 render.Paths 的 §3.2 语义一致（目录被排除后其下 ! 无法
+// 重新包含）。
+func TreeHashOf(dir string, exclude *fsutil.Matcher) (string, error) {
 	fsys := os.DirFS(dir)
 
 	var entries []fsutil.TreeEntry
@@ -57,6 +58,12 @@ func TreeHashOf(dir string) (string, error) {
 			return nil
 		}
 		if isImplicitlyExcluded(p) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if exclude != nil && exclude.Match(p) {
 			if d.IsDir() {
 				return fs.SkipDir
 			}

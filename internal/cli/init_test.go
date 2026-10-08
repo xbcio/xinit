@@ -542,3 +542,101 @@ func TestInitTreeMatchesExpectedByte(t *testing.T) {
 		t.Errorf("state.json 应可加载: %v", err)
 	}
 }
+
+// copyDirPreservingMode 把 src 整棵目录复制到 dst，保留文件权限位
+// （含 exec 位）。testdata/init-tree/template 下的 run.sh 是可执行的，
+// 用 io.Copy + 固定 0644 会把它改成不可执行，令后续 Init 对 run.sh
+// 的 exec 位断言失效。
+func copyDirPreservingMode(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatalf("复制模板目录 %s -> %s: %v", src, dst, err)
+	}
+}
+
+// TestInitDirCommitTracksExclude 是 F1 的端到端判别力证明：dir 源的
+// state.json 的 template.commit 必须按清单 exclude 排除计算
+// （规范 §5.4），而不是在 Open 阶段、exclude 编译之前就定下来。
+//
+// 绝不就地改 testdata/init-tree/template 这份仓库夹具（它被
+// TestInitTreeMatchesExpectedByte 依赖逐字节比较）：先复制到
+// t.TempDir()，只在副本上改动。
+func TestInitDirCommitTracksExclude(t *testing.T) {
+	srcTmpl := "testdata/init-tree/template"
+	tmplCopy := filepath.Join(t.TempDir(), "template")
+	copyDirPreservingMode(t, srcTmpl, tmplCopy)
+
+	readCommit := func(dest string) string {
+		t.Helper()
+		st, err := state.Load(dest)
+		if err != nil {
+			t.Fatalf("state.Load(%s): %v", dest, err)
+		}
+		return st.Template.Commit
+	}
+
+	// out1：基线
+	out1 := t.TempDir()
+	if err := Init(out1, tmplCopy, "", "", false, true, false, true); err != nil {
+		t.Fatalf("Init(out1): %v", err)
+	}
+	commit1 := readCommit(out1)
+	if commit1 == "" {
+		t.Fatal("dir 源的 template.commit 不应为空")
+	}
+
+	// 改副本里被 exclude 命中的文件（xinit.yml: exclude.paths:
+	// ["notes/draft.md"]）→ commit 不应变化
+	draftPath := filepath.Join(tmplCopy, "notes", "draft.md")
+	if err := os.WriteFile(draftPath, []byte("改过的草稿\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out2 := t.TempDir()
+	if err := Init(out2, tmplCopy, "", "", false, true, false, true); err != nil {
+		t.Fatalf("Init(out2): %v", err)
+	}
+	commit2 := readCommit(out2)
+	if commit2 != commit1 {
+		t.Errorf("改 exclude 命中的文件后 commit 应不变: %q != %q", commit1, commit2)
+	}
+
+	// 再改一个被包含的文件（README.md.tmpl）→ commit 应变化
+	readmePath := filepath.Join(tmplCopy, "README.md.tmpl")
+	data, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(readmePath, append(data, []byte("更多内容\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out3 := t.TempDir()
+	if err := Init(out3, tmplCopy, "", "", false, true, false, true); err != nil {
+		t.Fatalf("Init(out3): %v", err)
+	}
+	commit3 := readCommit(out3)
+	if commit3 == commit2 {
+		t.Error("改未被排除的文件后 commit 应变化")
+	}
+}

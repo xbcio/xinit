@@ -130,6 +130,14 @@ func Init(
 		return fmt.Errorf("编译模板的 xinit.yml: %w", err)
 	}
 
+	// dir 源的树 hash 是它的「commit」，必须等清单编译出来才能算：
+	// §5.4 要求排除 exclude 命中的文件（git 源的 commit 在 Open 时已定）。
+	if src.Kind == template.KindDir {
+		if src.Commit, err = template.TreeHashOf(src.DirRoot, compiled.Exclude); err != nil {
+			return err
+		}
+	}
+
 	// 3. 求值 vars
 	provided := map[string]string{}
 	if configPath != "" {

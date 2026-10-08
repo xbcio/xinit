@@ -22,8 +22,14 @@ func TestOpenDirSource(t *testing.T) {
 	if s.Kind != KindDir {
 		t.Errorf("Kind = %v, want KindDir", s.Kind)
 	}
-	if s.Commit == "" {
-		t.Error("dir 源的 Commit 应是树 hash，不应为空")
+	// dir 源的 Commit 要等清单编译完才能算（规范 §5.4 要求排除
+	// exclude 命中的文件）：Open 阶段只填 DirRoot，Commit 留空，
+	// 调用方须在编译清单之后调用 TreeHashOf 补上（见 cli.Init）。
+	if s.Commit != "" {
+		t.Errorf("Open 阶段 dir 源的 Commit 应留空，实际 %q", s.Commit)
+	}
+	if s.DirRoot != dir {
+		t.Errorf("DirRoot = %q, want %q", s.DirRoot, dir)
 	}
 	if _, err := readFileAt(s.FS, "a.go"); err != nil {
 		t.Errorf("FS 不可用: %v", err)

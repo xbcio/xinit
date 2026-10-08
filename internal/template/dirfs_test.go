@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/xbcio/xinit/internal/fsutil"
 )
 
 // readFileAt 是测试用的便捷读取。
@@ -46,12 +48,9 @@ func TestOpenDirReturnsUsableFS(t *testing.T) {
 		"a.go":     {"package a\n", 0o644},
 		"sub/b.go": {"package b\n", 0o644},
 	})
-	fsys, hash, err := OpenDir(dir)
+	fsys, err := OpenDir(dir)
 	if err != nil {
 		t.Fatalf("OpenDir: %v", err)
-	}
-	if hash == "" {
-		t.Error("树 hash 不应为空")
 	}
 	data, err := readFileAt(fsys, "a.go")
 	if err != nil {
@@ -70,12 +69,12 @@ func TestTreeHashStableAcrossRuns(t *testing.T) {
 		"a.go": {"a", 0o644},
 		"b.go": {"b", 0o644},
 	})
-	h1, err := TreeHashOf(dir)
+	h1, err := TreeHashOf(dir, nil)
 	if err != nil {
 		t.Fatalf("TreeHashOf2: %v", err)
 	}
 	for i := 0; i < 10; i++ {
-		h2, err := TreeHashOf(dir)
+		h2, err := TreeHashOf(dir, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,8 +94,8 @@ func TestTreeHashChangesOnContent(t *testing.T) {
 		mode os.FileMode
 	}{"a.go": {"b", 0o644}})
 
-	ha, _ := TreeHashOf(a)
-	hb, _ := TreeHashOf(b)
+	ha, _ := TreeHashOf(a, nil)
+	hb, _ := TreeHashOf(b, nil)
 	if ha == hb {
 		t.Error("内容变化应改变树 hash")
 	}
@@ -112,8 +111,8 @@ func TestTreeHashChangesOnRename(t *testing.T) {
 		mode os.FileMode
 	}{"b.go": {"x", 0o644}})
 
-	ha, _ := TreeHashOf(a)
-	hb, _ := TreeHashOf(b)
+	ha, _ := TreeHashOf(a, nil)
+	hb, _ := TreeHashOf(b, nil)
 	if ha == hb {
 		t.Error("改名应改变树 hash（v2 的编码缺陷会让它们相同）")
 	}
@@ -129,8 +128,8 @@ func TestTreeHashChangesOnExecBit(t *testing.T) {
 		mode os.FileMode
 	}{"s.sh": {"x", 0o755}})
 
-	ha, _ := TreeHashOf(a)
-	hb, _ := TreeHashOf(b)
+	ha, _ := TreeHashOf(a, nil)
+	hb, _ := TreeHashOf(b, nil)
 	if ha == hb {
 		t.Error("exec 位变化应改变树 hash")
 	}
@@ -142,7 +141,7 @@ func TestTreeHashIgnoresGitDir(t *testing.T) {
 		data string
 		mode os.FileMode
 	}{"a.go": {"x", 0o644}})
-	before, err := TreeHashOf(dir)
+	before, err := TreeHashOf(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +153,7 @@ func TestTreeHashIgnoresGitDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	after, err := TreeHashOf(dir)
+	after, err := TreeHashOf(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,11 +175,11 @@ func TestTreeHashIsOrderIndependent(t *testing.T) {
 		}
 		return dir
 	}
-	h1, err := TreeHashOf(mk([]string{"B.go", "a.go", "Z.go"}))
+	h1, err := TreeHashOf(mk([]string{"B.go", "a.go", "Z.go"}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := TreeHashOf(mk([]string{"Z.go", "B.go", "a.go"}))
+	h2, err := TreeHashOf(mk([]string{"Z.go", "B.go", "a.go"}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +212,7 @@ func TestTreeHashHandlesSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h1, err := TreeHashOf(dir)
+	h1, err := TreeHashOf(dir, nil)
 	if err != nil {
 		t.Fatalf("含 symlink 的目录不应整体失败: %v", err)
 	}
@@ -225,11 +224,71 @@ func TestTreeHashHandlesSymlinks(t *testing.T) {
 	if err := os.Symlink("twin.txt", filepath.Join(dir, "link")); err != nil {
 		t.Fatal(err)
 	}
-	h2, err := TreeHashOf(dir)
+	h2, err := TreeHashOf(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if h1 == h2 {
 		t.Error("链接文本变化应改变树 hash（hash 目标内容会让二者相同）")
+	}
+}
+
+// TestTreeHashHonorsExclude 钉住 F1：dir 源的树 hash 必须按清单 exclude
+// 排除，且目录命中要整树跳过（fs.SkipDir），与 render.Paths 的 §3.2
+// 语义一致 —— 否则被排除目录下新增文件不会被跳过，只是不参与 hash 的
+// "文件级" 排除是不够的，必须验证 SkipDir 真的生效。
+func TestTreeHashHonorsExclude(t *testing.T) {
+	dir := writeTree(t, map[string]struct {
+		data string
+		mode os.FileMode
+	}{
+		"keep.txt":   {"keep-v1", 0o644},
+		"skip/a.txt": {"skip-v1", 0o644},
+	})
+	m, err := fsutil.CompileGlob([]string{"skip/**"})
+	if err != nil {
+		t.Fatalf("CompileGlob: %v", err)
+	}
+
+	base, err := TreeHashOf(dir, m)
+	if err != nil {
+		t.Fatalf("TreeHashOf: %v", err)
+	}
+
+	// (1) 改 skip/a.txt 内容 → hash 不变
+	if err := os.WriteFile(filepath.Join(dir, "skip", "a.txt"), []byte("skip-v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	afterEdit, err := TreeHashOf(dir, m)
+	if err != nil {
+		t.Fatalf("TreeHashOf: %v", err)
+	}
+	if afterEdit != base {
+		t.Error("改 exclude 命中的文件内容应不改变树 hash")
+	}
+
+	// (2) skip/ 下新增文件 → hash 不变（证明 SkipDir 真的生效，
+	// 不是只在文件级跳过已存在的文件）
+	if err := os.WriteFile(filepath.Join(dir, "skip", "b.txt"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	afterAdd, err := TreeHashOf(dir, m)
+	if err != nil {
+		t.Fatalf("TreeHashOf: %v", err)
+	}
+	if afterAdd != base {
+		t.Error("exclude 命中的目录下新增文件应不改变树 hash（SkipDir 未生效）")
+	}
+
+	// (3) 改 keep.txt → hash 变
+	if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("keep-v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	afterKeepEdit, err := TreeHashOf(dir, m)
+	if err != nil {
+		t.Fatalf("TreeHashOf: %v", err)
+	}
+	if afterKeepEdit == base {
+		t.Error("改未被排除的文件应改变树 hash")
 	}
 }
