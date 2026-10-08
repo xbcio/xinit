@@ -308,8 +308,10 @@ func TestMirrorLockStaleTakeover(t *testing.T) {
 	}
 }
 
-// TestEnsureMirrorCleansUpAfterCloneFailure 覆盖 clone 失败后清理半成品
-// 目录的分支。
+// TestEnsureMirrorCleansUpAfterCloneFailure 只验证「clone 失败会向上
+// 报错」这一半——用不存在的源路径触发的 clone 失败发生在 git 创建
+// 目标目录之前，所以下面 leftover 的 stat 断言恒为真，不具备判别力
+// （清理行为由 TestEnsureMirrorCleansUpHalfClone 单独覆盖）。
 func TestEnsureMirrorCleansUpAfterCloneFailure(t *testing.T) {
 	cache := t.TempDir()
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
@@ -324,5 +326,44 @@ func TestEnsureMirrorCleansUpAfterCloneFailure(t *testing.T) {
 	leftover := filepath.Join(cache, mirrorDirName(missing))
 	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
 		t.Errorf("clone 失败后不应残留 %s（stat err=%v）", leftover, err)
+	}
+}
+
+// TestEnsureMirrorCleansUpHalfClone 覆盖 I3 的清理分支，且必须真的
+// 有判别力：上次进程崩溃留下的半成品目录（存在但没有 HEAD）不清理的话，
+// 下次 clone 会撞上「已存在且非空」→ git 报错 → 该模板源永久卡死。
+//
+// 注意不能用「不存在的源路径」造 clone 失败 —— 那种失败发生在创建目标
+// 目录之前，断言会恒真（这正是上一版测试空转的原因，见 task-16-fix-review.md）。
+func TestEnsureMirrorCleansUpHalfClone(t *testing.T) {
+	src, _ := newRepo(t, map[string]struct {
+		data string
+		mode os.FileMode
+	}{"a.go": {"x", 0o644}})
+	cache := t.TempDir()
+
+	// 模拟崩溃残留：镜像目录存在、没有 HEAD、里面有半成品文件
+	dir := filepath.Join(cache, mirrorDirName(src))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "partial"), []byte("junk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ensureMirror(src, cache, false); err == nil {
+		t.Fatal("目标目录已存在且非空时 clone 应失败")
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("半成品目录应被清理，否则该模板源永久卡死（stat err=%v）", err)
+	}
+
+	// 清理后重试必须成功 —— 同时证明上面的失败不是环境恒错
+	got, err := ensureMirror(src, cache, false)
+	if err != nil {
+		t.Fatalf("清理后重试应成功: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(got, "HEAD")); err != nil {
+		t.Errorf("重试后的镜像不可用: %v", err)
 	}
 }
