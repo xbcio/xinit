@@ -44,6 +44,7 @@ type FileState struct {
 	Hash      string `json:"hash"`
 	Exec      bool   `json:"exec"`
 	Binary    bool   `json:"binary"`
+	MixedEOL  bool   `json:"mixed_eol"` // §9.1：DetectEOL == EOLMixed；行 6 的第二判据
 	Generated bool   `json:"generated"` // 上次更新时该路径是否属于 generated
 }
 

@@ -242,3 +242,56 @@ func TestStateJSONShape(t *testing.T) {
 		}
 	}
 }
+
+func TestFileStateMixedEOLRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := New("0.0.0")
+	st.Files["a.txt"] = FileState{
+		Src: "a.txt", Hash: "sha256/normlf-v1:00", MixedEOL: true,
+	}
+	data, err := st.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// JSON 键名必须按规范 §4.3 是 mixed_eol
+	if !strings.Contains(string(data), `"mixed_eol": true`) {
+		t.Fatalf("序列化缺少 mixed_eol 键：\n%s", data)
+	}
+	if err := st.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Files["a.txt"].MixedEOL {
+		t.Error("mixed_eol 未在 Save/Load 往返中保留")
+	}
+}
+
+func TestLoadStateWithoutMixedEOLField(t *testing.T) {
+	// M1 写的旧 state.json 没有 mixed_eol 键：必须解码为零值，不能报错
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, DirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `{
+	  "version": 1,
+	  "hash_algo": "sha256/normlf-v1",
+	  "engine_version": "0.1.0",
+	  "template": {"source": "tpl", "kind": "git", "revision": "v1.0.0", "commit": "abc"},
+	  "vars": {},
+	  "trusted_hooks": {},
+	  "files": {"a.txt": {"src": "a.txt", "hash": "sha256/normlf-v1:00", "exec": false, "binary": false, "generated": false}}
+	}`
+	if err := os.WriteFile(Path(dir), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatalf("旧状态应能解码: %v", err)
+	}
+	if got.Files["a.txt"].MixedEOL {
+		t.Error("缺字段应为 false")
+	}
+}

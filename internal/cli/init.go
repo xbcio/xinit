@@ -237,6 +237,7 @@ func Init(
 			Hash:      renderContentHash(content, e.Binary),
 			Exec:      e.Exec,
 			Binary:    e.Binary,
+			MixedEOL:  fsutil.DetectEOL(content) == fsutil.EOLMixed,
 			Generated: e.Generated,
 		}
 	}
