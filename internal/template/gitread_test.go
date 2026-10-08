@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -279,5 +280,37 @@ func TestRunGitRejectsOptionLikeArgs(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := ListTree(dir, "--upload-pack=evil"); err == nil {
 		t.Fatal("以 - 开头的 revision 应被拒绝")
+	}
+}
+
+func TestCatBlobErrorIncludesGitStderr(t *testing.T) {
+	// git 失败时必须带上 git 自己的 stderr，只报 "exit status 128"
+	// 会把真正原因丢掉（例如目录不存在）
+	missing := filepath.Join(t.TempDir(), "no-such-repo")
+	hash := strings.Repeat("0", 40)
+	_, err := CatBlob(missing, hash)
+	if err == nil {
+		t.Fatal("仓库目录不存在应报错")
+	}
+	if !strings.Contains(err.Error(), "fatal") {
+		t.Errorf("错误应包含 git 的 stderr（fatal: ...）: %v", err)
+	}
+}
+
+func TestListTreeHandlesTabInFilename(t *testing.T) {
+	// TAB 正是 ls-tree -z 的字段分隔符：按「第一个 TAB」切分才对，
+	// 若将来有人改成 LastIndexByte 之类，这条测试会红
+	dir, commit := newRepo(t, map[string]struct {
+		data string
+		mode os.FileMode
+	}{
+		"a\tb.txt": {"x\n", 0o644},
+	})
+	entries, err := ListTree(dir, commit)
+	if err != nil {
+		t.Fatalf("ListTree: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Path != "a\tb.txt" {
+		t.Fatalf("含 TAB 的文件名必须原样保留: %+v", entries)
 	}
 }

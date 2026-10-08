@@ -36,12 +36,22 @@ type TreeEntry struct {
 //     且 '--upload-pack=evil' 会被拒绝、rc=128）；
 //   - 禁用 ext:: 传输协议。
 func runGit(repoDir string, args ...string) ([]byte, error) {
+	return runGitStdin(repoDir, "", args...)
+}
+
+// runGitStdin 与 runGit 相同，但把 stdin 也接上（cat-file --batch 从
+// stdin 读对象名）。错误里同样带上 git 的 stderr —— 只报
+// "exit status 128" 会把真正的原因（仓库不存在、对象损坏）丢掉。
+func runGitStdin(repoDir, stdin string, args ...string) ([]byte, error) {
 	var base []string
 	if repoDir != "" {
 		base = append(base, "-C", repoDir)
 	}
 	base = append(base, "-c", "protocol.ext.allow=never")
 	cmd := exec.Command("git", append(base, args...)...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -145,14 +155,9 @@ func CatBlob(repoDir, blobHash string) ([]byte, error) {
 		return nil, err
 	}
 
-	cmd := exec.Command("git",
-		"-C", repoDir,
-		"-c", "protocol.ext.allow=never",
-		"cat-file", "--batch")
-	cmd.Stdin = strings.NewReader(blobHash + "\n")
-	out, err := cmd.Output()
+	out, err := runGitStdin(repoDir, blobHash+"\n", "cat-file", "--batch")
 	if err != nil {
-		return nil, fmt.Errorf("git cat-file --batch: %w", err)
+		return nil, err
 	}
 
 	lf := bytes.IndexByte(out, '\n')
@@ -188,14 +193,9 @@ func ReadBlobs(repoDir string, hashes []string) (map[string][]byte, error) {
 		}
 	}
 
-	cmd := exec.Command("git",
-		"-C", repoDir,
-		"-c", "protocol.ext.allow=never",
-		"cat-file", "--batch")
-	cmd.Stdin = strings.NewReader(strings.Join(hashes, "\n") + "\n")
-	out, err := cmd.Output()
+	out, err := runGitStdin(repoDir, strings.Join(hashes, "\n")+"\n", "cat-file", "--batch")
 	if err != nil {
-		return nil, fmt.Errorf("git cat-file --batch: %w", err)
+		return nil, err
 	}
 
 	result := make(map[string][]byte, len(hashes))
