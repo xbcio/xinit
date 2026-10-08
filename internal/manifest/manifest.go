@@ -25,6 +25,8 @@ type Manifest struct {
 	Exclude           PathSpec       `yaml:"exclude"`
 	Generated         PathSpec       `yaml:"generated"`
 	Hooks             HooksSpec      `yaml:"hooks"`
+
+	compiled *Compiled // Compile 的结果缓存；见 compile.go
 }
 
 // VarSpec 是一个变量声明。变量名必须是合法 Go 标识符（[A-Za-z_][A-Za-z0-9_]*），
@@ -96,5 +98,8 @@ func Parse(data []byte) (*Manifest, error) {
 			m.Version, ManifestVersion)
 	}
 
+	if _, err := m.Compile(); err != nil {
+		return nil, err
+	}
 	return &m, nil
 }
