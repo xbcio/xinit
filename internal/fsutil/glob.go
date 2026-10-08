@@ -21,6 +21,7 @@ type globRule struct {
 func CompileGlob(patterns []string) (*Matcher, error) {
 	m := &Matcher{}
 	for _, p := range patterns {
+		orig := p // 作者原文（含 ! 前缀），报错时用它，不用剥离后的 p
 		neg := false
 		if strings.HasPrefix(p, "!") {
 			neg = true
@@ -32,7 +33,7 @@ func CompileGlob(patterns []string) (*Matcher, error) {
 		pat := EscapePattern(NormalizePattern(p))
 		if !doublestar.ValidatePattern(pat) {
 			return nil, fmt.Errorf(
-				"glob 模式 %q 语法错误（归一化后 %q 无法解析）", p, pat)
+				"glob 模式 %q 语法错误（归一化后 %q 无法解析）", orig, pat)
 		}
 		m.rules = append(m.rules, globRule{pat: pat, neg: neg})
 	}

@@ -1,6 +1,9 @@
 package fsutil
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // 这一组逐行对应规范 §3.2 的实测表格。
 func TestNormalizePatternAnchoring(t *testing.T) {
@@ -163,4 +166,16 @@ func TestCompileGlobRejectsInvalidPattern(t *testing.T) {
 			}
 		})
 	}
+
+	// 修复轮 1：! 取反前缀的非法模式报错时必须保留作者原文（含 !），
+	// 不能打印剥离 ! 之后的形式 —— 否则作者看到的报错和自己写的不一致。
+	t.Run("![a", func(t *testing.T) {
+		_, err := CompileGlob([]string{"![a"})
+		if err == nil {
+			t.Fatal("非法模式 \"![a\" 应在编译期报错")
+		}
+		if !strings.Contains(err.Error(), "![a") {
+			t.Errorf("错误信息应保留作者原文 \"![a\"（含 ! 前缀），实际: %v", err)
+		}
+	})
 }
