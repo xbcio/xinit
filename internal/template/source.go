@@ -1,0 +1,116 @@
+package template
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+)
+
+// Kind 是模板来源的类型。
+type Kind uint8
+
+const (
+	KindGit Kind = iota
+	KindDir
+)
+
+func (k Kind) String() string {
+	switch k {
+	case KindGit:
+		return "git"
+	case KindDir:
+		return "dir"
+	}
+	return "unknown"
+}
+
+// Source 是一个已就绪的模板源。
+type Source struct {
+	Kind     Kind
+	FS       fs.FS
+	Revision string // 用户给的引用名（tag / sha / 分支）；dir 源为空
+	Commit   string // git：commit sha；dir：树 hash
+}
+
+// Open 打开一个模板源。
+//
+// revision 为空时用默认分支的 HEAD；dir 源忽略 revision。
+//
+// fetch=false 时只读本地镜像缓存，不联网。
+func Open(src, revision, cacheRoot string, fetch bool) (*Source, error) {
+	// revision 允许为空（空 = 用默认分支的 HEAD）：为空时不能过
+	// checkRefArg —— 它把空串一律当非法，那条规则是给必填引用名准备的。
+	if revision != "" {
+		if err := checkRefArg("revision", revision); err != nil {
+			return nil, err
+		}
+	}
+
+	info, statErr := os.Stat(src)
+	if statErr == nil && info.IsDir() {
+		if isGitRepo(src) || isBareRepo(src) {
+			return openGit(src, revision, cacheRoot, fetch)
+		}
+		return openDirSource(src)
+	}
+	if statErr == nil && !info.IsDir() {
+		return nil, fmt.Errorf("模板路径 %s 不是目录", src)
+	}
+
+	// 本地不存在，当作 git URL
+	return openGit(src, revision, cacheRoot, fetch)
+}
+
+func isGitRepo(dir string) bool {
+	_, err := os.Stat(dir + "/.git")
+	return err == nil
+}
+
+// isBareRepo 判断裸仓（有 objects/ 与 HEAD，但没有 .git/ 子目录）。
+//
+// 裸仓不能当 dir 源：它没有工作树，只有对象库 —— 必须走镜像。
+func isBareRepo(dir string) bool {
+	if isGitRepo(dir) {
+		return false
+	}
+	if _, err := os.Stat(dir + "/objects"); err != nil {
+		return false
+	}
+	if _, err := os.Stat(dir + "/HEAD"); err != nil {
+		return false
+	}
+	return true
+}
+
+func openDirSource(dir string) (*Source, error) {
+	fsys, hash, err := OpenDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	return &Source{Kind: KindDir, FS: fsys, Commit: hash}, nil
+}
+
+func openGit(src, revision, cacheRoot string, fetch bool) (*Source, error) {
+	repoDir := src
+	if !isGitRepo(src) {
+		var err error
+		repoDir, err = ensureMirror(src, cacheRoot, fetch)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if revision == "" {
+		revision = "HEAD"
+	}
+	commit, err := resolveCommit(repoDir, revision)
+	if err != nil {
+		return nil, err
+	}
+
+	fsys, err := NewGitFS(repoDir, commit)
+	if err != nil {
+		return nil, err
+	}
+	return &Source{Kind: KindGit, FS: fsys, Revision: revision, Commit: commit}, nil
+}
