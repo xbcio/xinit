@@ -189,10 +189,16 @@ func TestGoldenExecBit(t *testing.T) {
 	}
 	got := loadGolden(t, dir)
 
-	wantExec := map[string]bool{"run.sh": true}
+	wantExec := map[string]bool{
+		"README.md":     false,
+		"go.mod":        false,
+		"run.sh":        true,
+		"xdesk/main.go": false,
+	}
 	for _, e := range got.entries {
 		want, checked := wantExec[e.Dst]
 		if !checked {
+			t.Errorf("渲染产出了未登记的文件 %s：把它补进 wantExec（完整期望表不允许漏网）", e.Dst)
 			continue
 		}
 		if e.Exec != want {
