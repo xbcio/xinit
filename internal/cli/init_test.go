@@ -640,3 +640,35 @@ func TestInitDirCommitTracksExclude(t *testing.T) {
 		t.Error("改未被排除的文件后 commit 应变化")
 	}
 }
+
+// init 必须把 DetectEOL == EOLMixed 记进 FileState.MixedEOL —— 这是 update 行 6
+// 三方合并的第二判据来源。两判据独立：CRLF-only 不是 mixed。
+func TestInitRecordsMixedEOL(t *testing.T) {
+	tmpl := setupTemplate(t)
+	for rel, data := range map[string]string{
+		"mixed.txt": "a\r\nb\n",
+		"lf.txt":    "a\nb\n",
+		"crlf.txt":  "a\r\nb\r\n",
+	} {
+		if err := os.WriteFile(filepath.Join(tmpl, rel), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dest := t.TempDir()
+	if err := Init(dest, tmpl, "", "", false, true, false, true); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	st, err := state.Load(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]bool{"mixed.txt": true, "lf.txt": false, "crlf.txt": false} {
+		entry, ok := st.Files[path]
+		if !ok {
+			t.Fatalf("state 缺少 %s 条目", path)
+		}
+		if entry.MixedEOL != want {
+			t.Errorf("%s: MixedEOL = %v, want %v", path, entry.MixedEOL, want)
+		}
+	}
+}
