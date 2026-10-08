@@ -174,18 +174,26 @@ func TestPathsImplicitExcludes(t *testing.T) {
 
 func TestPathsExcludeMatchesRawSrc(t *testing.T) {
 	// rename 让 Src ≠ Dst：exclude 必须匹配**原路径**。
-	// 若实现拿 Dst 匹配，"dist/**" 抓不到 Dst 为 "out/a.js" 的文件。
+	// 两个被排除路径各测一个维度，缺一不可：
+	//   - "dist/**" 走目录分支（SkipDir）—— dist/a.js 会被它拦下，
+	//     根本到不了 file 分支；
+	//   - "xkitora" 是根级**文件**，只有它能走到 file 分支，杀死
+	//     「匹配 Dst 而不是 Src」这类回归（上一版测试做不到，见
+	//     task-11-fix-review.md Minor #1）。
 	c := compile(t, `
 manifest_version: 1
 exclude:
-  paths: ["dist/**"]
+  paths: ["dist/**", "xkitora"]
 rename:
   - from: "dist"
     to: "out"
+  - from: "xkitora"
+    to: "z"
 `)
 	fsys := fstest.MapFS{
 		"a.go":      &fstest.MapFile{Data: []byte("x")},
 		"dist/a.js": &fstest.MapFile{Data: []byte("x")},
+		"xkitora":   &fstest.MapFile{Data: []byte("x")},
 	}
 	entries, _, err := Paths(fsys, c, Vars{})
 	if err != nil {
@@ -428,7 +436,11 @@ exclude:
 
 func TestPathsSymlinkInExcludedDirIsSkipped(t *testing.T) {
 	// node_modules/.bin 里全是指向依赖包的链接；exclude 了它的模板
-	// 不该因此整个失败 —— 被排除的路径根本不进入派生项目
+	// 不该因此整个失败 —— 被排除的路径根本不进入派生项目。
+	//
+	// 覆盖维度：目录分支的 SkipDir（symlink 根本没被走到）。
+	// 文件级「exclude 先于 symlink 检查」的顺序由
+	// TestPathsSymlinkedXinitYmlSkipped 单独钉住，本条不重复覆盖它。
 	c := compile(t, `
 manifest_version: 1
 exclude:
