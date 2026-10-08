@@ -72,11 +72,6 @@ type HooksSpec struct {
 	PostUpdate string `yaml:"post_update"`
 }
 
-// checkFieldTypes 在 Task 7 实现。此处是存根：本任务的测试全部关于
-// Strict 解析与版本判定，不涉及逐字段类型，所以存根不影响它们通过；
-// Task 7 的测试会针对存根失败，再把它换掉。
-func checkFieldTypes(data []byte) error { return nil }
-
 // Parse 解析并校验 xinit.yml。
 //
 // 解析用 Strict 模式：未知键报错，且 goccy 会附带行列号与源码摘录。
