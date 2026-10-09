@@ -1,0 +1,63 @@
+# 行 5 的另存与记账按「是否真的发生覆盖」逐路径判定（T8 fix round 1，评审
+# C1；本脚本是 fix round 2 的提交面护栏——评审 N6：把空拒绝集传给 helper 时
+# 提交面必须打红，而不是只有沙箱探针能看见）。
+#
+# 同轮两条行 5 路径：gen.txt 被 §9.3 折叠检查拒绝（父目录里有折叠等价条目，
+# 原子写会打到它上面）→ 不另存、不记账；keep.txt 正常覆盖 → 照常另存。
+
+xinit init --template $WORK/tpl --yes out
+cd out
+
+# 本地改两个生成物、模板也改它们 → 两者都满足行 5（前提三：post_update 非空）
+cp $WORK/local-gen.txt gen.txt
+cp $WORK/local-keep.txt keep.txt
+cp $WORK/new-gen.txt ../tpl/gen.txt
+cp $WORK/new-keep.txt ../tpl/keep.txt
+
+# 折叠兄弟的分平台构造：APFS 大小写不敏感，gen.txt 与 GEN.txt 是同一个物理
+# 文件，只能用 rename 造出折叠名；Linux 上双名可共存，直接拷一份。已知假设：
+# darwin 支线在大小写敏感的 APFS 卷上失效（testscript 无法表达「卷是否大小写
+# 敏感」）；判定本身与卷无关——checkFold 只对目录列举做名字折叠比较
+# （internal/apply/check.go:102）。
+[darwin] mv gen.txt GEN.txt
+[linux] cp gen.txt GEN.txt
+
+xinit-code update --yes
+# ① 折叠拒绝真实发生（报告行是 %-20s 填充：refuse + 多空格 + 路径，故 \s+，
+# 与既有 update_refuse.txtar:19 的写法一致）；② 被拒不记账、正常者照常记账
+stdout 'refuse\s+gen\.txt'
+stdout 'overwritten\s+keep\.txt'
+! stdout 'overwritten\s+gen\.txt'
+# ⑥ 折叠拒绝是待解决项 → 退出码 2
+stdout 'exit=2'
+
+# ③ 磁盘逐路径对账：被拒者连副本都不存在，正常者副本在
+! exists .xinit/overwritten/gen.txt
+exists .xinit/overwritten/keep.txt
+# ④ fail-safe 方向：会被写者照常另存（副本 = 覆盖前本地内容）
+cmp .xinit/overwritten/keep.txt $WORK/local-keep.txt
+# ⑤ 覆盖确实发生
+cmp keep.txt $WORK/new-keep.txt
+# 被拒路径的本地文件未被覆盖（平台分叉：darwin 上只剩折叠名）
+[darwin] cmp GEN.txt $WORK/local-gen.txt
+[linux] cmp gen.txt $WORK/local-gen.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+generated:
+  paths: ["gen.txt", "keep.txt"]
+hooks:
+  post_update: |
+    echo ok
+-- tpl/gen.txt --
+g1
+-- tpl/keep.txt --
+k1
+-- local-gen.txt --
+g-local
+-- local-keep.txt --
+k-local
+-- new-gen.txt --
+g2
+-- new-keep.txt --
+k2

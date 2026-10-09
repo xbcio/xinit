@@ -1,12 +1,14 @@
 # 行 5 另存的两条分支（T8 fix round 1 覆盖补强，评审 C2）：exec 位随副本
 # 保留（0755）、嵌套路径 <P> 经 MkdirAll 落盘；副本内容 = 覆盖前的本地内容。
 
-# 模板的 bin.sh 先给 exec 位（txtar 解出的文件一律 0644），init 才带得出 0755
-chmod 0755 $WORK/tpl/bin.sh
+# 模板的 bin.sh 先给 exec 位（txtar 解出的文件一律 0644），init 才带得出 0755。
+# exec 语义只有 Unix 能断言——按 update_basic.txtar:39-51 的既有约定：
+# [unix] 护栏 + `exec sh -c 'test -x …'`。
+[unix] exec chmod 0755 $WORK/tpl/bin.sh
 xinit init --template $WORK/tpl --yes out
 cd out
 # 夹具前提：init 确实带出了模板的 exec 位（不成立则本脚本测不到 0755 分支）
-exec test -x bin.sh
+[unix] exec sh -c 'test -x bin.sh'
 
 # 本地改两个生成物（bin.sh 保持 exec）、模板也改它们 → 行 5：覆盖 + 另存
 cp $WORK/local-bin.txt bin.sh
@@ -22,8 +24,8 @@ stdout 'exit=0'
 # 副本 = 覆盖前内容；exec 位随副本保留（bin.sh 0755）、非 exec 文件不带（0644）
 cmp .xinit/overwritten/bin.sh $WORK/local-bin.txt
 cmp .xinit/overwritten/sub/gen.txt $WORK/local-gen.txt
-exec test -x .xinit/overwritten/bin.sh
-exec test ! -x .xinit/overwritten/sub/gen.txt
+[unix] exec sh -c 'test -x .xinit/overwritten/bin.sh'
+[unix] exec sh -c 'test ! -x .xinit/overwritten/sub/gen.txt'
 # 覆盖确实发生（钩子只 echo，不改这两个文件）
 cmp bin.sh $WORK/new-bin.txt
 cmp sub/gen.txt $WORK/new-gen.txt
