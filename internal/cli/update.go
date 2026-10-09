@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -34,6 +35,7 @@ type UpdateOptions struct {
 	DryRun     bool
 	NoHooks    bool
 	Yes        bool
+	Accept     []string // --accept <路径>...：声明这些冲突已解决（§10.3）
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -57,6 +59,8 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&o.NoHooks, "no-hooks", false, "跳过 post_update 执行（仍记录本次内容，下次带钩子运行仍需确认）")
 	cmd.Flags().BoolVar(&o.Yes, "yes", false, "跳过钩子信任确认（等同于在交互终端回答 y）")
 	cmd.Flags().BoolVar(&o.DryRun, "dry-run", false, "只输出动作列表，不落盘、不改状态")
+	cmd.Flags().StringArrayVar(&o.Accept, "accept", nil,
+		"声明这些冲突路径已手工解决：把 .xinit/conflicts/<路径> 的内容记为 base（工具无法验证，§10.3）")
 	return cmd
 }
 
@@ -84,6 +88,9 @@ func Update(o UpdateOptions) error {
 // runUpdate 是 §10.2 的十二步本体（不打印；Task 13 的 diff 复用它）。
 // 返回的报告总是非 nil；退出码见 §11.5。
 func runUpdate(o UpdateOptions) (*UpdateReport, error) {
+	if len(o.Accept) > 0 && o.DryRun {
+		return nil, fmt.Errorf("--accept 与 --dry-run 不能组合：accept 的本义是修改状态（§10.3）")
+	}
 	projectDir, err := filepath.Abs(o.ProjectDir)
 	if err != nil {
 		return nil, err
@@ -175,6 +182,53 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 7b. --accept 预检与 base 重写（§10.3，在算 plan 之前）：把 P 的 base
+	// 快照条目换成 .xinit/conflicts/<P> 的内容——三方比较的 base 从此是
+	// 「用户上次看到并认可的那份」，而不是本次运行的 theirs（第五轮 D2）。
+	type acceptOld struct {
+		meta  plan.FileMeta
+		bytes []byte
+		had   bool // base 快照里原有该条目（Metas/Bytes 同源）
+	}
+	acceptOlds := map[string]acceptOld{}
+	acceptSet := map[string]bool{}
+	for _, p := range o.Accept {
+		if acceptSet[p] {
+			continue
+		}
+		if p == "" || path.IsAbs(p) || path.Clean(p) != p || p == ".." || strings.HasPrefix(p, "../") {
+			return nil, fmt.Errorf("--accept %s：必须是 .xinit/conflicts/ 下的规范相对路径（不接受空串、绝对路径、.. 段或未规范化写法，§10.3）", p)
+		}
+		if pruned[p] {
+			return nil, fmt.Errorf("--accept %s：该路径已在 .xinit/prune.txt 中，已脱离管理、无需 accept（§10.3）", p)
+		}
+		content, err := os.ReadFile(filepath.Join(projectDir, state.DirName, "conflicts", filepath.FromSlash(p)))
+		if err != nil {
+			return nil, fmt.Errorf("--accept %s：.xinit/conflicts/%s 不存在或不可读——--accept 只能声明「已解决的冲突」（§10.3）：%v", p, p, err)
+		}
+		old := acceptOld{bytes: baseSnap.Bytes[p]}
+		if m, ok := baseSnap.Metas[p]; ok {
+			old.meta, old.had = m, true
+		}
+		acceptOlds[p] = old
+		acceptSet[p] = true
+		binary := fsutil.IsBinary(content)
+		exec := false
+		if old.had {
+			exec = old.meta.Exec
+		} else if m, ok := oursSnap[p]; ok {
+			exec = m.Exec // 第五轮 F8：base✗ 取 ours.exec
+		}
+		baseSnap.Metas[p] = plan.FileMeta{
+			Kind:      render.KindRegular,
+			Exec:      exec,
+			Binary:    binary,
+			MixedEOL:  fsutil.DetectEOL(content) == fsutil.EOLMixed,
+			Generated: old.had && old.meta.Generated,
+			Hash:      fsutil.CompareHash(content, binary),
+		}
+		baseSnap.Bytes[p] = content
+	}
 	// hooksRun（§4.2）：未给 --no-hooks 且清单声明了 post_update。
 	hooksRun := !o.NoHooks && m.Hooks.PostUpdate != ""
 	actions := plan.Plan(baseSnap.Metas, oursSnap, theirsSnap, pruned, hooksRun)
@@ -191,12 +245,67 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	// 条目与 c.Conflicts 一致（apply.rebuildConflicts 全量重建），无需另取。
 	rep.ConflictFiles = sortedStringKeys(conflicts)
 
+	// 8b. --accept 后处理（§10.3）：紧跟 merge 分类之后。
+	for _, p := range o.Accept {
+		if !acceptSet[p] {
+			continue
+		}
+		a := findAction(actions, p)
+		switch {
+		case a == nil:
+			// base✗ 且 P 不在本轮并集：无 action 即无 NewBase，files 由
+			// advanceState 自动移出；条目按「已不再冲突」清理（§10.3）。
+			delete(conflicts, p)
+		case a.Kind == plan.ConflictKind:
+			return nil, fmt.Errorf("--accept %s：路径是符号链接/目录障碍（ConflictKind）——accept 改变不了类型；请把 %s 写进 .xinit/prune.txt 使其脱离管理，或移走障碍物（§10.3）", p, p)
+		case a.Kind == plan.Noop && a.Note == plan.SkipNote:
+			// 跳过优先（§8.2 L7/§10.3 定向复核 b）：跳过轮不得借 accept
+			// 悄悄推进 base。
+			return nil, fmt.Errorf("--accept %s：本轮 --no-hooks 跳过了该 generated 路径（跳过优先，§8.2 L7）——去掉 --no-hooks（或等清单声明 post_update）重跑，或把 %s 写进 .xinit/prune.txt（§10.3）", p, p)
+		case isConflictAction(a, conflicted):
+			// 重写后的 base′ 仍判冲突：NewBase 与 base 字节还原为「重写前」
+			// 的 files[P]（§10.3 后处理；第五轮 F1——否则 base/<P> 会与
+			// files[P].hash 分叉，且 advanceState 的「保持旧值」分支会读到
+			// 被重写的字节）。
+			old := acceptOlds[p]
+			if old.had {
+				m := old.meta
+				a.NewBase = &m
+				baseSnap.Bytes[p] = old.bytes
+			} else {
+				a.NewBase = nil
+				delete(baseSnap.Bytes, p)
+			}
+		default:
+			if _, inTheirs := theirsSnap[p]; !inTheirs {
+				// P 本轮已不在 theirs 里（模板删了它）：不重写 base′、一律
+				// 脱离管理。覆盖为 Noop + Note 必需：用户把 conflicts/P
+				// 原样拷成 ours 时，按行 8 会删掉这份刚解决的文件（§10.3）。
+				a.Kind = plan.Noop
+				a.NewBase = nil
+				a.Note = acceptDetachedNote
+				delete(conflicts, p)
+			}
+			// 其余（重写后干净合并/推进）：照常走决策表的结论。
+		}
+	}
+
+	// --accept 可用集：冲突全集里非 ConflictKind 的路径（打 accept 命令用）。
+	for _, p := range rep.Conflicted {
+		if a := findAction(actions, p); a != nil && a.Kind != plan.ConflictKind {
+			rep.Acceptable = append(rep.Acceptable, p)
+		}
+	}
+
 	// 9. 第 4 步：未解决冲突检查（conflicts/ 现有条目 ∩ 本轮冲突集合）
 	existing, err := listConflicts(projectDir)
 	if err != nil {
 		return nil, err
 	}
 	rep.Blocked = step4Unresolved(existing, conflicted)
+	// --accept 豁免第 4 步检查（§10.3）：这是这套设计里唯一「必须先豁免
+	// 才能退出循环」的接口，不能省。
+	rep.Blocked = except(rep.Blocked, acceptSet)
 	if len(rep.Blocked) > 0 && !o.DryRun {
 		rep.ExitCode = CodePending
 		return rep, nil // 不执行任何写操作、不推进任何状态（§10.2 第 4 步）
@@ -1068,3 +1177,29 @@ func hookDiffAgainstBase(st *state.State, cacheRoot, newBlock string) (oldVer, d
 	}
 	return orNone(st.Template.Revision), d
 }
+
+// findAction 在按路径排序的动作表里定位路径（线性；规模 = 并集大小）。
+// 返回的是切片内元素的指针——后处理的修改直接生效。
+func findAction(actions []plan.Action, p string) *plan.Action {
+	for i := range actions {
+		if actions[i].Path == p {
+			return &actions[i]
+		}
+	}
+	return nil
+}
+
+// isConflictAction 报告动作是否仍属冲突类（Merge 冲突、Binary、BothAdded、
+// ConflictKind）——--accept 后处理据此决定是否还原 NewBase（§10.3）。
+func isConflictAction(a *plan.Action, conflicted map[string]bool) bool {
+	switch a.Kind {
+	case plan.ConflictBinary, plan.ConflictBothAdded, plan.ConflictKind:
+		return true
+	case plan.Merge:
+		return conflicted[a.Path]
+	}
+	return false
+}
+
+// acceptDetachedNote 是 --accept 对「模板已删除该路径」的覆盖文案（§10.3）。
+const acceptDetachedNote = "已按 --accept 声明解决：模板已删除该路径，本轮脱离管理（不再有 base 记录；磁盘不动）"

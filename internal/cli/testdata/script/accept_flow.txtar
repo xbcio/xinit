@@ -1,0 +1,78 @@
+# --accept 全流程（§10.3）：手工解决后直接重跑 = 死循环（再次被拒）；
+# --accept 把「你看到并认可的版本」记为 base → 收敛；三个拒绝项。
+
+xinit init --template $WORK/tpl --yes out
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+cp $WORK/local-a.txt $WORK/out/a.txt
+cd out
+
+# 第一轮：冲突 → exit=2，报告打印可复制的 accept 命令
+xinit-code update
+stdout 'merge-conflict\s+a\.txt'
+stdout 'xinit update --accept a\.txt'
+stdout 'exit=2'
+
+# 用户手工解决（结果与模板不同）后直接重跑 = §10.3 的死循环：仍被拒
+cp $WORK/resolved-a.txt a.txt
+xinit-code update
+stdout '未解决的冲突'
+stdout 'exit=2'
+
+# --accept：把解决结果声明为 base → 收敛（base 推进到模板版、磁盘不动）
+xinit-code update --accept a.txt
+stdout 'exit=0'
+! exists .xinit/conflicts/a.txt
+cmp .xinit/base/a.txt $WORK/new-a.txt
+cmp a.txt $WORK/resolved-a.txt
+
+# 幂等：再跑全 Noop（行 3：模板与 base 一致、本地改动保留）
+xinit-code update
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0'
+stdout 'exit=0'
+
+# 拒绝项 A：conflicts/ 里没有该条目
+xinit-code update --accept nope.txt
+stderr '不存在或不可读'
+stdout 'exit=1'
+
+# 拒绝项 E：路径穿越——--accept 只针对 conflicts/ 下的规范相对路径
+xinit-code update --accept ../evil.txt
+stderr '规范相对路径'
+stdout 'exit=1'
+
+# 拒绝项 B：与 --dry-run 组合
+xinit-code update --dry-run --accept a.txt
+stderr '不能组合'
+stdout 'exit=1'
+
+# 拒绝项 C：路径在 prune.txt 里
+cp $WORK/prune.txt .xinit/prune.txt
+xinit-code update --accept a.txt
+stderr 'prune'
+stdout 'exit=1'
+
+# 拒绝项 D：ConflictKind（ours 是符号链接）——accept 改变不了类型
+rm .xinit/prune.txt
+rm a.txt
+exec ln -s nowhere a.txt
+cp $WORK/new2-a.txt $WORK/tpl/a.txt
+xinit-code update
+stdout 'exit=2'
+xinit-code update --accept a.txt
+stderr 'ConflictKind'
+stdout 'exit=1'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- new-a.txt --
+a2
+-- new2-a.txt --
+a3
+-- local-a.txt --
+local
+-- resolved-a.txt --
+a2 plus local tweak
+-- prune.txt --
+a.txt

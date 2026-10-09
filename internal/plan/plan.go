@@ -176,7 +176,7 @@ func decide(p string, base, ours, theirs Snap, hooksRun bool) (Action, bool) {
 		if t.Generated && b.Generated {
 			if !hooksRun {
 				// L7 跳过：不判冲突、不写 conflicts/、NewBase 与位保持旧值
-				return Action{Path: p, Kind: Noop, NewBase: oldBase(b, bok), Note: skipNote}, true
+				return Action{Path: p, Kind: Noop, NewBase: oldBase(b, bok), Note: SkipNote}, true
 			}
 			return Action{Path: p, Kind: WriteTheirs, NewBase: advance(t), Note: generatedNote}, true
 		}
@@ -293,7 +293,9 @@ func ancestorIsFile(p string, snap Snap) (string, bool) {
 
 // ── 各行的 Note 文案（警告出口按 §8.2 要求写进文案）─────────────────
 
-const skipNote = "跳过（generated 且钩子不会运行）：不判冲突、不改动磁盘、base 与 generated 位保持旧值；带钩子重跑时按「模板生成物」处理（§8.2 L7）"
+// SkipNote 是 §8.2 L7 跳过的备注。导出供 cli 的 --accept 后处理识别
+// 「本轮被跳过」（§10.3 的拒绝项）——**文案不得改动**：脚本按它断言。
+const SkipNote = "跳过（generated 且钩子不会运行）：不判冲突、不改动磁盘、base 与 generated 位保持旧值；带钩子重跑时按「模板生成物」处理（§8.2 L7）"
 
 const generatedNote = "模板生成物：本地改动被模板覆盖（钩子会在更新后重建它）；本地版本另存 .xinit/overwritten/（M3 落盘）"
 

@@ -39,24 +39,22 @@ func exitError(code int, format string, args ...any) *ExitError {
 	return &ExitError{Code: code, msg: fmt.Sprintf(format, args...)}
 }
 
-// conflictExits 是冲突的两条出路（R11：M2 不打印 --accept 命令——该旗标
-// M3 才存在，打印一个跑不通的命令比不打印更糟）。
+// conflictExits 是冲突的两条出路（§10.3：M3 起 --accept 真实可用，
+// 出路一直接给出命令；不再是 M2 的占位注记）。
 const conflictExits = "出路一：手工解决冲突，使内容与模板一致（或等模板回退），重跑 update 即收敛；\n" +
+	"        若解决结果与模板不同，用上面的 xinit update --accept <路径> 声明已解决（把你看到并认可的版本记为 base，§10.3）。\n" +
 	"出路二：把路径写进 .xinit/prune.txt，使其脱离管理（模板对它的改动不再同步）。\n"
 
 // conflictFilesRef 只在确有 conflicts/ 内容条目时打印（评审 E1/m-3：
 // ConflictKind 且 theirs 缺失时没有条目，指向 conflicts/ 是不实信息）。
 const conflictFilesRef = "参考：模板新内容已写到 .xinit/conflicts/<路径>。"
 
-// conflictAcceptNote 与条目无关（M3 路线图信息），始终打印。
-const conflictAcceptNote = "注：--accept（声明已解决）在 M3 提供。\n"
-
 // conflictExitsFor 组合冲突出路文案；hasFiles=false 时省掉「参考：」句。
 func conflictExitsFor(hasFiles bool) string {
 	if hasFiles {
-		return conflictExits + conflictFilesRef + conflictAcceptNote
+		return conflictExits + conflictFilesRef
 	}
-	return conflictExits + conflictAcceptNote
+	return conflictExits
 }
 
 // RenameNote 是 §7.5 的「疑似改名」一行。动作本身仍按行 8/9/13 走——
@@ -84,6 +82,8 @@ type UpdateReport struct {
 	// ConflictFiles 是本轮 conflicts/ 有内容条目的路径（⊆ Conflicted；
 	// dry-run 为将写入）。「参考：conflicts/」行只在它有值时打印。
 	ConflictFiles []string
+	// Acceptable 是冲突全集里可 --accept 的路径（非 ConflictKind；dry-run 同）。
+	Acceptable    []string
 	Resolved      []string // 上轮 conflicts/ 里本轮已收敛、已清理的路径
 	Blocked       []string // 第 4 步拒绝：conflicts/ 里仍未解决、必须先处理的路径
 	Refused       []apply.Refusal
@@ -165,8 +165,15 @@ func (r *UpdateReport) Print(w io.Writer) {
 	}
 	if len(r.Conflicted) > 0 {
 		fmt.Fprintf(w, "冲突（%d 条）需要你处理：\n", len(r.Conflicted))
+		acceptable := make(map[string]bool, len(r.Acceptable))
+		for _, p := range r.Acceptable {
+			acceptable[p] = true
+		}
 		for _, p := range r.Conflicted {
 			fmt.Fprintf(w, "  %-20s %s\n", "conflict", p)
+			if acceptable[p] {
+				fmt.Fprintf(w, "  %-20s xinit update --accept %s\n", "accept?", p)
+			}
 		}
 		fmt.Fprint(w, conflictExitsFor(len(r.ConflictFiles) > 0))
 	}
