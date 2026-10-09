@@ -178,7 +178,8 @@ func decide(p string, base, ours, theirs Snap, hooksRun bool) (Action, bool) {
 				// L7 跳过：不判冲突、不写 conflicts/、NewBase 与位保持旧值
 				return Action{Path: p, Kind: Noop, NewBase: oldBase(b, bok), Note: SkipNote}, true
 			}
-			return Action{Path: p, Kind: WriteTheirs, NewBase: advance(t), Note: generatedNote}, true
+			return Action{Path: p, Kind: WriteTheirs, NewBase: advance(t),
+				OverwriteGenerated: true, Note: generatedNote(p)}, true
 		}
 		// 行 6：任一方二进制或混合 EOL（含 base 侧——§8.2 原文「任一方」）
 		if b.Binary || o.Binary || t.Binary || b.MixedEOL || o.MixedEOL || t.MixedEOL {
@@ -297,7 +298,9 @@ func ancestorIsFile(p string, snap Snap) (string, bool) {
 // 「本轮被跳过」（§10.3 的拒绝项）——**文案不得改动**：脚本按它断言。
 const SkipNote = "跳过（generated 且钩子不会运行）：不判冲突、不改动磁盘、base 与 generated 位保持旧值；带钩子重跑时按「模板生成物」处理（§8.2 L7）"
 
-const generatedNote = "模板生成物：本地改动被模板覆盖（钩子会在更新后重建它）；本地版本另存 .xinit/overwritten/（M3 落盘）"
+func generatedNote(p string) string {
+	return fmt.Sprintf("模板生成物：本地改动被模板覆盖（钩子会在更新后重建它）；本地版本另存 .xinit/overwritten/%s", p)
+}
 
 func conflictNote(p string) string {
 	return fmt.Sprintf("二进制或混合 EOL，不能三方合并；theirs 的内容写入 .xinit/conflicts/%s，请手工处理（改到与模板一致）后重跑", p)

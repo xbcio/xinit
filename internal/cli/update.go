@@ -342,6 +342,7 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		rep.Deleted = except(changes.Deletes, refused)
 		rep.Chmodded = chmodPredictions(changes, refused)
 		rep.Merged = sortedStringKeys(merged)
+		rep.Overwritten = overwrittenPredictions(actions)
 		rep.Resolved = except(existing, conflicted)
 		// §7.5：改名配对检测只进 diff/--dry-run 的报告（update 不产出）
 		rep.Renames = detectRenames(actions, baseSnap.Metas, theirsSnap)
@@ -391,6 +392,32 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		return nil, fmt.Errorf("备份: %w", err)
 	}
 	rep.BackupDir = backupDir
+
+	// 13b. 行 5 覆盖保护（§8.2 :614）：本轮会被 generated 覆盖的路径，其
+	// 本地版本先另存 .xinit/overwritten/<P>——持久保留，不随 update 清理
+	//（同一路径再次被覆盖时更新为最近一次副本）。
+	for _, a := range actions {
+		if !a.OverwriteGenerated {
+			continue
+		}
+		data := oursBytes[a.Path]
+		if data == nil {
+			return nil, fmt.Errorf("内部错误：%q 判为 generated 覆盖但本地内容缺失", a.Path)
+		}
+		mode := os.FileMode(0o644)
+		if m, ok := oursSnap[a.Path]; ok && m.Exec {
+			mode = 0o755
+		}
+		full := filepath.Join(projectDir, state.DirName, "overwritten", filepath.FromSlash(a.Path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return nil, fmt.Errorf("另存被覆盖的本地版本: %w", err)
+		}
+		if err := state.WriteFileAtomic(full, data, mode); err != nil {
+			return nil, fmt.Errorf("另存被覆盖的本地版本: %w", err)
+		}
+		rep.Overwritten = append(rep.Overwritten, a.Path)
+	}
+	sort.Strings(rep.Overwritten)
 
 	// 14. 执行（§10.2 第 8 步）——折叠拒绝/障碍物路径跳过、不中止其余路径
 	res, err := apply.Execute(projectDir, changes)
@@ -1216,3 +1243,15 @@ func isConflictAction(a *plan.Action, conflicted map[string]bool) bool {
 
 // acceptDetachedNote 是 --accept 对「模板已删除该路径」的覆盖文案（§10.3）。
 const acceptDetachedNote = "已按 --accept 声明解决：模板已删除该路径，本轮脱离管理（不再有 base 记录；磁盘不动）"
+
+// overwrittenPredictions 预测 dry-run 下会被另存的路径（§8.2 行 5）。
+func overwrittenPredictions(actions []plan.Action) []string {
+	var out []string
+	for _, a := range actions {
+		if a.OverwriteGenerated {
+			out = append(out, a.Path)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

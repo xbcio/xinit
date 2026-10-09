@@ -61,6 +61,10 @@ type Action struct {
 	Kind    ActionKind
 	NewBase *FileMeta // 该路径更新后的 base；nil = 从 state.files 移除
 	Note    string
+	// OverwriteGenerated 标记 §8.2 行 5：模板与上次都是 generated、本地改过，
+	// 本轮按「模板生成物」覆盖——调用方须先另存本地版本到
+	// .xinit/overwritten/<Path>（§8.2 :614），再执行写入。
+	OverwriteGenerated bool
 }
 
 // PruneSet 是 prune.txt 展开后的精确 Dst 集合。

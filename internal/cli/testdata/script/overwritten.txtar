@@ -1,0 +1,49 @@
+# 行 5 覆盖保护（§8.2 :614）：generated 路径的本地改动被覆盖前另存
+# .xinit/overwritten/；副本持久保留（后续 update 不清理）。
+
+xinit init --template $WORK/tpl --yes out
+cd out
+
+# 本地改生成物 + 模板也改它 → 行 5：覆盖 + 另存
+cp $WORK/local-gen.txt gen.txt
+cp $WORK/new-gen.txt ../tpl/gen.txt
+
+# dry-run 只预测会被另存的路径（不落盘、不改磁盘内容）
+xinit-code update --dry-run
+stdout 'overwritten\s+gen\.txt'
+stdout 'exit=5'
+! exists .xinit/overwritten/gen.txt
+cmp gen.txt $WORK/local-gen.txt
+
+# 模板声明了 post_update → 首轮 update 需信任确认（--yes 确认并执行；
+# 行 5 的「钩子会运行」前提也因此成立）
+xinit-code update --yes
+stdout 'overwritten\s+gen\.txt'
+# 行 5 的备注带路径（T8 起文案：本地版本另存 .xinit/overwritten/<P>）
+stdout '另存 \.xinit/overwritten/gen\.txt'
+stdout 'exit=0'
+# 另存发生在钩子之前：副本 = 覆盖前的本地内容
+cmp .xinit/overwritten/gen.txt $WORK/local-gen.txt
+# 钩子在覆盖之后运行，把 gen.txt 按模板自身重写为 rebuilt
+cmp gen.txt $WORK/rebuilt.txt
+
+# 持久保留：下一轮后副本仍在、内容不变（信任已确认、不再询问）
+xinit-code update
+stdout 'exit=0'
+cmp .xinit/overwritten/gen.txt $WORK/local-gen.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+generated:
+  paths: ["gen.txt"]
+hooks:
+  post_update: |
+    echo rebuilt > gen.txt
+-- tpl/gen.txt --
+g1
+-- local-gen.txt --
+g-local
+-- new-gen.txt --
+g2
+-- rebuilt.txt --
+rebuilt

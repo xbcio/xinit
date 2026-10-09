@@ -97,6 +97,7 @@ type UpdateReport struct {
 	HookUnplanned []string // §10.6 计划外副作用
 	HookModified  []string // §10.6 计划内被钩子改写
 	BackupDir     string   // 相对项目根；未备份时 ""
+	Overwritten   []string // §8.2 行 5：本地版本已另存的路径
 	ExitCode      int
 }
 
@@ -190,6 +191,12 @@ func (r *UpdateReport) Print(w io.Writer) {
 	}
 	if r.BackupDir != "" {
 		fmt.Fprintf(w, "备份: %s\n", r.BackupDir)
+	}
+	if len(r.Overwritten) > 0 {
+		fmt.Fprintf(w, "本地改动被模板覆盖（generated 行 5）：%d 条原内容另存 .xinit/overwritten/（持久保留，§8.2）\n", len(r.Overwritten))
+		for _, p := range r.Overwritten {
+			fmt.Fprintf(w, "  %-20s %s\n", "overwritten", p)
+		}
 	}
 	if r.HookName != "" && !r.HookFailed {
 		printHookOutput(w, r.HookName, r.HookOutput, 0)
