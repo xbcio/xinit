@@ -1,0 +1,44 @@
+# 验收 ③（§8.2 L7）：--no-hooks 下 generated 路径整体跳过——不覆盖、不写
+# conflicts/、NewBase 与 generated 位保持；带钩子重跑由行 5 覆盖。
+
+xinit init --template $WORK/tpl --yes out
+cd out
+cp $WORK/local-gen.txt gen.txt
+cp $WORK/new-gen.txt ../tpl/gen.txt
+
+# --no-hooks：跳过（记录钩子内容，下次仍需确认）
+xinit-code update --no-hooks
+stdout '跳过（generated 且钩子不会运行）'
+stdout 'exit=0'
+cmp gen.txt $WORK/local-gen.txt
+! exists .xinit/conflicts/gen.txt
+! exists .xinit/overwritten/gen.txt
+
+# 位保持旧值：status 把 gen.txt 单列在 generated（而不是 modified）
+xinit-code status
+stdout 'generated\s+gen\.txt'
+! stdout 'modified\s+gen\.txt'
+stdout 'exit=0'
+
+# 带钩子重跑（--yes 确认信任）→ 行 5：覆盖 + 另存 + 钩子重建
+xinit-code update --yes
+stdout 'overwritten\s+gen\.txt'
+stdout 'exit=0'
+cmp gen.txt $WORK/rebuilt.txt
+cmp .xinit/overwritten/gen.txt $WORK/local-gen.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+generated:
+  paths: ["gen.txt"]
+hooks:
+  post_update: |
+    echo rebuilt > gen.txt
+-- tpl/gen.txt --
+g1
+-- local-gen.txt --
+g-local
+-- new-gen.txt --
+g2
+-- rebuilt.txt --
+rebuilt
