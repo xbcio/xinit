@@ -16,9 +16,17 @@ xinit-code init --template $WORK/tpl_ok --yes out_ok
 stdout 'exit=0'
 # T4-R2：--yes 已预先确认，不打指引尾注（含「退出码 4」说明）
 ! stdout '退出码 4'
-exists out_ok/made.txt
+# §10.6 副作用两节：made.txt=计划外新建；a.txt=计划内被钩子改写
+stdout '计划外副作用（1 条'
+stdout 'side-effect\s+made.txt'
+stdout '计划内但被钩子改写（1 条'
+stdout 'hook-modified\s+a.txt'
 # 钩子 stdout 被捕获并打印（钩子第二行 echo done 产生输出，头行出现）
 stdout 'post_init 输出（退出码 0）'
+exists out_ok/made.txt
+# 已确认记录：trusted_hooks 值为非空版本（dir 源 = 树 hash）。
+# 变异「删 st.TrustedHooks = trusted」→ trusted_hooks 为 {} → 本断言变红。
+grep '"sha256:[0-9a-f]{64}": "sha256/normlf-v1:[0-9a-f]{64}"' out_ok/.xinit/state.json
 
 # 场景 B：post_init 失败（exit 5）→ xinit 退出码 3、产物不回删
 xinit-code init --template $WORK/tpl_fail --yes out_fail
@@ -27,12 +35,20 @@ stdout 'exit=3'
 exists out_fail/a.txt
 exists out_fail/.xinit/state.json
 
+# 场景 C：--no-hooks → 不执行、但只写「已见未确认」空串 marker（M3-R1/§10.5）。
+# 变异 Seen→Consent（写非空版本）或漏写 st.TrustedHooks 都会让 marker 断言变红。
+xinit-code init --template $WORK/tpl_ok --no-hooks out_nh
+stdout 'exit=0'
+! exists out_nh/made.txt
+grep '"sha256:[0-9a-f]{64}": ""' out_nh/.xinit/state.json
+
 -- tpl_ok/xinit.yml --
 manifest_version: 1
 hooks:
   post_init: |
     echo made > made.txt
     echo done
+    echo hookwrote >> a.txt
 
 -- tpl_ok/a.txt --
 hello
