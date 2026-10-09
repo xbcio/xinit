@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/xbcio/xinit/internal/apply"
+	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/plan"
 	"github.com/xbcio/xinit/internal/render"
 	"github.com/xbcio/xinit/internal/state"
@@ -280,6 +281,62 @@ func TestUpdateDryRunChangesNothing(t *testing.T) {
 	}
 	if after := readTreeT(t, proj); !reflect.DeepEqual(before, after) {
 		t.Error("dry-run 不得写任何文件（含 .xinit/lock、state、base）")
+	}
+}
+
+// 评审 I-1：零写契约覆盖 base 的 §5.2 恢复——git 源下 .xinit/base/ 丢失时，
+// loadBase 的重建只进内存快照（供 plan 计算、Degraded 照常报告），不得写回
+// 磁盘。a.txt 可重建（进内存参与 plan）、b.txt 记录 hash 与旧 commit 重渲染
+// 必然不一致（降级）。
+func TestUpdateDryRunBaseRecoveryDoesNotWrite(t *testing.T) {
+	repo, proj := initProjectT(t, map[string]string{
+		"xinit.yml": tmplYAML,
+		"a.txt":     "one\n",
+		"b.txt":     "bee\n",
+	})
+	// b.txt 的 recorded hash 篡改成重渲染不可能匹配的值 → §5.2 降级
+	st := mustLoadState(t, proj)
+	fst := st.Files["b.txt"]
+	fst.Hash = fsutil.CompareHash([]byte("旧 base\n"), false)
+	st.Files["b.txt"] = fst
+	if err := st.Save(proj); err != nil {
+		t.Fatal(err)
+	}
+	// base 整树丢失（git 源：记录的旧 commit 可重建）
+	if err := os.RemoveAll(state.BaseDir(proj)); err != nil {
+		t.Fatal(err)
+	}
+	commitT(t, repo, map[string]string{"a.txt": "two\n"}, "v1.1.0")
+
+	before := readTreeT(t, proj)
+	rep, err := runUpdate(UpdateOptions{ProjectDir: proj, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after := readTreeT(t, proj); !reflect.DeepEqual(before, after) {
+		t.Error("dry-run 不得写任何文件（含 .xinit/base/ 的恢复写回）")
+	}
+	// 精确条目判断（APFS 折叠教训）：.xinit/ 下不得出现 base 这一格。
+	ents, err := os.ReadDir(filepath.Join(proj, ".xinit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if e.Name() == "base" {
+			t.Error("dry-run 不得重建 .xinit/base/（恢复只进内存快照）")
+		}
+	}
+	// 重建结果照常进内存：a.txt 的 base 参与 plan（base=one、ours=one、
+	// theirs=two → 写）；若恢复未进内存（base✗）会判冲突而不是写入。
+	if rep.ExitCode != CodeChanged {
+		t.Errorf("ExitCode = %d，want %d", rep.ExitCode, CodeChanged)
+	}
+	if !slices.Contains(rep.Written, "a.txt") {
+		t.Errorf("Written = %v，应含 a.txt（内存重建须照常参与 plan）", rep.Written)
+	}
+	// 降级照常报告。
+	if !slices.Equal(rep.Degraded, []string{"b.txt"}) {
+		t.Errorf("Degraded = %v，want [b.txt]", rep.Degraded)
 	}
 }
 

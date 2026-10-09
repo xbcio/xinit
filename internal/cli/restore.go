@@ -27,7 +27,11 @@ type baseSnapshot struct {
 // ——一致的重建、不一致的降级。
 //
 // 每轮全量校验（R10）：base 是 update 的正确性根基，不能被缓存或抽查。
-func loadBase(projectDir string, st *state.State, cacheRoot string) (*baseSnapshot, error) {
+//
+// readOnly（dry-run/diff）把恢复降级为纯内存操作：重建结果照常进 Metas/
+// Bytes 供 Plan 计算、降级照常进 Degraded，但一个字节都不写回 .xinit/base/
+// （零写契约，评审 I-1）。
+func loadBase(projectDir string, st *state.State, cacheRoot string, readOnly bool) (*baseSnapshot, error) {
 	present, err := readBaseTree(state.BaseDir(projectDir))
 	if err != nil {
 		return nil, err
@@ -45,7 +49,7 @@ func loadBase(projectDir string, st *state.State, cacheRoot string) (*baseSnapsh
 		need = append(need, dst) // 缺失或 hash 不符 → §5.2 恢复
 	}
 	if len(need) > 0 {
-		if err := restoreBase(projectDir, st, cacheRoot, need, snap); err != nil {
+		if err := restoreBase(projectDir, st, cacheRoot, need, snap, readOnly); err != nil {
 			return nil, err
 		}
 	}
@@ -98,7 +102,10 @@ func metaFromFileState(fst state.FileState, content []byte) plan.FileMeta {
 }
 
 // restoreBase 执行 §5.2 的逐路径恢复。硬错误一律指引 adopt（不猜）。
-func restoreBase(projectDir string, st *state.State, cacheRoot string, need []string, snap *baseSnapshot) error {
+//
+// readOnly 时跳过唯一的落盘点（写回 .xinit/base/）：重建内容仍进 snap，
+// 磁盘保持原样（dry-run/diff 零写契约，评审 I-1）。
+func restoreBase(projectDir string, st *state.State, cacheRoot string, need []string, snap *baseSnapshot, readOnly bool) error {
 	const adoptHint = "；请运行 xinit adopt --template <source> --revision <ref> --config <vars.yml> 重建基线（§5.2）"
 
 	if st.Template.Kind != "git" {
@@ -156,8 +163,10 @@ func restoreBase(projectDir string, st *state.State, cacheRoot string, need []st
 			mode = 0o755
 		}
 		full := filepath.Join(base, filepath.FromSlash(dst))
-		if err := state.WriteFileAtomic(full, content, mode); err != nil {
-			return fmt.Errorf("重建 base/%s: %w", dst, err)
+		if !readOnly {
+			if err := state.WriteFileAtomic(full, content, mode); err != nil {
+				return fmt.Errorf("重建 base/%s: %w", dst, err)
+			}
 		}
 		snap.Metas[dst] = metaFromFileState(fst, content)
 		snap.Bytes[dst] = content

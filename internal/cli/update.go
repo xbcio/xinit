@@ -146,7 +146,9 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	theirsSnap := snapFromRendered(entries, theirsRendered)
 
 	// 5. base（§5.2 逐路径恢复；R9 重渲染用 st.Vars、R10 全量校验）
-	baseSnap, err := loadBase(projectDir, st, cacheRoot)
+	// dry-run/diff 只读：恢复照常进行但只进内存快照，不写回 .xinit/base/
+	// （零写契约，评审 I-1——恢复写回是 dry-run 路径上唯一的项目内写盘点）。
+	baseSnap, err := loadBase(projectDir, st, cacheRoot, o.DryRun)
 	if err != nil {
 		return nil, err
 	}
