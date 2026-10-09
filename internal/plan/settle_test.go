@@ -48,6 +48,13 @@ func TestSection85NewBasePerRow(t *testing.T) {
 			want:   Action{Path: "a.txt", Kind: Noop, NewBase: ptr(execm("h2"))},
 		},
 		{
+			row:    "行1 false→true 放行（ours==base：模板新声明 generated 的既有未改文件）",
+			base:   Snap{"gen.txt": reg("h1")},
+			ours:   Snap{"gen.txt": reg("h1")},
+			theirs: Snap{"gen.txt": genm("h1")},
+			want:   Action{Path: "gen.txt", Kind: Noop, NewBase: ptr(genm("h1"))},
+		},
+		{
 			row:    "行5 覆盖 → theirs[P]",
 			base:   Snap{"gen.txt": genm("h1")},
 			ours:   Snap{"gen.txt": reg("h2")},
