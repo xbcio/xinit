@@ -8,12 +8,15 @@ import (
 )
 
 // 元数据构造器：决策表只关心 Hash 的相等/不等，用短字符串即可。
-func reg(h string) FileMeta    { return FileMeta{Kind: render.KindRegular, Hash: h} }
-func execm(h string) FileMeta  { m := reg(h); m.Exec = true; return m }
-func genm(h string) FileMeta   { m := reg(h); m.Generated = true; return m }
-func binm(h string) FileMeta   { m := reg(h); m.Binary = true; return m }
-func mixedm(h string) FileMeta { m := reg(h); m.MixedEOL = true; return m }
-func sym() FileMeta            { return FileMeta{Kind: render.KindSymlink} }
+func reg(h string) FileMeta   { return FileMeta{Kind: render.KindRegular, Hash: h} }
+func execm(h string) FileMeta { m := reg(h); m.Exec = true; return m }
+func genm(h string) FileMeta  { m := reg(h); m.Generated = true; return m }
+
+// execm2gen = Regular + Exec + Generated。
+func execm2gen(h string) FileMeta { m := genm(h); m.Exec = true; return m }
+func binm(h string) FileMeta      { m := reg(h); m.Binary = true; return m }
+func mixedm(h string) FileMeta    { m := reg(h); m.MixedEOL = true; return m }
+func sym() FileMeta               { return FileMeta{Kind: render.KindSymlink} }
 
 func ptr(m FileMeta) *FileMeta { return &m }
 

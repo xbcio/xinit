@@ -29,7 +29,99 @@ func Plan(base, ours, theirs Snap, pruned PruneSet, hooksRun bool) []Action {
 			actions = append(actions, a)
 		}
 	}
+	for i := range actions {
+		if actions[i].Kind == Merge {
+			continue // 占位；分类后由 SettleMergeClean 落定（R19）
+		}
+		settle(&actions[i], base, ours, theirs)
+	}
 	return actions
+}
+
+// advances 报告该动作本轮是否把 base 推进到 theirs[P]（§8.5 的「推进」行：
+// 1–5、7 干净、10、11、13、14）。判据是**值相等 + 非 ConflictKind**：保持
+// 旧值的行不可能与之相等——行 6/7 冲突有 theirs != base，行 9 的 theirs 不在
+// 快照里，L7 跳过同样以 theirs != base 为前提；ConflictKind 从不推进，显式排除。
+//
+// 比较要在改 Generated 之前做（settle 里先用一次）。
+func advances(a *Action, t FileMeta) bool {
+	return a.NewBase != nil && a.Kind != ConflictKind && *a.NewBase == t
+}
+
+// settle 对单个动作做 §8.3 mode 步与 §8.5 的 generated 位修整。两条规则都
+// 只对「推进到 theirs[P]」的动作生效——否则 L7 跳过（Noop + 旧值）会被 mode
+// 步改写旧值的 Exec，违反 §8.5 的「保持旧值（含位）」。
+func settle(a *Action, base, ours, theirs Snap) {
+	t, tok := theirs[a.Path]
+	if !tok || a.NewBase == nil {
+		return
+	}
+	b, bok := base[a.Path]
+	o, ook := ours[a.Path]
+
+	if advances(a, t) {
+		a.NewBase.Generated = nextGenerated(bok && b.Generated, t.Generated,
+			promoteAllowed(base, ours, theirs, a.Path))
+	}
+	if advances(a, t) && bok && ook &&
+		(a.Kind == Noop || a.Kind == WriteTheirs || a.Kind == Merge) {
+		if o.Exec == b.Exec {
+			a.NewBase.Exec = t.Exec // R7 在 apply 侧据此 chmod
+		} else {
+			a.Note = noteJoin(a.Note, "执行位与 base 不一致（本地改过权限）：本轮不调整 exec")
+		}
+	}
+}
+
+// nextGenerated 按 §8.5 的位推进规则算新位。
+func nextGenerated(old, cur, promote bool) bool {
+	if old == cur {
+		return cur
+	}
+	if !cur {
+		return false // true → false 不受限
+	}
+	return promote // false → true 只允许在行 1/2/13/14
+}
+
+// promoteAllowed 报告该路径本轮是否落在「false→true 允许集合」（§8.5）：
+// 行 1/2（ours==base）、行 13（base✗ ours✗ theirs✓）、行 14（base✗ 且
+// ours==theirs）。行 10/11（ours✗）与行 15 明确不放行（A5：用户删除是明确的
+// 意图；行 15 有用户独有内容）。缺了这条限制，两步发布即可绕过行 5 的保护。
+func promoteAllowed(base, ours, theirs Snap, p string) bool {
+	b, bok := base[p]
+	o, ook := ours[p]
+	t, tok := theirs[p]
+	if bok && ook && tok {
+		return sameContent(o, b) // 行 1/2
+	}
+	if bok || !tok {
+		return false
+	}
+	if !ook {
+		return true // 行 13
+	}
+	return sameContent(o, t) // 行 14
+}
+
+// noteJoin 把追加文案并入 Note（已有文案保持在前）。
+func noteJoin(note, extra string) string {
+	if note == "" {
+		return extra
+	}
+	return note + "；" + extra
+}
+
+// SettleMergeClean 落定一个被判为「干净合并」的 Merge 动作（§10.2 第 3 步的
+// 分类结果之一，R19）：NewBase = theirs[P]，再走与 Plan 内部同一套修整
+// （§8.3 mode + §8.5 位规则）。冲突（rc 1–127）与改判 ConflictBinary 的分支
+// **不要**调用它——那条路的 NewBase 保持旧值（§8.5 行 7 两行）。
+func SettleMergeClean(a *Action, base, ours, theirs Snap) {
+	if t, ok := theirs[a.Path]; ok {
+		m := t
+		a.NewBase = &m
+	}
+	settle(a, base, ours, theirs)
 }
 
 // union 返回 base ∪ theirs 的路径，按字节序排序。
