@@ -16,8 +16,8 @@ const (
 	CodeOK        = 0 // 成功，无待处理项
 	CodeError     = 1 // 错误
 	CodePending   = 2 // 有冲突、折叠拒绝或障碍物待解决
-	CodeHookFail  = 3 // 钩子失败（M3）
-	CodeNeedTrust = 4 // 需要信任确认（M3）
+	CodeHookFail  = 3 // 钩子失败
+	CodeNeedTrust = 4 // 需要信任确认
 	CodeChanged   = 5 // diff 有非 Noop / status --fetch 有更新
 )
 

@@ -68,8 +68,8 @@ func ListTags(src, cacheRoot string, fetch, allowClone bool) ([]string, error) {
 //     （R8：semver 比较不适用就不能猜，猜 = 可能静默降级）；
 //   - 仅当候选集为空（模板没有任何 semver tag）→ 按 §11.3 第一条报错。
 //
-// M3 的 --accept 例外（默认取当前 revision）不在这里：届时由调用方直接
-// 传 current 作为目标而不调用本函数。
+// `--accept` 没有专属的选版逻辑（§10.3）：重跑（含 update --accept）照常
+// 经本函数按 §11.3 正常选版。
 func SelectRevision(src, cacheRoot string, fetch bool, current string) (string, error) {
 	tags, err := ListTags(src, cacheRoot, fetch, true) // 选版只在 update 路径，允许首次 clone
 	if err != nil {

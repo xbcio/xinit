@@ -108,8 +108,8 @@ func TestStatusMissingState(t *testing.T) {
 	if err == nil {
 		t.Fatal("状态缺失应报错")
 	}
-	// §5.3：M3 起 adopt 已落地——指引必须直接指向它，
-	// 不得再写「在 M3 的 adopt 落地后用它重建状态」这类过时措辞。
+	// §5.3：adopt 已落地——指引必须直接指向它，
+	// 不得再写「在 adopt 落地后用它重建状态」这类过时措辞。
 	if !strings.Contains(err.Error(), "或用 xinit adopt 重建基线（§5.3）") {
 		t.Errorf("状态缺失应指引 adopt 重建基线（§5.3）: %v", err)
 	}
