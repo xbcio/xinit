@@ -130,3 +130,34 @@ func TestIsAncestor(t *testing.T) {
 		t.Fatalf("c2 不是 c1 的祖先；got %v, %v", ok, err)
 	}
 }
+
+// 回归（评审 Task 2）：分支与 tag 同名时 %(refname:short) 会把 tag 打印成
+// "tags/<name>"，被 SemverTags 静默丢弃。模板仓的发布分支常与 tag 同名。
+func TestListTagsBranchSharesTagName(t *testing.T) {
+	dir, _, _ := mkRepo(t)
+	for _, tag := range []string{"v1.0.0", "v1.2", "v2.0.0"} {
+		runGitT(t, dir, "tag", tag)
+	}
+	runGitT(t, dir, "branch", "v2.0.0")
+	cache := t.TempDir()
+
+	tags, err := ListTags(dir, cache, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := false
+	for _, tg := range tags {
+		if strings.HasPrefix(tg, "tags/") {
+			t.Fatalf("tag 短名不应带 tags/ 前缀；got %q", tags)
+		}
+		if tg == "v2.0.0" {
+			has = true
+		}
+	}
+	if !has {
+		t.Fatalf("同名分支存在时 v2.0.0 tag 不应丢失；got %q", tags)
+	}
+	if got, err := SelectRevision(dir, cache, false, "v1.0.0"); err != nil || got != "v2.0.0" {
+		t.Fatalf("got %q, %v; want v2.0.0", got, err)
+	}
+}

@@ -40,7 +40,9 @@ func ListTags(src, cacheRoot string, fetch bool) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := runGit(repoDir, "for-each-ref", "--format=%(refname:short)", "refs/tags")
+	// lstrip=2 而非 refname:short：分支与 tag 同名时 short 会回退成 "tags/<name>"，
+	// 静默丢掉该 tag（评审 Task 2 ；不变量 9）。
+	out, err := runGit(repoDir, "for-each-ref", "--format=%(refname:lstrip=2)", "refs/tags")
 	if err != nil {
 		return nil, fmt.Errorf("列出模板 tag: %w", err)
 	}
