@@ -89,7 +89,14 @@ type UpdateReport struct {
 	Refused       []apply.Refusal
 	Degraded      []string     // §5.2 降级为 base✗ 的路径
 	Renames       []RenameNote // §7.5：只在 dry-run（diff / --dry-run）产出
-	BackupDir     string       // 相对项目根；未备份时 ""
+	HookName      string       // "post_update"；未声明钩子的清单为 ""
+	HookOutput    []string     // 钩子合并输出，按行（空输出为 nil）
+	HookFailed    bool
+	HookExitCode  int
+	HookBlock     string   // 失败时重打失败命令用
+	HookUnplanned []string // §10.6 计划外副作用
+	HookModified  []string // §10.6 计划内被钩子改写
+	BackupDir     string   // 相对项目根；未备份时 ""
 	ExitCode      int
 }
 
@@ -166,6 +173,13 @@ func (r *UpdateReport) Print(w io.Writer) {
 	if r.BackupDir != "" {
 		fmt.Fprintf(w, "备份: %s\n", r.BackupDir)
 	}
+	if r.HookName != "" && !r.HookFailed {
+		printHookOutput(w, r.HookName, r.HookOutput, 0)
+	}
+	if r.HookFailed {
+		printHookFailure(w, r.HookName, r.HookBlock, r.HookExitCode)
+	}
+	printHookSideEffects(w, r.HookUnplanned, r.HookModified)
 	if r.DryRun {
 		fmt.Fprint(w, "（--dry-run：以上为预测，未写任何文件、未改 state）\n")
 	}
@@ -247,6 +261,18 @@ func printHookRun(w io.Writer, name string, res hooks.Result) {
 	}
 	fmt.Fprintf(w, "%s 输出（退出码 %d）：\n", name, res.ExitCode)
 	for _, ln := range hookBlockLines(string(res.Output)) {
+		fmt.Fprintf(w, "  %s\n", ln)
+	}
+}
+
+// printHookOutput 打印报告侧的钩子输出行（update 路径专用；init 直接调
+// printHookRun）。
+func printHookOutput(w io.Writer, name string, lines []string, exitCode int) {
+	if len(lines) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "%s 输出（退出码 %d）：\n", name, exitCode)
+	for _, ln := range lines {
 		fmt.Fprintf(w, "  %s\n", ln)
 	}
 }

@@ -305,12 +305,52 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		return nil, fmt.Errorf("写 .git/info/exclude: %w", err)
 	}
 
-	// 18. post_update（§10.2 第 11 步）是 M3
+	// 18. post_update（§10.2 第 11 步）——在 state/base 落盘之后。文件已按
+	// 本轮结果写完，钩子失败也只是退出码 3（文件与 state 保留，§10.2 :845）。
+	if hooksRun {
+		rep.HookName = "post_update"
+		rep.HookBlock = m.Hooks.PostUpdate
+		before, err := hooks.Snapshot(projectDir)
+		if err != nil {
+			return nil, fmt.Errorf("钩子前快照: %w", err)
+		}
+		res, err := hooks.Run(projectDir, m.Hooks.PostUpdate)
+		if err != nil {
+			return nil, err // sh 起不来：硬错误（§3.1 明确报错）
+		}
+		after, err := hooks.Snapshot(projectDir)
+		if err != nil {
+			return nil, fmt.Errorf("钩子后快照: %w", err)
+		}
+		rep.HookExitCode = res.ExitCode
+		rep.HookOutput = hookBlockLines(string(res.Output))
+		// planned = 本轮受管并集（Actions 全部路径；prune 与行 12 已被 Plan
+		// 排除）；generated 取本轮模板侧位（M3-R6）。
+		planned := make(map[string]bool, len(rep.Actions))
+		for _, a := range rep.Actions {
+			planned[a.Path] = true
+		}
+		generated := make(map[string]bool)
+		for p, m := range theirsSnap {
+			if m.Generated {
+				generated[p] = true
+			}
+		}
+		rep.HookUnplanned, rep.HookModified = hooks.Classify(before, after, planned, generated)
+		if res.ExitCode != 0 {
+			rep.HookFailed = true
+		}
+	}
 
-	// 19. 退出码（§11.5）：冲突/折叠拒绝/障碍物待解决 → 2
+	// 19. 退出码（§11.5；M3-R2 优先级 3 ＞ 2 ＞ 0）：冲突/折叠拒绝/障碍物
+	// 待解决 → 2；钩子失败 → 3（本轮没有完整做完；2 的状态已持久化，
+	// 下一轮照旧会报）。
 	rep.ExitCode = CodeOK
 	if pending {
 		rep.ExitCode = CodePending
+	}
+	if rep.HookFailed {
+		rep.ExitCode = CodeHookFail
 	}
 	return rep, nil
 }

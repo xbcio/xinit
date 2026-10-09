@@ -1,0 +1,34 @@
+# 副作用报告（§10.6、M3 验收 ⑤）：钩子触碰计划外路径 → 逐条列出；
+# 计划内路径被钩子改写 → 单列报告。
+
+xinit init --template $WORK/tpl --yes out
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+cp $WORK/hooks.yml $WORK/tpl/xinit.yml
+cd out
+
+xinit-code update --yes
+stdout '计划外副作用（1 条'
+stdout 'side-effect\s+stray.txt'
+stdout '计划内但被钩子改写（1 条'
+stdout 'hook-modified\s+a.txt'
+stdout 'exit=0'
+
+# 钩子确实落了盘：stray 存在、a.txt 是模板新版 + 钩子追加
+exists stray.txt
+cmp a.txt $WORK/after-hook.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- new-a.txt --
+a2
+-- hooks.yml --
+manifest_version: 1
+hooks:
+  post_update: |
+    echo stray > stray.txt
+    echo "hooked" >> a.txt
+-- after-hook.txt --
+a2
+hooked
