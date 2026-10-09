@@ -92,6 +92,9 @@ stdout 'exit=0'
 # M3-R1「已有值不动」：对已确认 hash 再走 --no-hooks 不得降级为 marker（评审 Nit-1）
 xinit-code update --revision v0.3.0 --no-hooks
 stdout 'exit=0'
+# 清掉前几轮残留的 out_b.txt，让下面的 exists 真证「本轮重跑执行了钩子 B」
+# 而非沿用旧产物（评审 Nit-4）
+rm out_b.txt
 xinit-code update --revision v0.3.0
 stdout 'exit=0'
 ! stdout '需要确认'

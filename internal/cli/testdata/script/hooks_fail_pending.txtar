@@ -1,0 +1,29 @@
+# 优先级（M3-R2 裁定）：冲突/障碍物待解决（2）∧ 钩子失败（3）→ 退出码 3（3＞2）；
+# 冲突节与失败节并存（评审 Minor-1：钉住该优先级，防静默反转）。
+
+xinit init --template $WORK/tpl --yes out
+cd out
+# 制造 local/modify 冲突：本地改 a.txt，模板同时改 a.txt
+cp $WORK/local-a.txt a.txt
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+cp $WORK/hooks-fail.yml $WORK/tpl/xinit.yml
+xinit-code update --yes
+stdout '冲突（1 条）需要你处理：'
+stdout 'post_update 失败（钩子退出码 9；xinit 退出码 3）'
+stdout 'exit=3'
+exists .xinit/conflicts/a.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- local-a.txt --
+local
+-- new-a.txt --
+a2
+-- hooks-fail.yml --
+manifest_version: 1
+hooks:
+  post_update: |
+    echo partial > partial.txt
+    exit 9

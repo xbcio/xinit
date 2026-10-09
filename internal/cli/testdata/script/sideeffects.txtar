@@ -7,6 +7,9 @@ cp $WORK/hooks.yml $WORK/tpl/xinit.yml
 cd out
 
 xinit-code update --yes
+# 成功路径的输出节（评审 Minor-2：printHookOutput 头行与行缩进此前零覆盖）
+stdout 'post_update 输出（退出码 0）：'
+stdout '^  ok$'
 stdout '计划外副作用（1 条'
 stdout 'side-effect\s+stray.txt'
 stdout '计划内但被钩子改写（1 条'
@@ -27,6 +30,7 @@ a2
 manifest_version: 1
 hooks:
   post_update: |
+    echo ok
     echo stray > stray.txt
     echo "hooked" >> a.txt
 -- after-hook.txt --
