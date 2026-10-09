@@ -263,17 +263,20 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 			// 悄悄推进 base。
 			return nil, fmt.Errorf("--accept %s：本轮 --no-hooks 跳过了该 generated 路径（跳过优先，§8.2 L7）——去掉 --no-hooks（或等清单声明 post_update）重跑，或把 %s 写进 .xinit/prune.txt（§10.3）", p, p)
 		case isConflictAction(a, conflicted):
-			// 重写后的 base′ 仍判冲突：NewBase 与 base 字节还原为「重写前」
-			// 的 files[P]（§10.3 后处理；第五轮 F1——否则 base/<P> 会与
-			// files[P].hash 分叉，且 advanceState 的「保持旧值」分支会读到
-			// 被重写的字节）。
+			// 重写后的 base′ 仍判冲突：NewBase、base 字节与 Metas 一律还原为
+			// 「重写前」的 files[P]（§10.3 后处理；第五轮 F1）。Metas 必须与
+			// Bytes 同步——advanceState 用 baseSnap.Metas[p] 判定 advanced
+			// （:1055），只还原 Bytes 会误判为推进 → 写 theirs 而记旧 hash →
+			// 不变量 5 自检中止（spec :902「还原后第 9 步无事发生」）。
 			old := acceptOlds[p]
 			if old.had {
 				m := old.meta
 				a.NewBase = &m
+				baseSnap.Metas[p] = old.meta
 				baseSnap.Bytes[p] = old.bytes
 			} else {
 				a.NewBase = nil
+				delete(baseSnap.Metas, p)
 				delete(baseSnap.Bytes, p)
 			}
 		default:

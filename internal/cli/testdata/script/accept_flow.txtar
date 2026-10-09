@@ -30,6 +30,27 @@ xinit-code update
 stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0'
 stdout 'exit=0'
 
+# C1 回归：accept 声明过期——冲突挂起期间模板又前进，重写后 base′ 仍判冲突
+# → 还原为「重写前」基线（Metas+Bytes 同步）、不写盘、仍 exit=2。
+cp $WORK/b2.txt $WORK/tpl/b.txt
+cp $WORK/b-local.txt b.txt
+xinit-code update
+stdout 'exit=2'
+
+cp $WORK/b3.txt $WORK/tpl/b.txt
+xinit-code update --accept b.txt
+stdout 'exit=2'
+! stdout '写入自检失败'
+cmp .xinit/base/b.txt $WORK/b1.txt
+cmp b.txt $WORK/b-local.txt
+
+# 过期声明之后，用新的 conflicts/b.txt（= b3）重新 accept → 收敛
+xinit-code update --accept b.txt
+stdout 'exit=0'
+! exists .xinit/conflicts/b.txt
+cmp .xinit/base/b.txt $WORK/b3.txt
+cmp b.txt $WORK/b-local.txt
+
 # 拒绝项 A：conflicts/ 里没有该条目
 xinit-code update --accept nope.txt
 stderr '不存在或不可读'
@@ -66,6 +87,16 @@ stdout 'exit=1'
 manifest_version: 1
 -- tpl/a.txt --
 a1
+-- tpl/b.txt --
+b1
+-- b1.txt --
+b1
+-- b2.txt --
+b2
+-- b3.txt --
+b3
+-- b-local.txt --
+b-local
 -- new-a.txt --
 a2
 -- new2-a.txt --
