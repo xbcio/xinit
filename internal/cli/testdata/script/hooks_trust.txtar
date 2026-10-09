@@ -20,6 +20,7 @@ cd ..
 
 xinit init --template $WORK/tpl --yes out
 cd out
+cp .xinit/state.json $WORK/state0.json
 
 # 模板 v2：新增 post_update（钩子首次出现）→ 退出码 4、通知含全文
 cp $WORK/hooks-a.yml $WORK/tpl/xinit.yml
@@ -33,12 +34,19 @@ stdout '模板钩子 post_update 需要确认'
 stdout 'echo A > out_a.txt'
 stdout 'exit=4'
 ! exists out_a.txt
+# exit-4 零写（§10.2 第 6 步先于备份；评审 Minor-1）与输出形态（Minor-2/3）
+! exists .xinit/backup
+cmp .xinit/state.json $WORK/state0.json
+! stdout '相对已记录版本'
+! stdout 'xinit update:'
 
 # --yes：确认并记录 {hashA: v0.2.0}
 xinit-code update --revision v0.2.0 --yes
 stdout 'exit=0'
 # «已确认» 的持久化证据：trusted_hooks[hashA] = "v0.2.0"（非空版本值，非 marker）
 grep '"sha256:[0-9a-f]{64}": "v0.2.0"' .xinit/state.json
+# --yes 预先确认不打指引尾注（T4-R2 的 update 侧护栏；评审 Minor-2）
+! stdout '在原命令后加 --yes'
 
 # 模板 v3：钩子内容变为 B → 相对 v0.2.0 的 diff 出现，退出码 4
 cp $WORK/hooks-b.yml $WORK/tpl/xinit.yml
@@ -67,6 +75,13 @@ stdout 'exit=4'
 xinit-code update --revision v0.3.0 --yes
 stdout 'exit=0'
 grep '"sha256:[0-9a-f]{64}": "v0.3.0"' .xinit/state.json
+xinit-code update --revision v0.3.0
+stdout 'exit=0'
+! stdout '需要确认'
+
+# M3-R1「已有值不动」：对已确认 hash 再走 --no-hooks 不得降级为 marker（评审 Nit-1）
+xinit-code update --revision v0.3.0 --no-hooks
+stdout 'exit=0'
 xinit-code update --revision v0.3.0
 stdout 'exit=0'
 ! stdout '需要确认'
