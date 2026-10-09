@@ -192,6 +192,15 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	}
 	acceptOlds := map[string]acceptOld{}
 	acceptSet := map[string]bool{}
+	// prune 判定的候选集另算（T7 评审 Nit-3，§10.3 :906「P 已在 prune.txt
+	// 中」是字面承诺）：并集 ∪ o.Accept——陈旧 conflicts 项（P 已不在并集）
+	// 的字面 prune 行同样拒。**独立变量**：绝不可并入喂给 plan.Plan 的
+	// pruned（那会让 accept 路径凭空移出并集）。
+	acceptCand := append(append([]string{}, union...), o.Accept...)
+	prunedWithAccept, err := expandPrune(projectDir, acceptCand)
+	if err != nil {
+		return nil, err
+	}
 	for _, p := range o.Accept {
 		if acceptSet[p] {
 			continue
@@ -199,7 +208,7 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		if p == "" || path.IsAbs(p) || path.Clean(p) != p || p == ".." || strings.HasPrefix(p, "../") {
 			return nil, fmt.Errorf("--accept %s：必须是 .xinit/conflicts/ 下的规范相对路径（不接受空串、绝对路径、.. 段或未规范化写法，§10.3）", p)
 		}
-		if pruned[p] {
+		if prunedWithAccept[p] {
 			return nil, fmt.Errorf("--accept %s：该路径已在 .xinit/prune.txt 中，已脱离管理、无需 accept（§10.3）", p)
 		}
 		content, err := os.ReadFile(filepath.Join(projectDir, state.DirName, "conflicts", filepath.FromSlash(p)))
@@ -253,8 +262,9 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		a := findAction(actions, p)
 		switch {
 		case a == nil:
-			// base✗ 且 P 不在本轮并集：无 action 即无 NewBase，files 由
-			// advanceState 自动移出；条目按「已不再冲突」清理（§10.3）。
+			// P 不在本轮并集（行 12：ours✗∧theirs✗——7b 已无条件把 base′
+			// 重写为 conflicts/P，动作表里仍没有它）：无 action 即无 NewBase，
+			// files 由 advanceState 自动移出；条目按「已不再冲突」清理（§10.3）。
 			delete(conflicts, p)
 		case a.Kind == plan.ConflictKind:
 			return nil, fmt.Errorf("--accept %s：路径是符号链接/目录障碍（ConflictKind）——accept 改变不了类型；请把 %s 写进 .xinit/prune.txt 使其脱离管理，或移走障碍物（§10.3）", p, p)

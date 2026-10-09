@@ -1,0 +1,84 @@
+# --accept 后处理的三条边角路径（§10.3、T7 评审 Minor-2）：a==nil（行 12：
+# ours✗∧theirs✗ + 陈旧 conflicts 条目）、detached（P∉theirs，模板已删该路径）、
+# 陈旧字面 prune 项拒绝。三场景各自独立项目，互不污染。
+
+# (a) a==nil：ours✗∧theirs✗（行 12）→ 条目清理、files/base 移出、不报错
+xinit init --template $WORK/tpl-a --yes out-a
+cp $WORK/new-a.txt $WORK/tpl-a/a.txt
+cp $WORK/local-a.txt $WORK/out-a/a.txt
+cd out-a
+xinit-code update
+stdout 'exit=2'
+cmp .xinit/conflicts/a.txt $WORK/new-a.txt
+rm a.txt
+rm $WORK/tpl-a/a.txt
+xinit-code update --accept a.txt
+stdout 'exit=0'
+! exists .xinit/conflicts/a.txt
+! exists .xinit/base/a.txt
+! grep 'a\.txt' .xinit/state.json
+cd ..
+
+# (b) detached：accept 时 P 已不在 theirs（模板删了它）→ 覆盖为「脱离管理」，
+# 磁盘保留本地版；随后普通 update 收敛（accept 打破死循环）
+xinit init --template $WORK/tpl-b --yes out-b
+cp $WORK/new-b.txt $WORK/tpl-b/b.txt
+cp $WORK/local-b.txt $WORK/out-b/b.txt
+cd out-b
+xinit-code update
+stdout 'exit=2'
+cmp .xinit/conflicts/b.txt $WORK/new-b.txt
+rm $WORK/tpl-b/b.txt
+xinit-code update --accept b.txt
+stdout '已按 --accept 声明解决'
+stdout 'exit=0'
+cmp b.txt $WORK/local-b.txt
+! exists .xinit/conflicts/b.txt
+! grep 'b\.txt' .xinit/state.json
+xinit-code update
+stdout 'exit=0'
+! stdout '未解决的冲突'
+cd ..
+
+# (c) 陈旧字面 prune 项：P 在 prune.txt 里 → --accept 一律拒绝（§10.3 :906）
+xinit init --template $WORK/tpl-c --yes out-c
+cp $WORK/new-c.txt $WORK/tpl-c/c.txt
+cp $WORK/local-c.txt $WORK/out-c/c.txt
+cd out-c
+xinit-code update
+stdout 'exit=2'
+cmp .xinit/conflicts/c.txt $WORK/new-c.txt
+rm c.txt
+rm $WORK/tpl-c/c.txt
+cp $WORK/prune-c.txt .xinit/prune.txt
+xinit-code update --accept c.txt
+stderr '已在 \.xinit/prune\.txt 中'
+stdout 'exit=1'
+cd ..
+
+-- tpl-a/xinit.yml --
+manifest_version: 1
+-- tpl-a/a.txt --
+a1
+-- new-a.txt --
+a2
+-- local-a.txt --
+local-a
+-- tpl-b/xinit.yml --
+manifest_version: 1
+-- tpl-b/b.txt --
+b1
+-- new-b.txt --
+b2
+-- local-b.txt --
+local-b
+-- tpl-c/xinit.yml --
+manifest_version: 1
+-- tpl-c/c.txt --
+c1
+-- new-c.txt --
+c2
+-- local-c.txt --
+local-c
+-- prune-c.txt --
+c.txt

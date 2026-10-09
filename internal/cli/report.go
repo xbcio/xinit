@@ -107,10 +107,25 @@ func (r *UpdateReport) Print(w io.Writer) {
 		fmt.Fprintf(w, "版本: %s → %s\n", orNone(r.OldRevision), orNone(r.NewRevision))
 	}
 
+	// accept 可用集：冲突全集里可 --accept 的路径（T7 评审 Nit-4：命令路径
+	// 用 %q 加引号，Blocked 节与冲突节共用同一格式与文本）。
+	acceptable := make(map[string]bool, len(r.Acceptable))
+	for _, p := range r.Acceptable {
+		acceptable[p] = true
+	}
+
 	if len(r.Blocked) > 0 {
 		fmt.Fprintf(w, "未解决的冲突（%d 条）——先处理它们，update 才会执行：\n", len(r.Blocked))
 		for _, p := range r.Blocked {
 			fmt.Fprintf(w, "  %-20s %s\n", "conflict", p)
+		}
+		// Blocked ∩ Acceptable（accept 也豁免第 4 步，update 侧 except）：
+		// 这一轮正是用户最需要命令的时候，而出路文案指向「上面的 --accept
+		// 命令」——不打就成了悬空引用（T7 评审 Minor-1）。
+		for _, p := range r.Blocked {
+			if acceptable[p] {
+				fmt.Fprintf(w, "  %-20s xinit update --accept %q\n", "accept?", p)
+			}
 		}
 		// 被阻断的路径由 listConflicts 从磁盘枚举而来——conflicts/ 文件确实
 		// 在，参考句成立。
@@ -165,14 +180,10 @@ func (r *UpdateReport) Print(w io.Writer) {
 	}
 	if len(r.Conflicted) > 0 {
 		fmt.Fprintf(w, "冲突（%d 条）需要你处理：\n", len(r.Conflicted))
-		acceptable := make(map[string]bool, len(r.Acceptable))
-		for _, p := range r.Acceptable {
-			acceptable[p] = true
-		}
 		for _, p := range r.Conflicted {
 			fmt.Fprintf(w, "  %-20s %s\n", "conflict", p)
 			if acceptable[p] {
-				fmt.Fprintf(w, "  %-20s xinit update --accept %s\n", "accept?", p)
+				fmt.Fprintf(w, "  %-20s xinit update --accept %q\n", "accept?", p)
 			}
 		}
 		fmt.Fprint(w, conflictExitsFor(len(r.ConflictFiles) > 0))

@@ -9,13 +9,14 @@ cd out
 # 第一轮：冲突 → exit=2，报告打印可复制的 accept 命令
 xinit-code update
 stdout 'merge-conflict\s+a\.txt'
-stdout 'xinit update --accept a\.txt'
+stdout 'xinit update --accept "a\.txt"'
 stdout 'exit=2'
 
 # 用户手工解决（结果与模板不同）后直接重跑 = §10.3 的死循环：仍被拒
 cp $WORK/resolved-a.txt a.txt
 xinit-code update
 stdout '未解决的冲突'
+stdout 'xinit update --accept "a\.txt"'
 stdout 'exit=2'
 
 # --accept：把解决结果声明为 base → 收敛（base 推进到模板版、磁盘不动）
@@ -40,7 +41,7 @@ stdout 'exit=2'
 cp $WORK/b3.txt $WORK/tpl/b.txt
 xinit-code update --accept b.txt
 stdout 'exit=2'
-! stdout '写入自检失败'
+! stderr '写入自检失败'
 cmp .xinit/base/b.txt $WORK/b1.txt
 cmp b.txt $WORK/b-local.txt
 
@@ -69,7 +70,7 @@ stdout 'exit=1'
 # 拒绝项 C：路径在 prune.txt 里
 cp $WORK/prune.txt .xinit/prune.txt
 xinit-code update --accept a.txt
-stderr 'prune'
+stderr '已在 \.xinit/prune\.txt 中'
 stdout 'exit=1'
 
 # 拒绝项 D：ConflictKind（ours 是符号链接）——accept 改变不了类型
