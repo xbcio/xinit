@@ -43,7 +43,8 @@ func Plan(base, ours, theirs Snap, pruned PruneSet, hooksRun bool) []Action {
 // 旧值的行不可能与之相等——行 6/7 冲突有 theirs != base，行 9 的 theirs 不在
 // 快照里，L7 跳过同样以 theirs != base 为前提；ConflictKind 从不推进，显式排除。
 //
-// 比较要在改 Generated 之前做（settle 里先用一次）。
+// advances 在 settle 里只求值一次、且必须在改 Generated 之前——位一旦按规则
+// 改写，二次求值的 advances 会变 false，把 mode 步的 exec 分歧警告吞掉（裁定 R）。
 func advances(a *Action, t FileMeta) bool {
 	return a.NewBase != nil && a.Kind != ConflictKind && *a.NewBase == t
 }
@@ -59,12 +60,13 @@ func settle(a *Action, base, ours, theirs Snap) {
 	b, bok := base[a.Path]
 	o, ook := ours[a.Path]
 
-	if advances(a, t) {
-		a.NewBase.Generated = nextGenerated(bok && b.Generated, t.Generated,
-			promoteAllowed(base, ours, theirs, a.Path))
+	// advances 求值一次、两处共用（裁定 R：位改写后二次求值会吞警告，理由见上）。
+	if !advances(a, t) {
+		return
 	}
-	if advances(a, t) && bok && ook &&
-		(a.Kind == Noop || a.Kind == WriteTheirs || a.Kind == Merge) {
+	a.NewBase.Generated = nextGenerated(bok && b.Generated, t.Generated,
+		promoteAllowed(base, ours, theirs, a.Path))
+	if bok && ook && (a.Kind == Noop || a.Kind == WriteTheirs || a.Kind == Merge) {
 		if o.Exec == b.Exec {
 			a.NewBase.Exec = t.Exec // R7 在 apply 侧据此 chmod
 		} else {

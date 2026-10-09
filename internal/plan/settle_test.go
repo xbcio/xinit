@@ -180,6 +180,24 @@ func TestL7SkipKeepsOldValueIncludingExec(t *testing.T) {
 	}
 }
 
+// 裁定 R 回归：Generated 位的改写不得吞掉 mode 步的 exec 分歧警告。
+// 行 3：模板没改内容、但新声明 generated；本地改过内容与 exec。
+func TestExecWarnSurvivesGeneratedRewrite(t *testing.T) {
+	base := Snap{"a.txt": reg("h1")}    // Generated=false, Exec=false
+	ours := Snap{"a.txt": execm("h2")}  // 用户改内容 + chmod +x
+	theirs := Snap{"a.txt": genm("h1")} // 内容同 base、新声明 Generated
+	got := Plan(base, ours, theirs, nil, false)
+	if len(got) != 1 || got[0].Kind != Noop {
+		t.Fatalf("%v", got)
+	}
+	if got[0].NewBase.Generated {
+		t.Fatal("行 3 的 false→true 必须被挡住（D3）")
+	}
+	if !strings.Contains(got[0].Note, "执行位与 base 不一致") {
+		t.Fatalf("警告被 Generated 改写吞掉；got Note=%q", got[0].Note)
+	}
+}
+
 // D3 两步发布攻击的完整走查：位规则必须挡住第一步。
 func TestGeneratedBitBlocksTwoStepRelease(t *testing.T) {
 	ours := Snap{"a.txt": reg("h2")} // 用户改过
