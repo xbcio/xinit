@@ -56,6 +56,27 @@ stderr '已在 \.xinit/prune\.txt 中'
 stdout 'exit=1'
 cd ..
 
+# (d) detached 的保护面：用户把 conflicts/P 原样拷成 ours 后 accept
+# ——若没覆盖成 Noop，行 8 会删掉这份刚解决的文件（数据丢失）。
+xinit init --template $WORK/tpl-d --yes out-d
+cp $WORK/new-d.txt $WORK/tpl-d/d.txt
+cp $WORK/local-d.txt $WORK/out-d/d.txt
+cd out-d
+xinit-code update
+stdout 'exit=2'
+cmp .xinit/conflicts/d.txt $WORK/new-d.txt
+cp .xinit/conflicts/d.txt d.txt
+rm $WORK/tpl-d/d.txt
+xinit-code update --accept d.txt
+stdout '已按 --accept 声明解决'
+stdout '删除 0'
+stdout 'exit=0'
+exists d.txt
+cmp d.txt $WORK/new-d.txt
+! exists .xinit/conflicts/d.txt
+! grep 'd\.txt' .xinit/state.json
+cd ..
+
 -- tpl-a/xinit.yml --
 manifest_version: 1
 -- tpl-a/a.txt --
@@ -82,3 +103,11 @@ c2
 local-c
 -- prune-c.txt --
 c.txt
+-- tpl-d/xinit.yml --
+manifest_version: 1
+-- tpl-d/d.txt --
+d1
+-- new-d.txt --
+d2
+-- local-d.txt --
+local-d
