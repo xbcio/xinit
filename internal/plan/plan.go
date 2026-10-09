@@ -13,7 +13,8 @@ import (
 //
 // 输入：base（`.xinit/base/` 与 state.files 的快照，Generated 位来自 state）、
 // ours（worktree.Scan 的精确读盘）、theirs（新模板渲染结果）、pruned
-// （prune.txt 展开后的精确 Dst 集合，R4）、hooksRun（M2 恒 false，R2）。
+// （prune.txt 展开后的精确 Dst 集合，R4）、hooksRun（§4.2；M3 起 = 未给
+// --no-hooks ∧ 清单声明 post_update）。
 //
 // 输出：对并集（base ∪ theirs，R18）里除 prune 命中（§8.0）与行 12 之外的
 // 每条路径产出一个 Action，按路径字节序排序（确定性）。「不在列表 = 移出

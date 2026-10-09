@@ -14,6 +14,7 @@ import (
 
 	"github.com/xbcio/xinit/internal/apply"
 	"github.com/xbcio/xinit/internal/fsutil"
+	"github.com/xbcio/xinit/internal/hooks"
 	"github.com/xbcio/xinit/internal/manifest"
 	"github.com/xbcio/xinit/internal/merge"
 	"github.com/xbcio/xinit/internal/plan"
@@ -31,6 +32,8 @@ type UpdateOptions struct {
 	Fetch      bool
 	Force      bool
 	DryRun     bool
+	NoHooks    bool
+	Yes        bool
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -51,6 +54,8 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.ConfigPath, "config", "", "变量文件（扁平 YAML；补齐新增或失效的 vars）")
 	cmd.Flags().BoolVar(&o.Fetch, "fetch", false, "联网更新模板镜像缓存")
 	cmd.Flags().BoolVar(&o.Force, "force", false, "跳过脏工作树检查")
+	cmd.Flags().BoolVar(&o.NoHooks, "no-hooks", false, "跳过 post_update 执行（仍记录本次内容，下次带钩子运行仍需确认）")
+	cmd.Flags().BoolVar(&o.Yes, "yes", false, "跳过钩子信任确认（等同于在交互终端回答 y）")
 	cmd.Flags().BoolVar(&o.DryRun, "dry-run", false, "只输出动作列表，不落盘、不改状态")
 	return cmd
 }
@@ -60,6 +65,10 @@ func Update(o UpdateOptions) error {
 	rep, err := runUpdate(o)
 	if err != nil {
 		return err
+	}
+	if rep.ExitCode == CodeNeedTrust {
+		// 信任通知已由第 12 步直接打印；本轮没有执行任何动作，不打印动作报告。
+		return &ExitError{Code: CodeNeedTrust, Silent: true, msg: "update 需要信任确认（exit 4）"}
 	}
 	rep.Print(os.Stdout)
 	if rep.ExitCode != CodeOK {
@@ -126,7 +135,7 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	rep.NewCommit = src.Commit
 
 	// 3. 清单 + vars（R15）
-	compiled, vars, err := loadManifestVars(src, st, o.ConfigPath)
+	m, compiled, vars, err := loadManifestVars(src, st, o.ConfigPath)
 	if err != nil {
 		return nil, err
 	}
@@ -161,12 +170,14 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		return nil, err
 	}
 
-	// 7. prune（R4）+ plan（R2：hooksRun 恒 false）
+	// 7. prune（R4）+ plan（R2）
 	pruned, err := expandPrune(projectDir, union)
 	if err != nil {
 		return nil, err
 	}
-	actions := plan.Plan(baseSnap.Metas, oursSnap, theirsSnap, pruned, false)
+	// hooksRun（§4.2）：未给 --no-hooks 且清单声明了 post_update。
+	hooksRun := !o.NoHooks && m.Hooks.PostUpdate != ""
+	actions := plan.Plan(baseSnap.Metas, oursSnap, theirsSnap, pruned, hooksRun)
 	rep.Actions = actions
 
 	// 8. merge 分类（§10.2 第 3 步；R3/R19）——就地改写 actions 的元素
@@ -219,7 +230,35 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	// 11. 脏检查（§10.2 第 5 步；--force 跳过；两条路都不阻止执行）
 	warnIfDirty(projectDir, o.Force)
 
-	// 12. 信任确认（§10.2 第 6 步）是 M3 —— M2 不读、不跑钩子（R2）
+	// 12. 信任确认（§10.2 第 6 步、§10.5）——在备份与任何写入之前。
+	if m.Hooks.PostUpdate != "" {
+		if st.TrustedHooks == nil {
+			st.TrustedHooks = map[string]string{}
+		}
+		h := hooks.Hash(m.Hooks.PostUpdate)
+		if o.NoHooks {
+			// 跳过执行也记录内容（§10.5）：下次不带 --no-hooks 仍需确认。
+			hooks.Seen(st.TrustedHooks, h)
+		} else if hooks.NeedConfirm(st.TrustedHooks, h) {
+			oldVer, diff := hookDiffAgainstBase(st, cacheRoot, m.Hooks.PostUpdate)
+			printHookNotice(os.Stdout, "post_update", m.Hooks.PostUpdate, oldVer, diff)
+			if !o.Yes {
+				printHookAsk(os.Stdout) // T4-R2：--yes 预先确认时不打指引
+			}
+			ok := o.Yes
+			if !ok && hooks.Interactive(os.Stdin) {
+				var cerr error
+				if ok, cerr = hooks.Confirm(os.Stdin, os.Stdout); cerr != nil {
+					return nil, cerr
+				}
+			}
+			if !ok {
+				rep.ExitCode = CodeNeedTrust
+				return rep, nil // 未做任何修改；Update() 特判此码（不打印动作报告）
+			}
+			hooks.Consent(st.TrustedHooks, h, hookVersion(src))
+		}
+	}
 
 	// 13. 备份（§10.2 第 7 步、§10.1）：计划内会被写入或删除的路径；目标以
 	// oursSnap（Scan，不穿透软链）为准过滤——中间段是软链的路径（将被
@@ -315,30 +354,31 @@ func openTarget(st *state.State, rev, cacheRoot string, fetch bool) (*template.S
 }
 
 // loadManifestVars 读模板清单并解析本轮 vars（R15：--config > 冻结值 > default）。
-func loadManifestVars(src *template.Source, st *state.State, configPath string) (*manifest.Compiled, render.Vars, error) {
+// 同时返回 Manifest——hooks 块挂在它上面（Compiled 无 Hooks 字段）。
+func loadManifestVars(src *template.Source, st *state.State, configPath string) (*manifest.Manifest, *manifest.Compiled, render.Vars, error) {
 	manifestData, err := fs.ReadFile(src.FS, "xinit.yml")
 	if err != nil {
-		return nil, nil, fmt.Errorf("模板缺少 xinit.yml: %w", err)
+		return nil, nil, nil, fmt.Errorf("模板缺少 xinit.yml: %w", err)
 	}
 	m, err := manifest.Parse(manifestData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("解析模板的 xinit.yml: %w", err)
+		return nil, nil, nil, fmt.Errorf("解析模板的 xinit.yml: %w", err)
 	}
 	compiled, err := m.Compile()
 	if err != nil {
-		return nil, nil, fmt.Errorf("编译模板的 xinit.yml: %w", err)
+		return nil, nil, nil, fmt.Errorf("编译模板的 xinit.yml: %w", err)
 	}
 	var config map[string]string
 	if configPath != "" {
 		if config, err = LoadConfig(configPath); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 	vars, err := ResolveUpdateVars(compiled, st.Vars, config)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return compiled, vars, nil
+	return m, compiled, vars, nil
 }
 
 // renderTheirs 渲染模板侧全部路径（§7）。告警与 init 完全同格式：
@@ -943,4 +983,48 @@ func advanceState(projectDir string, st *state.State, baseSnap *baseSnapshot,
 		st.Template.Commit = src.Commit
 	}
 	return st.Save(projectDir)
+}
+
+// hasConfirmed 报告 trusted 里是否存在任何已确认记录（非空版本值）。
+// 仅 marker（""）不算——首次确认前没有可做 diff 的基线（M3-R5）。
+func hasConfirmed(trusted map[string]string) bool {
+	for _, v := range trusted {
+		if v != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// hookDiffAgainstBase 取「已记录版本」（st.Template.Revision/Commit）的模板
+// 清单里同字段钩子，与新块做行级 diff（M3-R5、§10.5「打印全文与 diff」）。
+// 任何一步不可得（dir 源无历史、首次确认、旧清单读不到）→ ("", "")，调用方
+// 省略 diff 段：不阻断确认流程。
+func hookDiffAgainstBase(st *state.State, cacheRoot, newBlock string) (oldVer, diff string) {
+	if st.Template.Kind != template.KindGit.String() {
+		return "", "" // dir 源没有历史版本可比
+	}
+	if !hasConfirmed(st.TrustedHooks) {
+		return "", "" // 首次确认：无基线
+	}
+	src, err := template.Open(st.Template.Source, st.Template.Commit, cacheRoot, false)
+	if err != nil {
+		return "", ""
+	}
+	mdata, err := fs.ReadFile(src.FS, "xinit.yml")
+	if err != nil {
+		return "", ""
+	}
+	m, err := manifest.Parse(mdata)
+	if err != nil {
+		return "", ""
+	}
+	if _, err := m.Compile(); err != nil {
+		return "", "" // 旧清单编译不过 = 不可得
+	}
+	d := hooks.LineDiff(m.Hooks.PostUpdate, newBlock)
+	if d == "" {
+		return "", ""
+	}
+	return orNone(st.Template.Revision), d
 }

@@ -574,3 +574,20 @@ func TestBackupTargetsOnlyRegularInOurs(t *testing.T) {
 		t.Fatalf("got %v, want [a.txt]（ours✗ 无原内容；软链不做备份）", got)
 	}
 }
+
+func TestHasConfirmed(t *testing.T) {
+	if hasConfirmed(nil) || hasConfirmed(map[string]string{"h": ""}) {
+		t.Fatal("空 map / 仅 marker 不算已有确认")
+	}
+	if !hasConfirmed(map[string]string{"h": "", "g": "v1"}) {
+		t.Fatal("任一非空值即算已有确认")
+	}
+}
+
+func TestHookDiffAgainstBaseDirSourceReturnsEmpty(t *testing.T) {
+	st := &state.State{Template: state.TemplateRef{Kind: "dir", Source: t.TempDir(), Commit: "abc"}}
+	ver, diff := hookDiffAgainstBase(st, t.TempDir(), "echo new\n")
+	if ver != "" || diff != "" {
+		t.Fatalf("dir 源无历史，diff 必须为空: ver=%q diff=%q", ver, diff)
+	}
+}
