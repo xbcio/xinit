@@ -84,9 +84,9 @@ func runStatus(o StatusOptions) (*statusReport, error) {
 	}
 	st, err := state.Load(projectDir)
 	if err != nil {
-		// 第 4 段：状态缺失（adopt 在 M4 提供，这里不指向不存在的命令）
+		// 第 4 段：状态缺失（adopt 在 M3 提供，这里不指向不存在的命令）
 		return nil, fmt.Errorf(
-			"%w\n这不是 xinit 项目，或 .xinit/state.json 缺失；请从模板 init 生成，或在 M4 的 adopt 落地后用它重建状态",
+			"%w\n这不是 xinit 项目，或 .xinit/state.json 缺失；请从模板 init 生成，或在 M3 的 adopt 落地后用它重建状态",
 			err)
 	}
 	rep := &statusReport{

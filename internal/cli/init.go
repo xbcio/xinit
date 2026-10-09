@@ -306,7 +306,7 @@ func checkDestUsable(dest string, force bool) error {
 		return fmt.Errorf(
 			"目标目录 %s 已是 xinit 项目（存在 %s/state.json 或 %s/base）：init 不会重新初始化已初始化的项目"+
 				"（会破坏 %s/base 基线），--force 也不生效；如确需从头再来请手动删除 %s/ 后重试"+
-				"（update 将在后续版本提供）",
+				"（同步模板更新请运行 xinit update，不必删掉重来）",
 			dest, state.DirName, state.DirName, state.DirName, state.DirName)
 	}
 
