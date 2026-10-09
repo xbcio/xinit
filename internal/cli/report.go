@@ -39,8 +39,22 @@ func exitError(code int, format string, args ...any) *ExitError {
 // conflictExits 是冲突的两条出路（R11：M2 不打印 --accept 命令——该旗标
 // M3 才存在，打印一个跑不通的命令比不打印更糟）。
 const conflictExits = "出路一：手工解决冲突，使内容与模板一致（或等模板回退），重跑 update 即收敛；\n" +
-	"出路二：把路径写进 .xinit/prune.txt，使其脱离管理（模板对它的改动不再同步）。\n" +
-	"参考：模板新内容已写到 .xinit/conflicts/<路径>。注：--accept（声明已解决）在 M3 提供。\n"
+	"出路二：把路径写进 .xinit/prune.txt，使其脱离管理（模板对它的改动不再同步）。\n"
+
+// conflictFilesRef 只在确有 conflicts/ 内容条目时打印（评审 E1/m-3：
+// ConflictKind 且 theirs 缺失时没有条目，指向 conflicts/ 是不实信息）。
+const conflictFilesRef = "参考：模板新内容已写到 .xinit/conflicts/<路径>。"
+
+// conflictAcceptNote 与条目无关（M3 路线图信息），始终打印。
+const conflictAcceptNote = "注：--accept（声明已解决）在 M3 提供。\n"
+
+// conflictExitsFor 组合冲突出路文案；hasFiles=false 时省掉「参考：」句。
+func conflictExitsFor(hasFiles bool) string {
+	if hasFiles {
+		return conflictExits + conflictFilesRef + conflictAcceptNote
+	}
+	return conflictExits + conflictAcceptNote
+}
 
 // RenameNote 是 §7.5 的「疑似改名」一行。动作本身仍按行 8/9/13 走——
 // v1 不做自动改名，只提示本地改动需要手工迁移。
@@ -63,14 +77,17 @@ type UpdateReport struct {
 	Deleted     []string
 	Chmodded    []string // 只调了 exec 位的路径（R7 通道）
 	Merged      []string // 干净合并、结果已写回工作树的路径
-	Conflicted  []string // 四类冲突动作的路径（= 本轮 conflicts/ 重建清单）
-	Resolved    []string // 上轮 conflicts/ 里本轮已收敛、已清理的路径
-	Blocked     []string // 第 4 步拒绝：conflicts/ 里仍未解决、必须先处理的路径
-	Refused     []apply.Refusal
-	Degraded    []string     // §5.2 降级为 base✗ 的路径
-	Renames     []RenameNote // §7.5：只在 dry-run（diff / --dry-run）产出
-	BackupDir   string       // 相对项目根；未备份时 ""
-	ExitCode    int
+	Conflicted  []string // 四类冲突动作的路径（全集：含 conflicts/ 无内容条目的 ConflictKind）
+	// ConflictFiles 是本轮 conflicts/ 有内容条目的路径（⊆ Conflicted；
+	// dry-run 为将写入）。「参考：conflicts/」行只在它有值时打印。
+	ConflictFiles []string
+	Resolved      []string // 上轮 conflicts/ 里本轮已收敛、已清理的路径
+	Blocked       []string // 第 4 步拒绝：conflicts/ 里仍未解决、必须先处理的路径
+	Refused       []apply.Refusal
+	Degraded      []string     // §5.2 降级为 base✗ 的路径
+	Renames       []RenameNote // §7.5：只在 dry-run（diff / --dry-run）产出
+	BackupDir     string       // 相对项目根；未备份时 ""
+	ExitCode      int
 }
 
 // Print 输出报告。行前缀（kindLabel）是稳定标识，供脚本 grep。
@@ -85,7 +102,9 @@ func (r *UpdateReport) Print(w io.Writer) {
 		for _, p := range r.Blocked {
 			fmt.Fprintf(w, "  %-20s %s\n", "conflict", p)
 		}
-		fmt.Fprint(w, conflictExits)
+		// 被阻断的路径由 listConflicts 从磁盘枚举而来——conflicts/ 文件确实
+		// 在，参考句成立。
+		fmt.Fprint(w, conflictExitsFor(true))
 		if !r.DryRun {
 			return
 		}
@@ -139,7 +158,7 @@ func (r *UpdateReport) Print(w io.Writer) {
 		for _, p := range r.Conflicted {
 			fmt.Fprintf(w, "  %-20s %s\n", "conflict", p)
 		}
-		fmt.Fprint(w, conflictExits)
+		fmt.Fprint(w, conflictExitsFor(len(r.ConflictFiles) > 0))
 	}
 	if r.BackupDir != "" {
 		fmt.Fprintf(w, "备份: %s\n", r.BackupDir)

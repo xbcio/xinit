@@ -3,11 +3,14 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xbcio/xinit/internal/apply"
@@ -465,6 +468,92 @@ func TestUpdateStep4BlockedDoesNotRefreshConflicts(t *testing.T) {
 	}
 	if got := mustContent(t, proj, ".xinit/conflicts/a.txt"); got != first {
 		t.Errorf("被拒的运行不得刷新 conflicts/：%q → %q", first, got)
+	}
+}
+
+// 评审 E1：ConflictKind 且 theirs 缺失（conflicts/ 无内容条目）也必须计入
+// 待解决——退出 2、报告有冲突段且不打印「参考：」行（无条目时不实）、
+// revision/commit 不推进。旧实现 pending 只算已写盘条目 → 退 0、版本照推，
+// 与同一计划的 diff（冲突 1 / 退 5）自相矛盾。
+func TestUpdateConflictKindWithoutTheirsFileStillPending(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("符号链接需要 Windows 特权；与 apply 包 TestDanglingSymlinkRefusedNotAborted 同款题材")
+	}
+	repo, proj := initProjectT(t, map[string]string{
+		"xinit.yml": tmplYAML,
+		"a.txt":     "one\n",
+	})
+	oldCommit := mustLoadState(t, proj).Template.Commit
+
+	// §8.1 K1 形状：用户把受管文件换成悬空符号链接，模板同轮删除该路径。
+	if err := os.Remove(filepath.Join(proj, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("nowhere", filepath.Join(proj, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(repo, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	runGitT(t, repo, "add", "-A")
+	runGitT(t, repo, "commit", "-q", "-m", "v1.1.0")
+	runGitT(t, repo, "tag", "v1.1.0")
+
+	// 捕获报告输出：ExitError 语义与打印内容同一次运行内断言。
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = pw
+	uerr := Update(UpdateOptions{ProjectDir: proj})
+	os.Stdout = oldStdout
+	pw.Close()
+	out, rerr := io.ReadAll(pr)
+	pr.Close()
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+
+	var ee *ExitError
+	if !errors.As(uerr, &ee) || ee.Code != CodePending {
+		t.Fatalf("ConflictKind（无 conflicts/ 条目）应待解决退 2: %v\n%s", uerr, out)
+	}
+	report := string(out)
+	if !strings.Contains(report, "冲突（1 条）需要你处理：") {
+		t.Errorf("报告应有冲突段:\n%s", report)
+	}
+	if !strings.Contains(report, "汇总: 写入 0、删除 0、chmod 0、冲突 1") {
+		t.Errorf("汇总的冲突数应为全集（1）:\n%s", report)
+	}
+	if strings.Contains(report, "参考：") {
+		t.Errorf("conflicts/ 无条目时不得打印「参考：」行（不实信息）:\n%s", report)
+	}
+
+	st := mustLoadState(t, proj)
+	if st.Template.Revision != "v1.0.0" {
+		t.Errorf("有待解决项时不得推进模板版本: %q", st.Template.Revision)
+	}
+	if st.Template.Commit != oldCommit {
+		t.Errorf("有待解决项时不得推进 commit: %q → %q", oldCommit, st.Template.Commit)
+	}
+	// 精确条目判断（APFS 折叠教训）：.xinit/ 下不得出现 conflicts 这一格。
+	ents, err := os.ReadDir(filepath.Join(proj, ".xinit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if e.Name() == "conflicts" {
+			t.Error("无内容条目不得创建 .xinit/conflicts/")
+		}
+	}
+	// ours 的悬空链接原样保留；base 停在旧值。
+	fi, err := os.Lstat(filepath.Join(proj, "a.txt"))
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("ours 的符号链接不得被改写（mode=%v, err=%v）", fi.Mode(), err)
+	}
+	if got := mustContent(t, state.BaseDir(proj), "a.txt"); got != "one\n" {
+		t.Errorf("base 停在旧值: %q", got)
 	}
 }
 

@@ -175,6 +175,10 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		return nil, err
 	}
 	rep.Conflicted = sortedStringKeys(conflicted)
+	// conflicts/ 内容条目 ⊆ 冲突全集（ConflictKind 且 theirs 缺失时无条目）：
+	// 报告据此决定是否打印「参考：conflicts/」行（评审 E1/m-3）。实跑写入的
+	// 条目与 c.Conflicts 一致（apply.rebuildConflicts 全量重建），无需另取。
+	rep.ConflictFiles = sortedStringKeys(conflicts)
 
 	// 9. 第 4 步：未解决冲突检查（conflicts/ 现有条目 ∩ 本轮冲突集合）
 	existing, err := listConflicts(projectDir)
@@ -235,7 +239,9 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	rep.Written = res.Written
 	rep.Deleted = res.Deleted
 	rep.Chmodded = res.Chmodded
-	rep.Conflicted = res.Conflicts
+	// rep.Conflicted 保持第 8 步的冲突全集（不覆盖为 res.Conflicts：后者只含
+	// 已写盘条目，会把 ConflictKind 且 theirs 缺失的冲突漏报成「冲突 0」——
+	// 评审 E1。conflicts/ 条目由 rep.ConflictFiles 单独承载）。
 	rep.Resolved = res.Resolved
 	rep.Refused = res.Refusals
 	rep.Merged = sortedStringKeys(merged)
@@ -245,8 +251,10 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	actions = restoreRefused(actions, baseSnap.Metas, refusalSet(res.Refusals))
 
 	// 本轮是否仍有待解决项（冲突/折叠拒绝/障碍物）——决定第 9 步是否推进
-	// 模板版本与 commit，也决定第 19 步的退出码（§11.5）。
-	pending := len(res.Refusals) > 0 || len(res.Conflicts) > 0
+	// 模板版本与 commit，也决定第 19 步的退出码（§11.5）。冲突用第 8 步全集
+	// （评审 E1：res.Conflicts 只有已写盘条目，ConflictKind 且 theirs 缺失时
+	// 会漏算 → 退 0 且版本照推，绕开 D3 门禁）。
+	pending := len(res.Refusals) > 0 || len(conflicted) > 0
 
 	// 16. 第 9 步：推进 state 与 .xinit/base/（先 base 后 state，含写入自检）
 	if err := advanceState(projectDir, st, baseSnap, actions, theirsRendered, newSrc, vars, src, pending); err != nil {
