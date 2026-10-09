@@ -1,0 +1,47 @@
+# adopt（§5.3）：把模板渲染结果记为 base；磁盘差异 =「本地改动 N 个文件」；
+# 已受管理的项目拒绝重建。
+
+mkdir proj
+cp $WORK/a-disk.txt proj/a.txt
+cp $WORK/b-disk.txt proj/b.txt
+cd proj
+
+xinit-code adopt --template $WORK/tpl --config $WORK/vars.yml
+stdout '基线已重建：3 个文件'
+stdout '本地改动 2 个文件'
+stdout 'local-diff\s+a\.txt'
+stdout 'local-diff\s+c\.txt'
+stdout '选错版本'
+stdout 'exit=0'
+
+# base 是渲染结果（不是磁盘内容）
+cmp .xinit/base/a.txt $WORK/tpl/a.txt
+cmp .xinit/base/b.txt $WORK/tpl/b.txt
+exists .xinit/state.json
+
+# 已受管理：拒绝重建
+xinit-code adopt --template $WORK/tpl --config $WORK/vars.yml
+stderr '已受管理'
+stdout 'exit=1'
+
+# --config 必填
+xinit-code adopt --template $WORK/tpl
+stdout 'exit=1'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+vars:
+  - name: app
+    default: "app"
+-- tpl/a.txt --
+a template
+-- tpl/b.txt --
+b template
+-- tpl/c.txt --
+c template
+-- a-disk.txt --
+a disk (locally modified)
+-- b-disk.txt --
+b template
+-- vars.yml --
+app: app

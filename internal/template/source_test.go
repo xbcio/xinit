@@ -148,6 +148,36 @@ func TestOpenDirSourceIgnoresRevision(t *testing.T) {
 	}
 }
 
+func TestIsDirSource(t *testing.T) {
+	// 普通目录 → true
+	dir := t.TempDir()
+	if !IsDirSource(dir) {
+		t.Errorf("普通目录应判为 dir 源")
+	}
+	// git 仓库 → false
+	git := t.TempDir()
+	if err := os.Mkdir(filepath.Join(git, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if IsDirSource(git) {
+		t.Errorf("含 .git/ 的目录不应判为 dir 源")
+	}
+	// 裸仓（objects/ + HEAD，无 .git/）→ false
+	bare := t.TempDir()
+	for _, p := range []string{"objects", "HEAD"} {
+		if err := os.MkdirAll(filepath.Join(bare, p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if IsDirSource(bare) {
+		t.Errorf("裸仓不应判为 dir 源")
+	}
+	// 不存在的路径（URL 形态）→ false
+	if IsDirSource(filepath.Join(dir, "no-such")) {
+		t.Errorf("不存在的路径不应判为 dir 源")
+	}
+}
+
 func TestDefaultCacheRootIsStable(t *testing.T) {
 	root, err := DefaultCacheRoot()
 	if err != nil {

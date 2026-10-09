@@ -67,6 +67,17 @@ func Open(src, revision, cacheRoot string, fetch bool) (*Source, error) {
 	return openGit(src, revision, cacheRoot, fetch)
 }
 
+// IsDirSource 报告 src 是否会被 Open 当作 dir 源打开：存在的本地目录，
+// 且既不是 git 仓库也不是裸仓（与 Open 的派发判据严格一致）。dir 源没有
+// 版本概念（§5.4）——adopt 用它跳过「取最高 semver tag」的选版。
+func IsDirSource(src string) bool {
+	info, err := os.Stat(src)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	return !isGitRepo(src) && !isBareRepo(src)
+}
+
 func isGitRepo(dir string) bool {
 	_, err := os.Stat(dir + "/.git")
 	return err == nil
