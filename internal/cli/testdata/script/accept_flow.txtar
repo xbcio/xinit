@@ -1,5 +1,5 @@
 # --accept 全流程（§10.3）：手工解决后直接重跑 = 死循环（再次被拒）；
-# --accept 把「你看到并认可的版本」记为 base → 收敛；三个拒绝项。
+# --accept 把「你看到并认可的版本」记为 base → 收敛；五个拒绝项（A–E）。
 
 xinit init --template $WORK/tpl --yes out
 cp $WORK/new-a.txt $WORK/tpl/a.txt
