@@ -161,6 +161,9 @@ func Init(
 			hooks.Seen(trusted, h)
 		} else if hooks.NeedConfirm(trusted, h) {
 			printHookNotice(os.Stdout, "post_init", m.Hooks.PostInit, "", "")
+			if !yes {
+				printHookAsk(os.Stdout) // T4-R2：--yes 预先确认时不打指引
+			}
 			ok := yes
 			if !ok && hooks.Interactive(os.Stdin) {
 				var cerr error

@@ -214,8 +214,10 @@ func hookVersion(src *template.Source) string {
 	return src.Commit
 }
 
-// printHookNotice 打印信任确认通知（§10.5）：钩子全文 + 可选的行级 diff。
+// printHookNotice 打印信任通知的披露部分（§10.5）：钩子全文 + 可选的行级 diff。
 // diff/oldVer 为空时省略 diff 段（首次出现、或旧清单不可得时，M3-R5）。
+// 「操作指引 + 退出码 4 说明」拆到 printHookAsk：--yes 预先确认时只披露不指引
+// （T4-R2——同一次运行里已确认，指引是失实信息）。
 func printHookNotice(w io.Writer, name, block, oldVer, diff string) {
 	fmt.Fprintf(w, "模板钩子 %s 需要确认（首次出现；内容变化时也会重新询问，§10.5）。\n", name)
 	fmt.Fprint(w, "下列命令会以 sh -c 在项目根执行：\n\n")
@@ -228,6 +230,10 @@ func printHookNotice(w io.Writer, name, block, oldVer, diff string) {
 			fmt.Fprintf(w, "    %s\n", ln)
 		}
 	}
+}
+
+// printHookAsk 打印未确认时的操作指引与退出码 4 说明（--yes 路径不打印）。
+func printHookAsk(w io.Writer) {
 	fmt.Fprint(w, "\n这是上游模板里的任意 shell 命令：确认前请检查上面每一行。\n"+
 		"  · 信任并执行：在原命令后加 --yes（交互终端下也可回答 y）\n"+
 		"  · 本轮跳过执行、且下次仍需确认：在原命令后加 --no-hooks\n"+
