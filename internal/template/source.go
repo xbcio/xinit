@@ -96,14 +96,18 @@ func openDirSource(dir string) (*Source, error) {
 	return &Source{Kind: KindDir, FS: fsys, DirRoot: dir}, nil
 }
 
+// repoDirFor 返回可执行 git 命令的仓库目录：本地 git 仓直接用，其余走镜像。
+func repoDirFor(src, cacheRoot string, fetch bool) (string, error) {
+	if isGitRepo(src) {
+		return src, nil
+	}
+	return ensureMirror(src, cacheRoot, fetch)
+}
+
 func openGit(src, revision, cacheRoot string, fetch bool) (*Source, error) {
-	repoDir := src
-	if !isGitRepo(src) {
-		var err error
-		repoDir, err = ensureMirror(src, cacheRoot, fetch)
-		if err != nil {
-			return nil, err
-		}
+	repoDir, err := repoDirFor(src, cacheRoot, fetch)
+	if err != nil {
+		return nil, err
 	}
 
 	if revision == "" {
