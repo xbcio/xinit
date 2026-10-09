@@ -1,0 +1,45 @@
+# diff ↔ update --dry-run 接线端到端（评审 F2 M-2）：同一棵树上两命令的输出
+# 与退出码一致（有非 Noop → 5），且都不写任何文件（含 lock/base/state）。
+
+xinit init --template $WORK/tpl --yes out
+
+# 模板推进（dir 源就地改）：a.txt 改 → 有非 Noop 动作
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+
+cd out
+
+# 1) update --dry-run：预测动作 + 退出码 5
+xinit-code update --dry-run
+stdout 'xinit update --dry-run: '
+stdout 'write\s+a\.txt'
+stdout '汇总: 写入 1、删除 0、chmod 0、冲突 0'
+stdout '（--dry-run：以上为预测，未写任何文件、未改 state）'
+stdout 'exit=5'
+
+# 2) diff：同一棵树、同一预测、同一退出码；两命令都不改树
+xinit-code diff
+stdout 'xinit diff: '
+stdout 'write\s+a\.txt'
+stdout '汇总: 写入 1、删除 0、chmod 0、冲突 0'
+stdout 'exit=5'
+
+cmp a.txt $WORK/a-v1.txt
+cmp .xinit/base/a.txt $WORK/a-v1.txt
+! exists .xinit/lock
+
+# 3) 实跑收敛 → 两命令都全 Noop、退出 0
+xinit-code update
+stdout 'exit=0'
+xinit-code diff
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0'
+stdout 'exit=0'
+cmp a.txt $WORK/new-a.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- new-a.txt --
+a2
+-- a-v1.txt --
+a1
