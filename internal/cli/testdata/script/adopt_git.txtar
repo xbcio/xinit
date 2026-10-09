@@ -1,0 +1,69 @@
+# adopt（§5.3）git 源选版：缺省取最高的非预发布 semver tag；无 tag / 全预发布
+# 报错要求显式 --revision（不猜）。模板是 $WORK 下的本地 git 仓（不触网、不走镜像）。
+# 所有仓路径用 $WORK 绝对路径：脚本中途会 cd 进 proj*，相对路径会落到错误的 cwd。
+
+# ── 场景 1：缺省取最高 tag（v1.0.0 之后又有 v2.0.0）──
+exec git -c init.defaultBranch=main init -q $WORK/tpl-git
+cp $WORK/xinit.yml $WORK/tpl-git/xinit.yml
+cp $WORK/v1-a.txt $WORK/tpl-git/a.txt
+exec git -C $WORK/tpl-git -c user.name=xinit-test -c user.email=xinit@example.com add -A
+exec git -C $WORK/tpl-git -c user.name=xinit-test -c user.email=xinit@example.com commit -qm v1
+exec git -C $WORK/tpl-git tag v1.0.0
+cp $WORK/v2-a.txt $WORK/tpl-git/a.txt
+exec git -C $WORK/tpl-git -c user.name=xinit-test -c user.email=xinit@example.com commit -qam v2
+exec git -C $WORK/tpl-git tag v2.0.0
+
+mkdir $WORK/proj1
+cd $WORK/proj1
+xinit-code adopt --template $WORK/tpl-git --config $WORK/vars.yml
+stdout 'xinit adopt: .*@v2\.0\.0'
+stdout 'exit=0'
+cmp .xinit/base/a.txt $WORK/v2-a.txt
+exists .xinit/state.json
+
+# 显式 --revision 优先于「取最高」
+mkdir $WORK/proj1b
+cd $WORK/proj1b
+xinit-code adopt --template $WORK/tpl-git --revision v1.0.0 --config $WORK/vars.yml
+stdout 'xinit adopt: .*@v1\.0\.0'
+stdout 'exit=0'
+cmp .xinit/base/a.txt $WORK/v1-a.txt
+
+# ── 场景 2：git 源无 tag → 报错（不猜默认分支 HEAD）──
+exec git -c init.defaultBranch=main init -q $WORK/tpl-notag
+cp $WORK/xinit.yml $WORK/tpl-notag/xinit.yml
+cp $WORK/v1-a.txt $WORK/tpl-notag/a.txt
+exec git -C $WORK/tpl-notag -c user.name=xinit-test -c user.email=xinit@example.com add -A
+exec git -C $WORK/tpl-notag -c user.name=xinit-test -c user.email=xinit@example.com commit -qm v1
+
+mkdir $WORK/proj2
+cd $WORK/proj2
+xinit-code adopt --template $WORK/tpl-notag --config $WORK/vars.yml
+stderr '没有任何 tag'
+stdout 'exit=1'
+
+# ── 场景 3：git 源只有预发布 tag → 报错（rc 不是正式版）──
+exec git -c init.defaultBranch=main init -q $WORK/tpl-pre
+cp $WORK/xinit.yml $WORK/tpl-pre/xinit.yml
+cp $WORK/v1-a.txt $WORK/tpl-pre/a.txt
+exec git -C $WORK/tpl-pre -c user.name=xinit-test -c user.email=xinit@example.com add -A
+exec git -C $WORK/tpl-pre -c user.name=xinit-test -c user.email=xinit@example.com commit -qm v1
+exec git -C $WORK/tpl-pre tag v1.0.0-rc1
+
+mkdir $WORK/proj3
+cd $WORK/proj3
+xinit-code adopt --template $WORK/tpl-pre --config $WORK/vars.yml
+stderr '未找到符合'
+stdout 'exit=1'
+
+-- xinit.yml --
+manifest_version: 1
+vars:
+  - name: app
+    default: "app"
+-- v1-a.txt --
+v1
+-- v2-a.txt --
+v2
+-- vars.yml --
+app: app
