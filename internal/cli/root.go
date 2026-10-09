@@ -40,6 +40,7 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(newInitCmd())
+	root.AddCommand(newUpdateCmd())
 	return root
 }
 
