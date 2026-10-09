@@ -18,9 +18,9 @@ stdout '汇总: 写入 1、删除 0、chmod 0、冲突 0'
 stdout '折叠拒绝 / 障碍物'
 stdout 'refuse\s+asset\.txt'
 # 出口指引（实际文案为准）：目录障碍物分支的出口是「移走或改名该目录」，
-# 不引导 prune.txt（只有符号链接/折叠/路径逃逸分支才提 prune.txt）；
-# brief 原文的 stdout 'prune\.txt' 与实跑不符，按实际输出钉住本行
+# 再补一条 prune 出路（AL：障碍物分支与符号链接/折叠/路径逃逸分支一致）
 stdout '在磁盘上是目录（模板要写文件）；移走或改名该目录后重跑即可收敛'
+stdout '或把 asset\.txt 写进 \.xinit/prune\.txt 使其脱离管理（§9\.3）'
 stdout 'exit=2'
 # 用户目录原样；asset.txt 不进 state、模板内容没有以任何名义落盘
 exec sh -c 'test -d asset.txt'

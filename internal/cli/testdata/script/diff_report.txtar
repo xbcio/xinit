@@ -21,6 +21,9 @@ xinit-code diff
 stdout 'xinit diff: '
 stdout 'write\s+a\.txt'
 stdout '汇总: 写入 1、删除 0、chmod 0、冲突 0'
+# AH-m1：尾注按 Header 区分——diff 是只读预览、不是 --dry-run
+stdout '（diff 只读预览：以上为预测，未写任何文件、未改 state）'
+! stdout '--dry-run：以上为预测'
 stdout 'exit=5'
 
 cmp a.txt $WORK/a-v1.txt

@@ -60,7 +60,6 @@ func Status(o StatusOptions) error {
 // statusReport 是 §11.4 四段的数据；Print 只管排版。
 type statusReport struct {
 	Source   string
-	Kind     string
 	Revision string
 	Commit   string
 
@@ -84,14 +83,13 @@ func runStatus(o StatusOptions) (*statusReport, error) {
 	}
 	st, err := state.Load(projectDir)
 	if err != nil {
-		// 第 4 段：状态缺失（adopt 在 M3 提供，这里不指向不存在的命令）
+		// 第 4 段：状态缺失（adopt 见 §5.3）
 		return nil, fmt.Errorf(
-			"%w\n这不是 xinit 项目，或 .xinit/state.json 缺失；请从模板 init 生成，或在 M3 的 adopt 落地后用它重建状态",
+			"%w\n这不是 xinit 项目，或 .xinit/state.json 缺失；请从模板 init 生成，或用 xinit adopt 重建基线（§5.3）",
 			err)
 	}
 	rep := &statusReport{
 		Source:         st.Template.Source,
-		Kind:           st.Template.Kind,
 		Revision:       st.Template.Revision,
 		Commit:         st.Template.Commit,
 		EngineRecorded: st.EngineVersion,
@@ -111,7 +109,9 @@ func runStatus(o StatusOptions) (*statusReport, error) {
 		tags, err := template.ListTags(st.Template.Source, cacheRoot, o.Fetch, false)
 		switch {
 		case err != nil:
-			rep.TemplateNote = fmt.Sprintf("无法读取模板 tag（本地镜像未命中？加 --fetch 重试）：%v", err)
+			rep.TemplateNote = fmt.Sprintf(
+				"无法读取模板 tag（本地没有模板镜像缓存——status 不创建缓存、--fetch 只刷新已有镜像；"+
+					"先运行 xinit update 建立缓存后重试）：%v", err)
 		case !semver.IsValid(st.Template.Revision):
 			rep.TemplateNote = fmt.Sprintf(
 				"记录的 revision %q 不是 vX.Y.Z 格式，无法做版本比较（update 需要显式 --revision）",

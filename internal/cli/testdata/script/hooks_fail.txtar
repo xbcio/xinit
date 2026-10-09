@@ -12,6 +12,9 @@ stdout 'post_update 失败（钩子退出码 9；xinit 退出码 3）'
 # 失败块确实重打了失败命令（评审 Nit-1：原断言可被信任通知全文满足）
 stdout '失败命令（sh -c，工作目录 = 项目根）：'
 stdout 'echo partial > partial.txt'
+# T6-Nit-5：失败路径也打印钩子输出（诊断行不再被吞）；次序 = 先输出、后失败行
+stdout 'post_update 输出（退出码 9）：'
+stdout 'diagnostic-line'
 stdout 'exit=3'
 
 # 文件已落盘、state 确实被改写（与更新前的字节快照不同）、钩子失败前的产物保留
@@ -34,6 +37,7 @@ a2
 manifest_version: 1
 hooks:
   post_update: |
+    echo diagnostic-line
     echo partial > partial.txt
     exit 9
 -- hooks-ok.yml --

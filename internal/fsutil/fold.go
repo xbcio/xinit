@@ -2,25 +2,44 @@ package fsutil
 
 import (
 	"strings"
+	"unicode"
 
 	"golang.org/x/text/unicode/norm"
 )
 
-// Fold 把一个路径名映射到用于碰撞检测的规范键。
+// Fold 把一个路径名映射到与 strings.EqualFold（SimpleFold 语义）严格一致的
+// 规范键：NFC 规范化后，每个 rune 取 SimpleFold 轨道的码点最小元。
 //
-// 两步：NFC 规范化，然后小写。
+// 性质：EqualFold(a,b) ⟺ Fold(a)==Fold(b)——于是「键相等」的 map 判定与
+// §9.3 钦定的折叠检查（apply 侧）是同一语义；ASCII 的等价类与此前的
+// ToLower 实现完全一致（只有 ſ/İ 一类异体字符的归属变化）。
 //
 // 大小写不敏感的文件系统（APFS 默认、Windows）上两个折叠相等的名字**是
 // 同一个文件** —— 实测 APFS 上 `mv license LICENSE` 直接成功、不报错、
 // 不产生第二个文件。所以模板新增 LICENSE 时的原子写 rename 打的就是用户
-// 那个 license。
-//
-// NFC：APFS 与 HFS+ 对规范形式也不敏感，NFD/NFC 写法指向同一个 inode。
+// 那个 license。NFC：APFS 与 HFS+ 对规范形式也不敏感，NFD/NFC 写法指向
+// 同一个 inode。
 func Fold(s string) string {
-	return strings.ToLower(norm.NFC.String(s))
+	var b strings.Builder
+	for _, r := range norm.NFC.String(s) {
+		b.WriteRune(foldMin(r))
+	}
+	return b.String()
 }
 
-// FoldEqual 报告两个路径名是否指向同一个文件。
+// foldMin 返回 r 的 SimpleFold 轨道里的码点最小元。SimpleFold 是环（从 r
+// 出发必回到 r），循环有界。
+func foldMin(r rune) rune {
+	min := r
+	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+		if f < min {
+			min = f
+		}
+	}
+	return min
+}
+
+// FoldEqual 报告两个路径名是否指向同一个文件（同 Fold 语义）。
 func FoldEqual(a, b string) bool {
 	if a == b {
 		return true

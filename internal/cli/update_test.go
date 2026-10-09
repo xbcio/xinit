@@ -269,6 +269,30 @@ func TestUpdateSkipsGeneratedWhenHooksCannotRun(t *testing.T) {
 	}
 }
 
+// AR 的另一半：待解决注解只属于非 dry-run——dry-run 的退出码不模拟 2
+// （§11.5），「state 里的版本记录未推进」在只读预测里是失实信息。
+func TestUpdateDryRunReportHasNoPendingNote(t *testing.T) {
+	repo, proj := initProjectT(t, map[string]string{
+		"xinit.yml": tmplYAML,
+		"a.txt":     "one\n",
+	})
+	writeFilesT(t, proj, map[string]string{"a.txt": "one local\n"})
+	commitT(t, repo, map[string]string{"a.txt": "two\n"}, "v1.1.0")
+
+	rep, err := runUpdate(UpdateOptions{ProjectDir: proj, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Conflicted) == 0 {
+		t.Fatalf("夹具应产出冲突（否则负断言无判别力）: %+v", rep)
+	}
+	var buf strings.Builder
+	rep.Print(&buf)
+	if strings.Contains(buf.String(), "本轮仍待解决") {
+		t.Errorf("dry-run 报告不得带待解决注解:\n%s", buf.String())
+	}
+}
+
 func TestUpdateDryRunChangesNothing(t *testing.T) {
 	repo, proj := initProjectT(t, map[string]string{
 		"xinit.yml": tmplYAML,
@@ -523,6 +547,14 @@ func TestUpdateConflictKindWithoutTheirsFileStillPending(t *testing.T) {
 	if !strings.Contains(report, "冲突（1 条）需要你处理：") {
 		t.Errorf("报告应有冲突段:\n%s", report)
 	}
+	// AR（待解决轮的版本行诚实表述）：版本行照打（预测的目标版本），
+	// 但必须紧跟一行说明 state 里的版本记录本轮没有推进。
+	if !strings.Contains(report, "版本: v1.0.0 → v1.1.0") {
+		t.Errorf("报告应有版本行:\n%s", report)
+	}
+	if !strings.Contains(report, "（本轮仍待解决：state 里的版本记录保持 v1.0.0，收敛后重跑再推进；§10.2 第 9 步）") {
+		t.Errorf("待解决轮的版本行须说明记录未推进（AR）:\n%s", report)
+	}
 	if !strings.Contains(report, "汇总: 写入 0、删除 0、chmod 0、冲突 1") {
 		t.Errorf("汇总的冲突数应为全集（1）:\n%s", report)
 	}
@@ -559,6 +591,28 @@ func TestUpdateConflictKindWithoutTheirsFileStillPending(t *testing.T) {
 
 // 裁定 U/Z：备份目标以 ours 快照（不穿透软链）为准——中间段是软链的写入
 // 路径不得进备份（否则 Backup 的穿透 Lstat 会错位备份链后文件）。
+// AL（§9.5 删除逃逸分支）：dry-run 的预测文案与实跑同判据——逃逸拒绝也要
+// 给出 prune 出口（与障碍物/折叠/写入逃逸分支一致）。
+func TestPredictRefusalsDeleteEscapeHintsPrune(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("符号链接需要 Windows 特权")
+	}
+	proj := t.TempDir()
+	if err := os.Symlink(t.TempDir(), filepath.Join(proj, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	refusals, err := predictRefusals(proj, apply.Changes{Deletes: []string{"escape/x.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refusals) != 1 || refusals[0].Path != "escape/x.txt" {
+		t.Fatalf("外指父链接的删除路径应被预测拒绝: %+v", refusals)
+	}
+	if !strings.Contains(refusals[0].Reason, "prune.txt") {
+		t.Errorf("删除逃逸拒绝要给出 prune 出口（AL）：%q", refusals[0].Reason)
+	}
+}
+
 func TestBackupTargetsOnlyRegularInOurs(t *testing.T) {
 	ours := plan.Snap{
 		"a.txt": {Kind: render.KindRegular, Hash: "h"},

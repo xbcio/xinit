@@ -272,6 +272,51 @@ func TestLoadBaseUsesFrozenVarsWithoutEvalVars(t *testing.T) {
 	}
 }
 
+// AC-M1：§5.2 重建的三处硬错误（重渲染路径/重渲染内容/写回 base）也必须
+// 指引 adopt——与文件内既有 5 处保持同一形状（T8 裁定）。
+func TestLoadBaseRebuildErrorsHintAdopt(t *testing.T) {
+	t.Run("重渲染路径失败", func(t *testing.T) {
+		repo, commit := mkTemplateRepoT(t, map[string]string{
+			"xinit.yml": tmplYAML + "rename:\n  - from: \"a.txt\"\n    to: \"{{ .no_such_var }}.txt\"\n",
+			"a.txt":     "one\n",
+		})
+		dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
+			map[string]state.FileState{"a.txt": {Src: "a.txt", Hash: "sha256/normlf-v1:deadbeef"}})
+		_, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+		if err == nil || !strings.Contains(err.Error(), "重建 base") || !strings.Contains(err.Error(), "adopt") {
+			t.Fatalf("重渲染路径失败应报错并指引 adopt（AC-M1）：%v", err)
+		}
+	})
+
+	t.Run("重渲染内容失败", func(t *testing.T) {
+		repo, commit := mkTemplateRepoT(t, map[string]string{
+			"xinit.yml": tmplYAML + "substitute:\n  - from: \"one\"\n    to: \"{{ .no_such_var }}\"\n    paths: [\"**/*.txt\"]\n",
+			"a.txt":     "one\n",
+		})
+		dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
+			map[string]state.FileState{"a.txt": {Src: "a.txt", Hash: "sha256/normlf-v1:deadbeef"}})
+		_, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+		if err == nil || !strings.Contains(err.Error(), "重建 base/a.txt") || !strings.Contains(err.Error(), "adopt") {
+			t.Fatalf("重渲染内容失败应报错并指引 adopt（AC-M1）：%v", err)
+		}
+	})
+
+	t.Run("写回 base 失败", func(t *testing.T) {
+		repo, commit := mkTemplateRepoT(t, map[string]string{"xinit.yml": tmplYAML, "a.txt": "one\n"})
+		dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
+			map[string]state.FileState{"a.txt": {Src: "a.txt", Hash: fsutil.CompareHash([]byte("one\n"), false)}})
+		// .xinit/base 是常规文件（损坏形态）：读盘看到「整树缺失」，
+		// 重建的落盘必然失败（MkdirAll 撞 ENOTDIR）。
+		if err := os.WriteFile(state.BaseDir(dir), []byte("not a dir"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+		if err == nil || !strings.Contains(err.Error(), "重建 base/a.txt") || !strings.Contains(err.Error(), "adopt") {
+			t.Fatalf("写回失败应报错并指引 adopt（AC-M1）：%v", err)
+		}
+	})
+}
+
 func mustLoadState(t *testing.T, dir string) *state.State {
 	t.Helper()
 	st, err := state.Load(dir)

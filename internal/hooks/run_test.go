@@ -66,6 +66,18 @@ func TestRunMissingSh(t *testing.T) {
 	}
 }
 
+func TestRunNotShE(t *testing.T) {
+	// §3.1 的 sh -c：块内失败行不中断后续行（无隐式 set -e）。
+	dir := t.TempDir()
+	res, err := Run(dir, "false\necho ok > after.txt")
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("块内失败不应中断后续行: exit=%d err=%v", res.ExitCode, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "after.txt")); err != nil {
+		t.Fatalf("后续行未执行: %v", err)
+	}
+}
+
 func TestConfirmAcceptsYAndYes(t *testing.T) {
 	for _, in := range []string{"y\n", "Y\n", "yes\n", "YES\n"} {
 		var out strings.Builder

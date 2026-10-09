@@ -73,11 +73,12 @@ type UpdateReport struct {
 	OldCommit   string
 	NewCommit   string
 	DryRun      bool
+	Pending     bool          // 本轮以 2 结束（冲突/折叠拒绝/障碍物待解决）：版本记录不推进
 	Actions     []plan.Action // 全部动作（含 Noop），按路径排序（Plan 保证）
 	Written     []string
 	Deleted     []string
 	Chmodded    []string // 只调了 exec 位的路径（R7 通道）
-	Merged      []string // 干净合并、结果已写回工作树的路径
+	Merged      []string // 干净合并、结果已写回工作树的路径（dry-run 为将写入的预测）
 	Conflicted  []string // 四类冲突动作的路径（全集：含 conflicts/ 无内容条目的 ConflictKind）
 	// ConflictFiles 是本轮 conflicts/ 有内容条目的路径（⊆ Conflicted；
 	// dry-run 为将写入）。「参考：conflicts/」行只在它有值时打印。
@@ -106,6 +107,10 @@ func (r *UpdateReport) Print(w io.Writer) {
 	fmt.Fprintf(w, "%s: %s\n", r.Header, r.Source)
 	if r.OldRevision != "" || r.NewRevision != "" {
 		fmt.Fprintf(w, "版本: %s → %s\n", orNone(r.OldRevision), orNone(r.NewRevision))
+		if r.Pending {
+			fmt.Fprintf(w, "（本轮仍待解决：state 里的版本记录保持 %s，收敛后重跑再推进；§10.2 第 9 步）\n",
+				orNone(r.OldRevision))
+		}
 	}
 
 	// accept 可用集：冲突全集里可 --accept 的路径（T7 评审 Nit-4：命令路径
@@ -198,15 +203,23 @@ func (r *UpdateReport) Print(w io.Writer) {
 			fmt.Fprintf(w, "  %-20s %s\n", "overwritten", p)
 		}
 	}
-	if r.HookName != "" && !r.HookFailed {
-		printHookOutput(w, r.HookName, r.HookOutput, 0)
+	if r.HookName != "" {
+		exit := 0
+		if r.HookFailed {
+			exit = r.HookExitCode
+		}
+		printHookOutput(w, r.HookName, r.HookOutput, exit)
 	}
 	if r.HookFailed {
 		printHookFailure(w, r.HookName, r.HookBlock, r.HookExitCode)
 	}
 	printHookSideEffects(w, r.HookUnplanned, r.HookModified)
 	if r.DryRun {
-		fmt.Fprint(w, "（--dry-run：以上为预测，未写任何文件、未改 state）\n")
+		tail := "（--dry-run：以上为预测，未写任何文件、未改 state）\n"
+		if r.Header == "xinit diff" {
+			tail = "（diff 只读预览：以上为预测，未写任何文件、未改 state）\n"
+		}
+		fmt.Fprint(w, tail)
 	}
 }
 

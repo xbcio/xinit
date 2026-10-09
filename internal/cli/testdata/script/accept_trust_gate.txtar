@@ -1,0 +1,47 @@
+# accept × 信任门（T7-park(a)）：钩子信任确认先于 accept 的一切写——
+# 未确认时 accept 轮 exit 4、逐字节零写；补 --yes 后同一轮收敛（§10.3 × §10.5）。
+
+xinit init --template $WORK/tpl --yes out
+
+# ① 模板无钩子（信任记录为空）；② 双方都改 a.txt → 冲突就位、退出 2
+cp $WORK/local-a.txt $WORK/out/a.txt
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+cd out
+xinit-code update --yes
+stdout 'exit=2'
+exists .xinit/conflicts/a.txt
+
+# ③ 模板出现钩子（首次出现 → NeedConfirm）
+cp $WORK/hooks.yml $WORK/tpl/xinit.yml
+
+# ④ 钩子未确认：--accept 也不得放行任何写（exit 4；state/工作树/conflicts 三份零写）
+cp .xinit/state.json $WORK/state-before.json
+cp a.txt $WORK/a-before.txt
+cp .xinit/conflicts/a.txt $WORK/conflicts-before.json
+xinit-code update --accept a.txt
+stdout '模板钩子 post_update 需要确认'
+stdout 'exit=4'
+cmp .xinit/state.json $WORK/state-before.json
+cmp a.txt $WORK/a-before.txt
+cmp .xinit/conflicts/a.txt $WORK/conflicts-before.json
+
+# ⑤ 补 --yes：信任记录建立，同一轮 accept 收敛（base 记为模板版、conflicts 清空、本地版保留）
+xinit-code update --accept a.txt --yes
+stdout 'exit=0'
+cmp .xinit/base/a.txt $WORK/new-a.txt
+! exists .xinit/conflicts/a.txt
+cmp a.txt $WORK/local-a.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- local-a.txt --
+local
+-- new-a.txt --
+a2
+-- hooks.yml --
+manifest_version: 1
+hooks:
+  post_update: |
+    echo hook-ran

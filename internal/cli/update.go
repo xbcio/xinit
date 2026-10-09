@@ -452,6 +452,7 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	// （评审 E1：res.Conflicts 只有已写盘条目，ConflictKind 且 theirs 缺失时
 	// 会漏算 → 退 0 且版本照推，绕开 D3 门禁）。
 	pending := len(res.Refusals) > 0 || len(conflicted) > 0
+	rep.Pending = pending
 
 	// 16. 第 9 步：推进 state 与 .xinit/base/（先 base 后 state，含写入自检）
 	if err := advanceState(projectDir, st, baseSnap, actions, theirsRendered, newSrc, vars, src, pending); err != nil {
@@ -926,7 +927,7 @@ func predictRefusals(projectDir string, c apply.Changes) ([]apply.Refusal, error
 		if !ok {
 			out = append(out, apply.Refusal{
 				Path:   rel,
-				Reason: "删除路径解析后落在项目根之外（父路径有指向外部的符号链接）；请移走它（§9.5）",
+				Reason: "删除路径解析后落在项目根之外（父路径有指向外部的符号链接）；请移走它，或把该路径写进 .xinit/prune.txt（§9.5）",
 			})
 			continue
 		}

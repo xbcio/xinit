@@ -54,9 +54,9 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&templateSrc, "template", "", "模板来源（本地路径或 git URL，必填）")
 	cmd.Flags().StringVar(&configPath, "config", "", "变量文件（扁平 YAML）")
 	cmd.Flags().BoolVar(&offline, "offline", false, "不联网，只用本地模板镜像缓存")
-	cmd.Flags().BoolVar(&noHooks, "no-hooks", false, "跳过 post_init")
+	cmd.Flags().BoolVar(&noHooks, "no-hooks", false, "跳过 post_init 执行（仍记录本次内容，下次带钩子运行仍需确认）")
 	cmd.Flags().BoolVar(&force, "force", false, "允许在非空目录执行（仍不覆盖同名文件）")
-	cmd.Flags().BoolVar(&yes, "yes", false, "跳过交互确认")
+	cmd.Flags().BoolVar(&yes, "yes", false, "跳过钩子信任确认（等同于在交互终端回答 y）")
 	_ = cmd.MarkFlagRequired("template")
 	return cmd
 }

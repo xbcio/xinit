@@ -10,8 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"golang.org/x/text/unicode/norm"
-
+	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/worktree"
 )
 
@@ -82,10 +81,12 @@ func checkOne(projectDir, p string, deleteSet map[string]bool) (Refusal, bool, e
 		case !last && !fi.IsDir():
 			return Refusal{Path: p, Reason: fmt.Sprintf(
 				"父路径 %s 在磁盘上是常规文件（模板要把它变成目录）——文件与目录不能互相顶替；"+
-					"移走它后重跑即可收敛（§9.3）", strings.Join(parts[:i+1], "/"))}, true, nil
+					"移走它后重跑即可收敛；或把 %s 写进 .xinit/prune.txt 使其脱离管理（§9.3）",
+				strings.Join(parts[:i+1], "/"), p)}, true, nil
 		case last && fi.IsDir():
 			return Refusal{Path: p, Reason: fmt.Sprintf(
-				"%s 在磁盘上是目录（模板要写文件）；移走或改名该目录后重跑即可收敛（§9.3）", p)}, true, nil
+				"%s 在磁盘上是目录（模板要写文件）；移走或改名该目录后重跑即可收敛；"+
+					"或把 %s 写进 .xinit/prune.txt 使其脱离管理（§9.3）", p, p)}, true, nil
 		}
 		cur = full
 	}
@@ -106,7 +107,7 @@ func checkFold(projectDir, p string, deleteSet map[string]bool) (Refusal, bool, 
 		return Refusal{}, false, err
 	}
 	for _, q := range names {
-		if q == base || !FoldEq(q, base) {
+		if q == base || !fsutil.FoldEqual(q, base) {
 			continue
 		}
 		qPath := dir + q
@@ -118,12 +119,4 @@ func checkFold(projectDir, p string, deleteSet map[string]bool) (Refusal, bool, 
 				"原子写会打到它上面；把它改名或移走后重跑，或把 %s 写进 .xinit/prune.txt（§9.3）", qPath, qPath)}, true, nil
 	}
 	return Refusal{}, false, nil
-}
-
-// FoldEq 报告两个路径段是否折叠等价：NFC 归一化后 EqualFold（SimpleFold 语义，§9.3）。
-func FoldEq(a, b string) bool {
-	if a == b {
-		return true
-	}
-	return strings.EqualFold(norm.NFC.String(a), norm.NFC.String(b))
 }

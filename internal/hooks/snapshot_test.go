@@ -91,3 +91,39 @@ func TestClassifySameMtimeDifferentSize(t *testing.T) {
 		t.Fatalf("size 变化必须判触碰: %v", unplanned)
 	}
 }
+
+func TestClassifySortsBothLists(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	// 乱序插入 4+4 个 key：无 sort.Strings 时 map 迭代随机，输出几乎不可能恰好升序。
+	before := map[string]Entry{
+		"p3.txt": {ModTime: t0, Size: 1},
+		"p1.txt": {ModTime: t0, Size: 1},
+		"p4.txt": {ModTime: t0, Size: 1},
+		"p2.txt": {ModTime: t0, Size: 1},
+	}
+	after := map[string]Entry{
+		"z3.txt": {ModTime: t0, Size: 1},
+		"z1.txt": {ModTime: t0, Size: 1},
+		"z4.txt": {ModTime: t0, Size: 1},
+		"z2.txt": {ModTime: t0, Size: 1},
+		"p3.txt": {ModTime: time.Unix(2000, 0), Size: 1},
+		"p1.txt": {ModTime: time.Unix(2000, 0), Size: 1},
+		"p4.txt": {ModTime: time.Unix(2000, 0), Size: 1},
+		"p2.txt": {ModTime: time.Unix(2000, 0), Size: 1},
+	}
+	unplanned, modified := Classify(before, after,
+		map[string]bool{"p1.txt": true, "p2.txt": true, "p3.txt": true, "p4.txt": true},
+		map[string]bool{})
+	if !reflect.DeepEqual(unplanned, []string{"z1.txt", "z2.txt", "z3.txt", "z4.txt"}) {
+		t.Fatalf("unplanned 应升序: %v", unplanned)
+	}
+	if !reflect.DeepEqual(modified, []string{"p1.txt", "p2.txt", "p3.txt", "p4.txt"}) {
+		t.Fatalf("modified 应升序: %v", modified)
+	}
+}
+
+func TestSnapshotMissingRoot(t *testing.T) {
+	if _, err := Snapshot(filepath.Join(t.TempDir(), "nope")); err == nil {
+		t.Fatal("root 不存在应报错")
+	}
+}

@@ -135,7 +135,7 @@ func restoreBase(projectDir string, st *state.State, cacheRoot string, need []st
 	// 告警抑制：重渲染只为取证，告警上一轮已报告过。
 	entries, _, err := render.Paths(old.FS, c, st.Vars)
 	if err != nil {
-		return fmt.Errorf("重建 base：重渲染路径失败：%w", err)
+		return fmt.Errorf("重建 base：重渲染路径失败：%w%s", err, adoptHint)
 	}
 	byDst := make(map[string]render.Entry, len(entries))
 	for _, e := range entries {
@@ -152,7 +152,7 @@ func restoreBase(projectDir string, st *state.State, cacheRoot string, need []st
 		}
 		content, _, _, err := render.Content(old.FS, c, st.Vars, e)
 		if err != nil {
-			return fmt.Errorf("重建 base/%s: %w", dst, err)
+			return fmt.Errorf("重建 base/%s: %w%s", dst, err, adoptHint)
 		}
 		if fsutil.CompareHash(content, fst.Binary) != fst.Hash {
 			snap.Degraded = append(snap.Degraded, dst) // 历史「保持旧值」路径，必然不一致
@@ -165,7 +165,7 @@ func restoreBase(projectDir string, st *state.State, cacheRoot string, need []st
 		full := filepath.Join(base, filepath.FromSlash(dst))
 		if !readOnly {
 			if err := state.WriteFileAtomic(full, content, mode); err != nil {
-				return fmt.Errorf("重建 base/%s: %w", dst, err)
+				return fmt.Errorf("重建 base/%s: %w%s", dst, err, adoptHint)
 			}
 		}
 		snap.Metas[dst] = metaFromFileState(fst, content)

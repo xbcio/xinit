@@ -40,8 +40,26 @@ func TestFoldIsStable(t *testing.T) {
 	}
 }
 
-func TestFoldLowercasesNonASCII(t *testing.T) {
+func TestFoldMergesNonASCIICaseVariants(t *testing.T) {
 	if Fold("Ä") != Fold("ä") {
 		t.Error("非 ASCII 也应折叠")
+	}
+}
+
+func TestFoldEqualUnifiedWithEqualFold(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"LICENSE", "license", true}, // ASCII：与旧实现一致
+		{"ſ", "s", true},             // ſ（长 s）：EqualFold 语义为真（旧 ToLower 实现为假）
+		{"İ", "I", false},            // İ：SimpleFold 无关联（旧 ToLower 实现为假合并）
+		{"a\u0301", "\u00e1", true},  // NFD/NFC（转义写法：防字面量被 Unicode 归一化而失去判别力）
+		{"src/Main.go", "src/main.go", true},
+	}
+	for _, c := range cases {
+		if got := FoldEqual(c.a, c.b); got != c.want {
+			t.Errorf("FoldEqual(%q,%q)=%v，想要 %v", c.a, c.b, got, c.want)
+		}
 	}
 }

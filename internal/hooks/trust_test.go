@@ -13,6 +13,11 @@ func TestHashStableAndPrefixed(t *testing.T) {
 	if len(h) != len("sha256:")+64 || h[:7] != "sha256:" {
 		t.Fatalf("hash 形状不对: %q", h)
 	}
+	// 已知向量：sha256("echo hi\n")——钉死摘要算法本身，不只是形状。
+	if got, want := Hash("echo hi\n"),
+		"sha256:ab08508fdf5ca4da5c4995987bc41c56c048aaa5eeb046417ae4049b7d40286e"; got != want {
+		t.Errorf("Hash 向量不匹配: got %s, want %s", got, want)
+	}
 }
 
 func TestNeedConfirmFirstSight(t *testing.T) {

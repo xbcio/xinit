@@ -93,9 +93,13 @@ func TestObstacles(t *testing.T) {
 	}
 	if r, ok := refusalFor(t, refusals, "a/b.txt"); !ok || !strings.Contains(r.Reason, "常规文件") {
 		t.Errorf("ENOTDIR 障碍物应被拒：%v", refusals)
+	} else if !strings.Contains(r.Reason, "prune.txt") {
+		t.Errorf("ENOTDIR 障碍物要给出 prune 出口（AL）：%q", r.Reason)
 	}
 	if r, ok := refusalFor(t, refusals, "d"); !ok || !strings.Contains(r.Reason, "目录") {
 		t.Errorf("EISDIR 障碍物应被拒：%v", refusals)
+	} else if !strings.Contains(r.Reason, "prune.txt") {
+		t.Errorf("EISDIR 障碍物要给出 prune 出口（AL）：%q", r.Reason)
 	}
 }
 
