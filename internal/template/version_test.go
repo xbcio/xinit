@@ -64,7 +64,7 @@ func TestListTags(t *testing.T) {
 	dir, _, _ := mkRepo(t)
 	runGitT(t, dir, "tag", "v1.0.0")
 	runGitT(t, dir, "tag", "junk")
-	got, err := ListTags(dir, t.TempDir(), false)
+	got, err := ListTags(dir, t.TempDir(), false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestListTagsBranchSharesTagName(t *testing.T) {
 	runGitT(t, dir, "branch", "v2.0.0")
 	cache := t.TempDir()
 
-	tags, err := ListTags(dir, cache, false)
+	tags, err := ListTags(dir, cache, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}

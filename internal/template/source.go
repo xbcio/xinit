@@ -97,15 +97,17 @@ func openDirSource(dir string) (*Source, error) {
 }
 
 // repoDirFor 返回可执行 git 命令的仓库目录：本地 git 仓直接用，其余走镜像。
-func repoDirFor(src, cacheRoot string, fetch bool) (string, error) {
+// allowClone 语义见 ensureMirror（status 默认传 false：不联网、不创建缓存）。
+func repoDirFor(src, cacheRoot string, fetch, allowClone bool) (string, error) {
 	if isGitRepo(src) {
 		return src, nil
 	}
-	return ensureMirror(src, cacheRoot, fetch)
+	return ensureMirror(src, cacheRoot, fetch, allowClone)
 }
 
 func openGit(src, revision, cacheRoot string, fetch bool) (*Source, error) {
-	repoDir, err := repoDirFor(src, cacheRoot, fetch)
+	// init/update/adopt 的路径：镜像缺失允许首次 clone（现状不变）。
+	repoDir, err := repoDirFor(src, cacheRoot, fetch, true)
 	if err != nil {
 		return nil, err
 	}

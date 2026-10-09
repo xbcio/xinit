@@ -35,8 +35,10 @@ func SemverTags(tags []string) []string {
 }
 
 // ListTags 列出模板仓库的全部 tag 短名（不排序；过滤交给 SemverTags）。
-func ListTags(src, cacheRoot string, fetch bool) ([]string, error) {
-	repoDir, err := repoDirFor(src, cacheRoot, fetch)
+// allowClone=false 时镜像缺失返回 ErrMirrorMissing（status 默认：不联网、
+// 不创建缓存，§11.4；评审 M-1/F2）。
+func ListTags(src, cacheRoot string, fetch, allowClone bool) ([]string, error) {
+	repoDir, err := repoDirFor(src, cacheRoot, fetch, allowClone)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +71,7 @@ func ListTags(src, cacheRoot string, fetch bool) ([]string, error) {
 // M3 的 --accept 例外（默认取当前 revision）不在这里：届时由调用方直接
 // 传 current 作为目标而不调用本函数。
 func SelectRevision(src, cacheRoot string, fetch bool, current string) (string, error) {
-	tags, err := ListTags(src, cacheRoot, fetch)
+	tags, err := ListTags(src, cacheRoot, fetch, true) // 选版只在 update 路径，允许首次 clone
 	if err != nil {
 		return "", err
 	}
@@ -102,7 +104,7 @@ func SelectRevision(src, cacheRoot string, fetch bool, current string) (string, 
 // 退出码 0 = 是，1 = 不是；其余（对象不存在等）返回错误。用于 §11.3
 // 显式 --revision 的降级警告：不是后代 → 警告但不阻止。
 func IsAncestor(src, cacheRoot string, fetch bool, older, newer string) (bool, error) {
-	repoDir, err := repoDirFor(src, cacheRoot, fetch)
+	repoDir, err := repoDirFor(src, cacheRoot, fetch, true) // 只在 update 的降级警告里用
 	if err != nil {
 		return false, err
 	}

@@ -1,6 +1,7 @@
 package template
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -177,7 +178,7 @@ func TestMirrorLockIsReentrantSafe(t *testing.T) {
 	cache := t.TempDir()
 
 	for i := 0; i < 3; i++ {
-		dir, err := ensureMirror(src, cache, false)
+		dir, err := ensureMirror(src, cache, false, true)
 		if err != nil {
 			t.Fatalf("第 %d 次 ensureMirror: %v", i+1, err)
 		}
@@ -209,7 +210,7 @@ func TestMirrorDirIsCreatedUnderCacheRoot(t *testing.T) {
 	}{"a.go": {"x", 0o644}})
 	cache := t.TempDir()
 
-	if _, err := ensureMirror(src, cache, false); err != nil {
+	if _, err := ensureMirror(src, cache, false, true); err != nil {
 		t.Fatalf("ensureMirror: %v", err)
 	}
 	ents, err := os.ReadDir(cache)
@@ -249,6 +250,46 @@ func TestOpenBareRepoGoesThroughMirror(t *testing.T) {
 	}
 	if ents, err := os.ReadDir(cache); err != nil || len(ents) == 0 {
 		t.Errorf("应创建镜像目录 (ents=%d, err=%v)", len(ents), err)
+	}
+}
+
+// 评审 M-1/F2：allowClone=false（status 默认，§11.4「默认不联网、只读本地
+// 镜像缓存」）时镜像缺失 → 可识别错误 ErrMirrorMissing，且连缓存根目录都不
+// 创建；allowClone=true（update/init）保持「缺失即首次 clone」的现状。
+func TestMirrorNoCloneMissingDoesNotCreateCacheRoot(t *testing.T) {
+	work, _ := newRepo(t, map[string]struct {
+		data string
+		mode os.FileMode
+	}{"a.go": {"x", 0o644}})
+	// 裸仓来源才会走镜像（普通工作副本被 repoDirFor 当本地仓直读）
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	if out, err := exec.Command("git", "clone", "-q", "--bare", work, bare).CombinedOutput(); err != nil {
+		t.Fatalf("clone --bare: %v\n%s", err, out)
+	}
+
+	parent := t.TempDir()
+	cache := filepath.Join(parent, "cache-root") // 尚不存在
+
+	if _, err := ListTags(bare, cache, false, false); !errors.Is(err, ErrMirrorMissing) {
+		t.Fatalf("allowClone=false 且镜像缺失应报 ErrMirrorMissing: %v", err)
+	}
+	// 精确条目判断：缓存根目录不得被创建。
+	ents, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if e.Name() == "cache-root" {
+			t.Error("allowClone=false 不得创建缓存根目录（§11.4 默认不联网）")
+		}
+	}
+
+	// 对照：allowClone=true 照常首次 clone（update/init 现状不变）。
+	if _, err := ListTags(bare, cache, false, true); err != nil {
+		t.Fatalf("allowClone=true 应照常 clone: %v", err)
+	}
+	if _, err := os.Stat(cache); err != nil {
+		t.Errorf("allowClone=true 应创建缓存根: %v", err)
 	}
 }
 
@@ -305,7 +346,7 @@ func TestMirrorLockStaleTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir, err := ensureMirror(src, cache, false)
+	dir, err := ensureMirror(src, cache, false, true)
 	if err != nil {
 		t.Fatalf("陈旧锁应被接管，实际报错: %v", err)
 	}
@@ -323,7 +364,7 @@ func TestEnsureMirrorCleansUpAfterCloneFailure(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 
 	// 本地不存在的路径让 git clone 立即失败（不触网、不超时）
-	if _, err := ensureMirror(missing, cache, false); err == nil {
+	if _, err := ensureMirror(missing, cache, false, true); err == nil {
 		t.Fatal("clone 失败应向上报错")
 	}
 
@@ -357,7 +398,7 @@ func TestEnsureMirrorCleansUpHalfClone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := ensureMirror(src, cache, false); err == nil {
+	if _, err := ensureMirror(src, cache, false, true); err == nil {
 		t.Fatal("目标目录已存在且非空时 clone 应失败")
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -365,7 +406,7 @@ func TestEnsureMirrorCleansUpHalfClone(t *testing.T) {
 	}
 
 	// 清理后重试必须成功 —— 同时证明上面的失败不是环境恒错
-	got, err := ensureMirror(src, cache, false)
+	got, err := ensureMirror(src, cache, false, true)
 	if err != nil {
 		t.Fatalf("清理后重试应成功: %v", err)
 	}

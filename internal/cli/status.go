@@ -106,7 +106,9 @@ func runStatus(o StatusOptions) (*statusReport, error) {
 		if err != nil {
 			return nil, err
 		}
-		tags, err := template.ListTags(st.Template.Source, cacheRoot, o.Fetch)
+		// allowClone=false：status 默认不联网、不创建缓存根（§11.4；评审
+		// M-1/F2）——镜像缺失走下面的降级说明，不静默 clone。
+		tags, err := template.ListTags(st.Template.Source, cacheRoot, o.Fetch, false)
 		switch {
 		case err != nil:
 			rep.TemplateNote = fmt.Sprintf("无法读取模板 tag（本地镜像未命中？加 --fetch 重试）：%v", err)

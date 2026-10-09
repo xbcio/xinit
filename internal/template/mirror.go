@@ -3,6 +3,7 @@ package template
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,11 +29,26 @@ func mirrorDirName(source string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ErrMirrorMissing 表示本地镜像不存在，而调用方不允许首次克隆（status
+// 默认路径：§11.4「默认不联网，只读本地镜像缓存」——不联网、不创建缓存根）。
+var ErrMirrorMissing = errors.New("本地镜像未命中（该命令默认不联网、不创建缓存；请先运行 init/update 拉取镜像）")
+
 // ensureMirror 确保镜像存在并更新到最新，返回镜像目录。
 //
+// allowClone=false（status 默认）时：镜像缺失直接返回 ErrMirrorMissing——
+// 联网 clone 与创建缓存根目录都发生在该检查之后，因此两者都不会发生；
+// 镜像存在时 fetch 照常更新（§11.4「--fetch 才更新缓存」）。
+// allowClone=true（update/init）保持「缺失即首次 clone」的现状。
+//
 // 并发安全：用锁文件 + 重试一次。多进程同时 fetch 会撞 git 的 ref 锁。
-func ensureMirror(source, cacheRoot string, fetch bool) (string, error) {
+func ensureMirror(source, cacheRoot string, fetch, allowClone bool) (string, error) {
 	dir := filepath.Join(cacheRoot, mirrorDirName(source))
+
+	if !allowClone {
+		if _, err := os.Stat(filepath.Join(dir, "HEAD")); err != nil {
+			return "", ErrMirrorMissing // 在 MkdirAll 之前——缓存根也不创建
+		}
+	}
 
 	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
 		return "", fmt.Errorf("创建缓存目录: %w", err)
@@ -45,7 +61,10 @@ func ensureMirror(source, cacheRoot string, fetch bool) (string, error) {
 	defer unlock()
 
 	if _, err := os.Stat(filepath.Join(dir, "HEAD")); err != nil {
-		// 尚未镜像
+		// 尚未镜像（含并发清理导致镜像消失的竞态兜底）
+		if !allowClone {
+			return "", ErrMirrorMissing
+		}
 		if err := cloneMirror(source, dir); err != nil {
 			// 克隆失败时清掉半成品，避免下次误判为已镜像
 			_ = os.RemoveAll(dir)
