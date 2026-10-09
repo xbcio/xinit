@@ -3,9 +3,12 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/xbcio/xinit/internal/apply"
+	"github.com/xbcio/xinit/internal/hooks"
 	"github.com/xbcio/xinit/internal/plan"
+	"github.com/xbcio/xinit/internal/template"
 )
 
 // 退出码（§11.5）。
@@ -190,4 +193,80 @@ func orNone(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// hookBlockLines 把钩子块/输出切成行（与 hooks 包的 splitLines 同语义，
+// 空串 → nil）。
+func hookBlockLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+}
+
+// hookVersion 是信任记录的版本值：git 源 = revision，dir 源 = 树 hash
+// （§4.3；dir 源 Revision 为空，用 Commit 保证记录非空——空串是 Seen 的
+// marker，两者不可混）。
+func hookVersion(src *template.Source) string {
+	if src.Revision != "" {
+		return src.Revision
+	}
+	return src.Commit
+}
+
+// printHookNotice 打印信任确认通知（§10.5）：钩子全文 + 可选的行级 diff。
+// diff/oldVer 为空时省略 diff 段（首次出现、或旧清单不可得时，M3-R5）。
+func printHookNotice(w io.Writer, name, block, oldVer, diff string) {
+	fmt.Fprintf(w, "模板钩子 %s 需要确认（首次出现；内容变化时也会重新询问，§10.5）。\n", name)
+	fmt.Fprint(w, "下列命令会以 sh -c 在项目根执行：\n\n")
+	for _, ln := range hookBlockLines(block) {
+		fmt.Fprintf(w, "    %s\n", ln)
+	}
+	if diff != "" {
+		fmt.Fprintf(w, "\n相对已记录版本 %s 的差异（- 已信任 / + 本次）：\n\n", oldVer)
+		for _, ln := range hookBlockLines(diff) {
+			fmt.Fprintf(w, "    %s\n", ln)
+		}
+	}
+	fmt.Fprint(w, "\n这是上游模板里的任意 shell 命令：确认前请检查上面每一行。\n"+
+		"  · 信任并执行：在原命令后加 --yes（交互终端下也可回答 y）\n"+
+		"  · 本轮跳过执行、且下次仍需确认：在原命令后加 --no-hooks\n"+
+		"退出码 4 = 需要信任确认，本轮未做任何修改。\n")
+}
+
+// printHookRun 打印一次钩子执行的输出（无输出时不打印）。
+func printHookRun(w io.Writer, name string, res hooks.Result) {
+	if len(res.Output) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "%s 输出（退出码 %d）：\n", name, res.ExitCode)
+	for _, ln := range hookBlockLines(string(res.Output)) {
+		fmt.Fprintf(w, "  %s\n", ln)
+	}
+}
+
+// printHookFailure 打印失败行、失败命令全文与手工重跑方式（§10.2 :845）。
+func printHookFailure(w io.Writer, name, block string, exitCode int) {
+	fmt.Fprintf(w, "%s 失败（钩子退出码 %d；xinit 退出码 3）——本轮的文件与 state 已完成并保留（§10.2）。\n", name, exitCode)
+	fmt.Fprint(w, "失败命令（sh -c，工作目录 = 项目根）：\n\n")
+	for _, ln := range hookBlockLines(block) {
+		fmt.Fprintf(w, "    %s\n", ln)
+	}
+	fmt.Fprint(w, "\n修好问题后重跑即收敛；或手工执行上面的命令。\n")
+}
+
+// printHookSideEffects 打印副作用两节（§10.6，只报告、不回滚）。
+func printHookSideEffects(w io.Writer, unplanned, modified []string) {
+	if len(unplanned) > 0 {
+		fmt.Fprintf(w, "计划外副作用（%d 条，钩子触碰了不属于计划内或 generated 的路径；§10.6）：\n", len(unplanned))
+		for _, p := range unplanned {
+			fmt.Fprintf(w, "  %-20s %s\n", "side-effect", p)
+		}
+	}
+	if len(modified) > 0 {
+		fmt.Fprintf(w, "计划内但被钩子改写（%d 条，下一轮可能被判「本地改过」的正是这些）：\n", len(modified))
+		for _, p := range modified {
+			fmt.Fprintf(w, "  %-20s %s\n", "hook-modified", p)
+		}
+	}
 }

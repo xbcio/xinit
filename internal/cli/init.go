@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/xbcio/xinit/internal/fsutil"
+	"github.com/xbcio/xinit/internal/hooks"
 	"github.com/xbcio/xinit/internal/manifest"
 	"github.com/xbcio/xinit/internal/render"
 	"github.com/xbcio/xinit/internal/state"
@@ -39,7 +40,8 @@ func newInitCmd() *cobra.Command {
 		Short: "从模板生成新项目",
 		Long: "按模板项目的 xinit.yml 与配置渲染出一个新的派生项目。\n\n" +
 			"目标目录不存在时会创建；已存在且非空时需 --force。\n" +
-			"只含 .git 的目录视为空目录。",
+			"只含 .git 的目录视为空目录。" +
+			"\n模板声明的 post_init 钩子会先要求信任确认（--yes 跳过确认，--no-hooks 跳过执行）。",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dest := "."
@@ -76,7 +78,6 @@ func newInitCmd() *cobra.Command {
 //
 // 失败语义：第 6–9 步失败时**只回删本次创建的路径**，绝不删除预先存在
 // 的任何内容。第 10 步（钩子）失败不回删 —— 渲染产物是正确的。
-// M1 不实现第 4、10 步（钩子属于 M3，见规范 §16 的门禁）。
 func Init(
 	projectDir, templateSrc, configPath, revision string,
 	offlineReady, noHooks, force, yes bool,
@@ -150,6 +151,31 @@ func Init(
 		return err
 	}
 
+	// 4. 钩子信任确认（§6 第 4 步、§10.5）——在写任何文件之前。
+	trusted := map[string]string{}
+	postInitWillRun := !noHooks && m.Hooks.PostInit != ""
+	if m.Hooks.PostInit != "" {
+		h := hooks.Hash(m.Hooks.PostInit)
+		if noHooks {
+			// 跳过执行也记录内容（§10.5）：下次不带 --no-hooks 仍需确认。
+			hooks.Seen(trusted, h)
+		} else if hooks.NeedConfirm(trusted, h) {
+			printHookNotice(os.Stdout, "post_init", m.Hooks.PostInit, "", "")
+			ok := yes
+			if !ok && hooks.Interactive(os.Stdin) {
+				var cerr error
+				if ok, cerr = hooks.Confirm(os.Stdin, os.Stdout); cerr != nil {
+					return cerr
+				}
+			}
+			if !ok {
+				return &ExitError{Code: CodeNeedTrust, Silent: true,
+					msg: "需要信任确认（exit 4）"}
+			}
+			hooks.Consent(trusted, h, hookVersion(src))
+		}
+	}
+
 	// 5. 渲染路径（含碰撞检查）
 	entries, warnings, err := render.Paths(src.FS, compiled, vars)
 	if err != nil {
@@ -215,6 +241,7 @@ func Init(
 		Commit:   src.Commit,
 	}
 	st.Vars = vars
+	st.TrustedHooks = trusted
 
 	// managed 是「磁盘内容确实由我们写下的」那一部分。
 	//
@@ -258,7 +285,37 @@ func Init(
 		return fmt.Errorf("写 .git/info/exclude: %w", err)
 	}
 
-	// 10. （M3）post_init
+	// 10. 跑 post_init（§6 第 10 步、§10.2 第 11 步语义）。失败不回删
+	//（§6.1）：渲染产物是正确的，只报告并给出退出码 3。
+	if postInitWillRun {
+		before, err := hooks.Snapshot(dest)
+		if err != nil {
+			return fmt.Errorf("钩子前快照: %w", err)
+		}
+		res, err := hooks.Run(dest, m.Hooks.PostInit)
+		if err != nil {
+			return err
+		}
+		after, err := hooks.Snapshot(dest)
+		if err != nil {
+			return fmt.Errorf("钩子后快照: %w", err)
+		}
+		planned := make(map[string]bool, len(entries))
+		generated := make(map[string]bool)
+		for _, e := range entries {
+			planned[e.Dst] = true
+			if e.Generated {
+				generated[e.Dst] = true
+			}
+		}
+		unplanned, modified := hooks.Classify(before, after, planned, generated)
+		printHookRun(os.Stdout, "post_init", res)
+		printHookSideEffects(os.Stdout, unplanned, modified)
+		if res.ExitCode != 0 {
+			printHookFailure(os.Stdout, "post_init", m.Hooks.PostInit, res.ExitCode)
+			return &ExitError{Code: CodeHookFail, Silent: true, msg: "post_init 失败（exit 3）"}
+		}
+	}
 
 	fmt.Printf("已生成 %d 个文件到 %s\n", len(created), dest)
 	if len(skipped) > 0 {

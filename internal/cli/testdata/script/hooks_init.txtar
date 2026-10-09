@@ -1,0 +1,44 @@
+# init 的 post_init：首次必问（退出码 4，未写任何文件）；--yes 后执行钩子；
+# 钩子失败时退出码 3 且**不回删**（§6.1）——渲染产物与 state 保留。
+
+# 场景 A：post_init 成功流
+xinit-code init --template $WORK/tpl_ok out_ok
+stdout '模板钩子 post_init 需要确认'
+stdout 'echo made > made.txt'
+stdout 'exit=4'
+# 未确认时在写文件之前就退出：渲染产物一个都没落盘（约束「不写任何项目文件」）
+! exists out_ok/made.txt
+! exists out_ok/a.txt
+
+xinit-code init --template $WORK/tpl_ok --yes out_ok
+stdout 'exit=0'
+exists out_ok/made.txt
+# 钩子 stdout 被捕获并打印（钩子第二行 echo done 产生输出，头行出现）
+stdout 'post_init 输出（退出码 0）'
+
+# 场景 B：post_init 失败（exit 5）→ xinit 退出码 3、产物不回删
+xinit-code init --template $WORK/tpl_fail --yes out_fail
+stdout 'post_init 失败（钩子退出码 5；xinit 退出码 3）'
+stdout 'exit=3'
+exists out_fail/a.txt
+exists out_fail/.xinit/state.json
+
+-- tpl_ok/xinit.yml --
+manifest_version: 1
+hooks:
+  post_init: |
+    echo made > made.txt
+    echo done
+
+-- tpl_ok/a.txt --
+hello
+
+-- tpl_fail/xinit.yml --
+manifest_version: 1
+hooks:
+  post_init: |
+    touch marker.txt
+    exit 5
+
+-- tpl_fail/a.txt --
+hello
