@@ -60,7 +60,10 @@ func TestSection85NewBasePerRow(t *testing.T) {
 			ours:   Snap{"gen.txt": reg("h2")},
 			theirs: Snap{"gen.txt": genm("h3")},
 			hooks:  true,
-			want:   Action{Path: "gen.txt", Kind: WriteTheirs, NewBase: ptr(genm("h3"))},
+			// OverwriteGenerated：checkActions 现按表断言该位（T8 fix round 1），
+			// 行 5 是全表唯一置位的一行。
+			want: Action{Path: "gen.txt", Kind: WriteTheirs, NewBase: ptr(genm("h3")),
+				OverwriteGenerated: true},
 		},
 		{
 			row:  "行6 冲突 → 保持旧值（Exec/Binary/Generated 原样）",

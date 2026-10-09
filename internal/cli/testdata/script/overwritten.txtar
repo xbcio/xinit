@@ -8,11 +8,14 @@ cd out
 cp $WORK/local-gen.txt gen.txt
 cp $WORK/new-gen.txt ../tpl/gen.txt
 
-# dry-run 只预测会被另存的路径（不落盘、不改磁盘内容）
+# dry-run 只预测会被另存的路径（不落盘、不改磁盘内容、连 overwritten/ 目录
+# 都不建）。另存时机（备份前/后）经**内容**不可观察——副本取自 Scan 内存
+# 快照（评审 M2 全绿为证），本脚本不追求钉顺序：已接受（T8 评审 Minor-4）。
 xinit-code update --dry-run
 stdout 'overwritten\s+gen\.txt'
 stdout 'exit=5'
 ! exists .xinit/overwritten/gen.txt
+! exists .xinit/overwritten
 cmp gen.txt $WORK/local-gen.txt
 
 # 模板声明了 post_update → 首轮 update 需信任确认（--yes 确认并执行；

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -342,7 +343,7 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		rep.Deleted = except(changes.Deletes, refused)
 		rep.Chmodded = chmodPredictions(changes, refused)
 		rep.Merged = sortedStringKeys(merged)
-		rep.Overwritten = overwrittenPredictions(actions)
+		rep.Overwritten = overwrittenPaths(actions, refused)
 		rep.Resolved = except(existing, conflicted)
 		// §7.5：改名配对检测只进 diff/--dry-run 的报告（update 不产出）
 		rep.Renames = detectRenames(actions, baseSnap.Metas, theirsSnap)
@@ -396,28 +397,36 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	// 13b. 行 5 覆盖保护（§8.2 :614）：本轮会被 generated 覆盖的路径，其
 	// 本地版本先另存 .xinit/overwritten/<P>——持久保留，不随 update 清理
 	//（同一路径再次被覆盖时更新为最近一次副本）。
-	for _, a := range actions {
-		if !a.OverwriteGenerated {
-			continue
+	//
+	// 先取「写前检查的拒绝集」再落盘：被折叠拒绝/障碍物挡下的路径**没有被
+	// 覆盖**，§8.2 的另存义务只在真的发生覆盖时触发——既不写副本、也不进
+	// 报告。拒绝集原样来自 predictRefusals（与 Execute 步骤 1-2 同一组函数、
+	// 同一 changes），绝不手写近似判据：手写判据会开出「Execute 会写、却没
+	// 另存」的窗口。
+	if slices.ContainsFunc(actions, func(a plan.Action) bool { return a.OverwriteGenerated }) {
+		refusals, err := predictRefusals(projectDir, changes)
+		if err != nil {
+			return nil, err
 		}
-		data := oursBytes[a.Path]
-		if data == nil {
-			return nil, fmt.Errorf("内部错误：%q 判为 generated 覆盖但本地内容缺失", a.Path)
+		for _, p := range overwrittenPaths(actions, refusalSet(refusals)) {
+			data := oursBytes[p]
+			if data == nil {
+				return nil, fmt.Errorf("内部错误：%q 判为 generated 覆盖但本地内容缺失", p)
+			}
+			mode := os.FileMode(0o644)
+			if m, ok := oursSnap[p]; ok && m.Exec {
+				mode = 0o755
+			}
+			full := filepath.Join(projectDir, state.DirName, "overwritten", filepath.FromSlash(p))
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				return nil, fmt.Errorf("另存被覆盖的本地版本: %w", err)
+			}
+			if err := state.WriteFileAtomic(full, data, mode); err != nil {
+				return nil, fmt.Errorf("另存被覆盖的本地版本: %w", err)
+			}
+			rep.Overwritten = append(rep.Overwritten, p)
 		}
-		mode := os.FileMode(0o644)
-		if m, ok := oursSnap[a.Path]; ok && m.Exec {
-			mode = 0o755
-		}
-		full := filepath.Join(projectDir, state.DirName, "overwritten", filepath.FromSlash(a.Path))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			return nil, fmt.Errorf("另存被覆盖的本地版本: %w", err)
-		}
-		if err := state.WriteFileAtomic(full, data, mode); err != nil {
-			return nil, fmt.Errorf("另存被覆盖的本地版本: %w", err)
-		}
-		rep.Overwritten = append(rep.Overwritten, a.Path)
 	}
-	sort.Strings(rep.Overwritten)
 
 	// 14. 执行（§10.2 第 8 步）——折叠拒绝/障碍物路径跳过、不中止其余路径
 	res, err := apply.Execute(projectDir, changes)
@@ -1244,11 +1253,16 @@ func isConflictAction(a *plan.Action, conflicted map[string]bool) bool {
 // acceptDetachedNote 是 --accept 对「模板已删除该路径」的覆盖文案（§10.3）。
 const acceptDetachedNote = "已按 --accept 声明解决：模板已删除该路径，本轮脱离管理（不再有 base 记录；磁盘不动）"
 
-// overwrittenPredictions 预测 dry-run 下会被另存的路径（§8.2 行 5）。
-func overwrittenPredictions(actions []plan.Action) []string {
+// overwrittenPaths 是本轮「会被 generated 覆盖（§8.2 行 5）、且未被写前检查
+// 拒绝」的路径（排序）——13b 的落盘清单与 dry-run 的预测共用同一出处。
+//
+// refused 必须原样来自 predictRefusals（与 apply.Execute 步骤 1-2 同一组
+// 函数）：被拒的路径没有被覆盖，另存义务不触发；换成手写近似判据会同时开出
+// 「Execute 写而没另存」（漏档）与「没写而记档」（虚账）两个窗口。
+func overwrittenPaths(actions []plan.Action, refused map[string]bool) []string {
 	var out []string
 	for _, a := range actions {
-		if a.OverwriteGenerated {
+		if a.OverwriteGenerated && !refused[a.Path] {
 			out = append(out, a.Path)
 		}
 	}

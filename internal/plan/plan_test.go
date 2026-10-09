@@ -43,6 +43,11 @@ func checkActions(t *testing.T, got, want []Action) {
 		if want[i].Note != "" && !strings.Contains(got[i].Note, want[i].Note) {
 			t.Errorf("%s 的 Note 应包含 %q；got %q", got[i].Path, want[i].Note, got[i].Note)
 		}
+		// §8.2 行 5 的另存位：只允许行 5 置位（表里其余例的期望值为 false）。
+		if got[i].OverwriteGenerated != want[i].OverwriteGenerated {
+			t.Errorf("%s 的 OverwriteGenerated：got %v，want %v",
+				got[i].Path, got[i].OverwriteGenerated, want[i].OverwriteGenerated)
+		}
 	}
 }
 
@@ -98,7 +103,8 @@ func TestPlanRows(t *testing.T) {
 			ours:   Snap{"gen.txt": reg("h2")},
 			theirs: Snap{"gen.txt": genm("h3")},
 			hooks:  true,
-			want:   []Action{{Path: "gen.txt", Kind: WriteTheirs, NewBase: ptr(genm("h3")), Note: "覆盖"}},
+			want: []Action{{Path: "gen.txt", Kind: WriteTheirs, NewBase: ptr(genm("h3")), Note: "覆盖",
+				OverwriteGenerated: true}},
 		},
 		{
 			name:   "行5 前提缺一（上次不是 generated）→ 落行 7 Merge",

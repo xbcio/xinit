@@ -591,3 +591,59 @@ func TestHookDiffAgainstBaseDirSourceReturnsEmpty(t *testing.T) {
 		t.Fatalf("dir 源无历史，diff 必须为空: ver=%q diff=%q", ver, diff)
 	}
 }
+
+// overwrittenPaths 是行 5 另存清单的唯一出处（13b 落盘与 dry-run 预测共用）：
+// 只有「行 5 ∧ 未被写前检查拒绝」的路径在列——被拒绝的路径没有被覆盖，
+// §8.2 的另存义务不触发（T8 fix round 1，评审 C1）。
+func TestOverwrittenPaths(t *testing.T) {
+	tests := []struct {
+		name    string
+		actions []plan.Action
+		refused map[string]bool
+		want    []string
+	}{
+		{name: "空输入 → 空", want: nil},
+		{
+			name: "行 5 且未被拒 → 列入（按路径排序）",
+			actions: []plan.Action{
+				{Path: "sub/gen.txt", Kind: plan.WriteTheirs, OverwriteGenerated: true},
+				{Path: "bin.sh", Kind: plan.WriteTheirs, OverwriteGenerated: true},
+			},
+			refused: map[string]bool{},
+			want:    []string{"bin.sh", "sub/gen.txt"},
+		},
+		{
+			name:    "行 5 被拒 → 不列（折叠拒绝下没发生覆盖）",
+			actions: []plan.Action{{Path: "gen.txt", Kind: plan.WriteTheirs, OverwriteGenerated: true}},
+			refused: map[string]bool{"gen.txt": true},
+			want:    nil,
+		},
+		{
+			name: "非行 5 → 不列（即使未被拒）",
+			actions: []plan.Action{
+				{Path: "plain.txt", Kind: plan.WriteTheirs},
+				{Path: "skip.txt", Kind: plan.Noop, Note: plan.SkipNote},
+				{Path: "conflict.txt", Kind: plan.ConflictBinary},
+			},
+			refused: map[string]bool{},
+			want:    nil,
+		},
+		{
+			name: "混合：只列行 5 且未被拒的",
+			actions: []plan.Action{
+				{Path: "a.txt", Kind: plan.WriteTheirs},
+				{Path: "gen.txt", Kind: plan.WriteTheirs, OverwriteGenerated: true},
+				{Path: "gen2.txt", Kind: plan.WriteTheirs, OverwriteGenerated: true},
+			},
+			refused: map[string]bool{"gen2.txt": true},
+			want:    []string{"gen.txt"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := overwrittenPaths(tc.actions, tc.refused); !slices.Equal(got, tc.want) {
+				t.Errorf("overwrittenPaths = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
