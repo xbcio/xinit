@@ -43,9 +43,9 @@ render:
 // Xkitora 是模板里的一个产品名
 func main() {}
 `,
-		"go.mod":          "module xkitora\n\ngo 1.24\n",
+		"go.mod":         "module xkitora\n\ngo 1.24\n",
 		"README.md.tmpl": "# {{ .project_name }}\n",
-		"run.sh":          "#!/bin/sh\necho Xkitora\n",
+		"run.sh":         "#!/bin/sh\necho Xkitora\n",
 	}
 	for rel, data := range files {
 		full := filepath.Join(dir, rel)

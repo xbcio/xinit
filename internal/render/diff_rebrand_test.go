@@ -347,17 +347,17 @@ func generateCorpus(t *testing.T) map[string]string {
 	gen := map[string]string{}
 
 	// 基础替换
-	gen["纯字面量"] = "Xkitora 和 xkitora 混排\n"       // → Xdesk 和 xdesk
-	gen["行首"] = "xkitora is here\n"                // → xdesk is here
-	gen["行尾"] = "here is xkitora\n"                // → here is xdesk
-	gen["字母边界_前"] = "libxkitora\n"                // → 不变
-	gen["字母边界_后"] = "xkitorax\n"                  // → 不变
-	gen["下划线邻接"] = "_xkitora_\n"                  // → _xdesk_（下划线不是字母）
+	gen["纯字面量"] = "Xkitora 和 xkitora 混排\n"            // → Xdesk 和 xdesk
+	gen["行首"] = "xkitora is here\n"                   // → xdesk is here
+	gen["行尾"] = "here is xkitora\n"                   // → here is xdesk
+	gen["字母边界_前"] = "libxkitora\n"                    // → 不变
+	gen["字母边界_后"] = "xkitorax\n"                      // → 不变
+	gen["下划线邻接"] = "_xkitora_\n"                      // → _xdesk_（下划线不是字母）
 	gen["多行"] = "Xkitora\nxkitora\nXkitora xkitora\n" // → Xdesk/xdesk/Xdesk xdesk
-	gen["路径样"] = "github.com/xbcio/xkitora\n"     // → github.com/xbcorp/xdesk
-	gen["多字节邻接"] = "中文xkitora中文\n"                 // → 中文xdesk中文（非 ASCII 字母不算边界）
-	gen["空行"] = "\n\n\n"                          // → 不变
-	gen["tab 分隔"] = "xkitora\tXkitora\n"          // → xdesk\tXdesk
+	gen["路径样"] = "github.com/xbcio/xkitora\n"         // → github.com/xbcorp/xdesk
+	gen["多字节邻接"] = "中文xkitora中文\n"                    // → 中文xdesk中文（非 ASCII 字母不算边界）
+	gen["空行"] = "\n\n\n"                              // → 不变
+	gen["tab 分隔"] = "xkitora\tXkitora\n"              // → xdesk\tXdesk
 
 	// 全大写：走 target_case: upper 那条规则
 	gen["全大写"] = "XKITORA_URL 与 XKITORA_URL\n" // → XDESK_URL 与 XDESK_URL
@@ -369,15 +369,15 @@ func generateCorpus(t *testing.T) map[string]string {
 	// 谓词分派：同一个裸 token 在不同槽位落到**不同**目标。
 	// 目标值刻意互不相同（见 derivationIdentity），否则谓词判对判错
 	// 输出一样，这几条就是空转。
-	gen["scheme 槽"] = `Scheme = "xkitora"` + "\n"             // → xscheme
-	gen["scheme 槽 冒号"] = `scheme: "xkitora"` + "\n"          // → xscheme
-	gen["file_ext 槽"] = `FileExtension = "xkitora"` + "\n"    // → xext
-	gen["file_ext 槽 冒号"] = `ext: "xkitora"` + "\n"           // → xext（谓词要求引号）
-	gen["data_dir 槽"] = `AppDirName = "xkitora"` + "\n"       // → xdata
-	gen["data_dir 槽 冒号"] = `dataDir: "xkitora"` + "\n"       // → xdata
-	gen["module 槽"] = "module xkitora\n"                     // → xmodule
+	gen["scheme 槽"] = `Scheme = "xkitora"` + "\n"              // → xscheme
+	gen["scheme 槽 冒号"] = `scheme: "xkitora"` + "\n"            // → xscheme
+	gen["file_ext 槽"] = `FileExtension = "xkitora"` + "\n"     // → xext
+	gen["file_ext 槽 冒号"] = `ext: "xkitora"` + "\n"             // → xext（谓词要求引号）
+	gen["data_dir 槽"] = `AppDirName = "xkitora"` + "\n"        // → xdata
+	gen["data_dir 槽 冒号"] = `dataDir: "xkitora"` + "\n"         // → xdata
+	gen["module 槽"] = "module xkitora\n"                       // → xmodule
 	gen["bindings 槽"] = "frontend/bindings/xkitora/types.ts\n" // → xmodule
-	gen["internal 槽"] = "xkitora/internal/app\n"             // → xmodule
+	gen["internal 槽"] = "xkitora/internal/app\n"               // → xmodule
 
 	// 谓词**确实不命中**的槽位形态，必须落到最后那条裸规则（→ xdesk）。
 	// 这两条的谓词形态和上面只差一点，是真正的判别用例：
@@ -385,8 +385,8 @@ func generateCorpus(t *testing.T) map[string]string {
 	//   - ext 谓词要求冒号后跟引号，无引号时落空
 	// 注意 "not module xkitora" **不是**反例：窗口 "not module " 以
 	// "module " 结尾，\Z 成立，谓词照样命中（实测 → xmodule）。
-	gen["谓词落空_module"] = "module foo xkitora\n" // → xdesk
-	gen["谓词落空_ext"] = "ext: xkitora\n"         // → xdesk（无引号）
+	gen["谓词落空_module"] = "module foo xkitora\n"         // → xdesk
+	gen["谓词落空_ext"] = "ext: xkitora\n"                  // → xdesk（无引号）
 	gen["谓词落空_scheme"] = `schemeURL = "xkitora"` + "\n" // → xdesk
 
 	// 边界拒绝后的推进：rebrand.sh 在拒绝处 index = end（不是 end+1），
@@ -397,7 +397,7 @@ func generateCorpus(t *testing.T) map[string]string {
 	gen["非重叠多命中"] = "xkitora xkitora xkitora\n" // → xdesk xdesk xdesk
 
 	// 保护区：@xbcio/ui 必须原样留下，同文件里裸露的 xbcio 必须改掉
-	gen["保护区"] = "@xbcio/ui 与 xbcio 混排\n"   // → @xbcio/ui 与 xbcorp 混排
+	gen["保护区"] = "@xbcio/ui 与 xbcio 混排\n"     // → @xbcio/ui 与 xbcorp 混排
 	gen["保护区与 org 同排"] = "@xbcio/ui\nxbcio\n" // → @xbcio/ui\nxbcorp
 
 	return gen
