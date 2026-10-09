@@ -142,11 +142,15 @@ func WithinResolvedRoot(root, rel string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("解析项目根 %s: %w", rootAbs, err)
 	}
-	cur, deepest := rootAbs, rootAbs
-	for _, p := range strings.Split(rel, "/") {
+	// 与 lstatExact 同理由：先整体校验段，非法 .. 不因前缀缺失被短路。
+	parts := strings.Split(rel, "/")
+	for _, p := range parts {
 		if p == "" || p == "." || p == ".." {
 			return false, fmt.Errorf("非法路径段 %q（%s）", p, rel)
 		}
+	}
+	cur, deepest := rootAbs, rootAbs
+	for _, p := range parts {
 		next := filepath.Join(cur, p)
 		if _, err := os.Lstat(next); err != nil {
 			break // 从这一段起都不存在，没有可穿透的链接

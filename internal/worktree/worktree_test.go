@@ -155,6 +155,10 @@ func TestWithinResolvedRoot(t *testing.T) {
 	if ok {
 		t.Fatal("经指向外部的符号链接必须判 false（§9.5）")
 	}
+	// 前缀缺失时非法段也必须报错（fail-closed，不被 break 短路）
+	if _, err := WithinResolvedRoot(root, "new/../x"); err == nil {
+		t.Fatal("new/../x 含 .. 段必须报错，即使前缀 new 不存在")
+	}
 	// 相对 root：内部先做 Abs，不应因相对路径产生假阴性
 	if ok, err := WithinResolvedRoot(".", "internal"); err != nil || !ok {
 		t.Fatalf("相对根：got %v, %v", ok, err)
