@@ -89,3 +89,19 @@ func TestRenderTreeHashIsOrderIndependent(t *testing.T) {
 		t.Error("树 hash 必须与输入顺序无关（内部按 Src 字节序排序）")
 	}
 }
+
+func TestContentHash(t *testing.T) {
+	// 文本：CRLF 与 LF 归一化后同 hash
+	if ContentHash([]byte("a\r\nb\r\n")) != ContentHash([]byte("a\nb\n")) {
+		t.Error("文本 CRLF 与 LF 应同 hash")
+	}
+	// 混合 EOL：按原始字节（ToLF 对混合无操作）——与其纯 LF 化版本必须不同
+	// （若实现把混合 EOL 当文本归一化，这条会失败）
+	if ContentHash([]byte("a\r\nb\n")) == ContentHash([]byte("a\nb\n")) {
+		t.Error("混合 EOL 必须按原始字节哈希")
+	}
+	// 二进制：内容不同 → hash 不同（且不再做 EOL 归一化）
+	if ContentHash([]byte("a\x00b")) == ContentHash([]byte("a\x00c")) {
+		t.Error("二进制内容不同应 hash 不同")
+	}
+}

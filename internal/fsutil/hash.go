@@ -63,3 +63,14 @@ func RenderTreeHash(entries []TreeEntry) string {
 	}
 	return HashAlgo + ":" + hex.EncodeToString(h.Sum(nil))
 }
+
+// ContentHash 对「内容自己」判定 binary 后算 hash：文本按 EOL 归一化、
+// 二进制/混合 EOL 按原始字节（§9.1）。
+//
+// 这是派生侧读盘（worktree）与 init/渲染侧记账的统一入口——两边都调它，
+// 同一份内容在 state、快照、报告里就得到同一个 hash。等价于
+// CompareHash(content, IsBinary(content))；M1 的 cli.renderContentHash 是
+// 同一件事的按元数据版本（render 侧 Binary 来自模板清单探测）。
+func ContentHash(content []byte) string {
+	return CompareHash(content, IsBinary(content))
+}
