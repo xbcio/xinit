@@ -322,6 +322,9 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	rep.Blocked = except(rep.Blocked, acceptSet)
 	if len(rep.Blocked) > 0 && !o.DryRun {
 		rep.ExitCode = CodePending
+		// 早退轮同样「版本记录不推进」（第 9 步的推进根本不会走到）：报告
+		// 顶部的版本行必须跟 AR 注解，否则与下方待解决轮的报告自相矛盾。
+		rep.Pending = true
 		return rep, nil // 不执行任何写操作、不推进任何状态（§10.2 第 4 步）
 	}
 

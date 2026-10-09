@@ -54,6 +54,27 @@ func mustContent(t *testing.T, dir, rel string) string {
 	return string(b)
 }
 
+// captureStdoutT 捕获 f 执行期间写到 os.Stdout 的全部输出（报告断言用；
+// 报告走 stdout、错误走返回值的同一次运行内对照）。
+func captureStdoutT(t *testing.T, f func()) string {
+	t.Helper()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = pw
+	f()
+	os.Stdout = oldStdout
+	pw.Close()
+	out, err := io.ReadAll(pr)
+	pr.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
 // readTreeT 是整棵树的快照（相对路径 → "perm:content"），dry-run 的
 // 「一个字节都不写」断言用它。
 func readTreeT(t *testing.T, root string) map[string]string {
@@ -524,26 +545,13 @@ func TestUpdateConflictKindWithoutTheirsFileStillPending(t *testing.T) {
 	runGitT(t, repo, "tag", "v1.1.0")
 
 	// 捕获报告输出：ExitError 语义与打印内容同一次运行内断言。
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldStdout := os.Stdout
-	os.Stdout = pw
-	uerr := Update(UpdateOptions{ProjectDir: proj})
-	os.Stdout = oldStdout
-	pw.Close()
-	out, rerr := io.ReadAll(pr)
-	pr.Close()
-	if rerr != nil {
-		t.Fatal(rerr)
-	}
+	var uerr error
+	report := captureStdoutT(t, func() { uerr = Update(UpdateOptions{ProjectDir: proj}) })
 
 	var ee *ExitError
 	if !errors.As(uerr, &ee) || ee.Code != CodePending {
-		t.Fatalf("ConflictKind（无 conflicts/ 条目）应待解决退 2: %v\n%s", uerr, out)
+		t.Fatalf("ConflictKind（无 conflicts/ 条目）应待解决退 2: %v\n%s", uerr, report)
 	}
-	report := string(out)
 	if !strings.Contains(report, "冲突（1 条）需要你处理：") {
 		t.Errorf("报告应有冲突段:\n%s", report)
 	}
@@ -589,8 +597,46 @@ func TestUpdateConflictKindWithoutTheirsFileStillPending(t *testing.T) {
 	}
 }
 
-// 裁定 U/Z：备份目标以 ours 快照（不穿透软链）为准——中间段是软链的写入
-// 路径不得进备份（否则 Backup 的穿透 Lstat 会错位备份链后文件）。
+// AR（第 4 步早退轮）：conflicts/ 就位后未解决的早退轮同样是「版本记录未
+// 推进」的轮次——报告在 Blocked 节返回之前已打过版本行，必须跟注解。
+// （update_conflict_roundtrip / accept_flow 都是 dir 源、根本不打版本行，
+// 钉不住这一行，所以落在本测试。）
+func TestUpdateBlockedRoundVersionLineMarksPending(t *testing.T) {
+	repo, proj := initProjectT(t, map[string]string{
+		"xinit.yml": tmplYAML,
+		"a.txt":     "one\n",
+	})
+	writeFilesT(t, proj, map[string]string{"a.txt": "one local\n"})
+	commitT(t, repo, map[string]string{"a.txt": "two\n"}, "v1.1.0")
+
+	// 第一跑：新冲突 → conflicts/ 就位（exit 2）
+	var uerr error
+	captureStdoutT(t, func() { uerr = Update(UpdateOptions{ProjectDir: proj}) })
+	var ee *ExitError
+	if !errors.As(uerr, &ee) || ee.Code != CodePending {
+		t.Fatalf("新冲突应退 2: %v", uerr)
+	}
+	if _, err := os.Lstat(filepath.Join(proj, ".xinit", "conflicts", "a.txt")); err != nil {
+		t.Fatalf("conflicts/a.txt 应就位: %v", err)
+	}
+
+	// 第二跑：第 4 步早退（未解决）——版本行与注解必须同时出现
+	var uerr2 error
+	report := captureStdoutT(t, func() { uerr2 = Update(UpdateOptions{ProjectDir: proj}) })
+	if !errors.As(uerr2, &ee) || ee.Code != CodePending {
+		t.Fatalf("未解决重跑应退 2: %v", uerr2)
+	}
+	if !strings.Contains(report, "未解决的冲突") {
+		t.Fatalf("早退轮应有 Blocked 节:\n%s", report)
+	}
+	if !strings.Contains(report, "版本: v1.0.0 → v1.1.0") {
+		t.Errorf("早退轮应有版本行（如实说明记录未推进）:\n%s", report)
+	}
+	if !strings.Contains(report, "（本轮仍待解决：state 里的版本记录保持 v1.0.0，收敛后重跑再推进；§10.2 第 9 步）") {
+		t.Errorf("早退轮的版本行须跟注解（AR）:\n%s", report)
+	}
+}
+
 // AL（§9.5 删除逃逸分支）：dry-run 的预测文案与实跑同判据——逃逸拒绝也要
 // 给出 prune 出口（与障碍物/折叠/写入逃逸分支一致）。
 func TestPredictRefusalsDeleteEscapeHintsPrune(t *testing.T) {
@@ -613,6 +659,8 @@ func TestPredictRefusalsDeleteEscapeHintsPrune(t *testing.T) {
 	}
 }
 
+// 裁定 U/Z：备份目标以 ours 快照（不穿透软链）为准——中间段是软链的写入
+// 路径不得进备份（否则 Backup 的穿透 Lstat 会错位备份链后文件）。
 func TestBackupTargetsOnlyRegularInOurs(t *testing.T) {
 	ours := plan.Snap{
 		"a.txt": {Kind: render.KindRegular, Hash: "h"},

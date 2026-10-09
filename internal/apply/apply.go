@@ -55,7 +55,7 @@ func Execute(projectDir string, c Changes) (Result, error) {
 			return Result{}, err
 		}
 		if !ok {
-			res.Refusals = append(res.Refusals, Refusal{Path: rel, Reason: "删除路径解析后落在项目根之外（父路径有指向外部的符号链接）；请移走它（§9.5）"})
+			res.Refusals = append(res.Refusals, Refusal{Path: rel, Reason: "删除路径解析后落在项目根之外（父路径有指向外部的符号链接）；请移走它，或把该路径写进 .xinit/prune.txt（§9.5）"})
 			continue
 		}
 		liveDeletes = append(liveDeletes, rel)
