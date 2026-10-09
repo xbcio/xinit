@@ -3,9 +3,11 @@
 package apply
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/xbcio/xinit/internal/state"
 )
@@ -18,6 +20,11 @@ import (
 // 重跑」用已被改写的磁盘做备份，第一次运行前的原文就永远丢了（D5）。
 //
 // stamp 由调用方在本轮 update 开始时算一次（所有备份落在同一目录）。
+//
+// 调用方前提：rel 须为已校验 Dst（slash 分隔、无 `.`/`..` 段），路径安全由
+// 调用方保证；targets 的存在性以 worktree.Scan 的快照为准（不穿透中间段
+// 符号链接）；本函数的 Lstat 按 os.Lstat 语义（中间段软链穿透），只兜
+// ENOENT/ENOTDIR/ELOOP 三类为跳过。
 func Backup(projectDir, stamp string, targets []string) (string, error) {
 	if len(targets) == 0 {
 		return "", nil
@@ -30,7 +37,10 @@ func Backup(projectDir, stamp string, targets []string) (string, error) {
 		src := filepath.Join(projectDir, filepath.FromSlash(rel))
 		fi, err := os.Lstat(src)
 		if err != nil {
-			if os.IsNotExist(err) {
+			// 三类「无原内容可备份」（跳过而非故障）：路径不存在（ENOENT）、
+			// 父段是常规文件（ENOTDIR——§9.3 F13 的障碍物形状，这轮本来就
+			// 会拒绝该路径，不该升格成整轮中止）、链接环（ELOOP）。
+			if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
 				continue
 			}
 			return "", fmt.Errorf("备份 %s: %w", rel, err)

@@ -22,6 +22,9 @@ func TestBackupCopiesContentAndPerm(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a.txt", "hello\n", 0o644)
 	writeFile(t, dir, "bin/b.sh", "#!/bin/sh\n", 0o755)
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	rel, err := Backup(dir, "20261008-153000", []string{"a.txt", "bin/b.sh", "missing.txt", "sub"})
 	if err != nil {
@@ -33,6 +36,9 @@ func TestBackupCopiesContentAndPerm(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, rel, "a.txt"))
 	if err != nil || string(data) != "hello\n" {
 		t.Fatalf("a.txt 备份内容不对：%q, %v", data, err)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, rel, "a.txt")); err != nil || fi.Mode().Perm() != 0o644 {
+		t.Errorf("a.txt 权限应逐位保持 0o644；got %v, %v", fi.Mode().Perm(), err)
 	}
 	fi, err := os.Stat(filepath.Join(dir, rel, "bin/b.sh"))
 	if err != nil {
@@ -105,5 +111,24 @@ func TestBackupSkipsSymlink(t *testing.T) {
 	}
 	if strings.Contains(rel, "..") {
 		t.Errorf("备份目录不应含 ..：%q", rel)
+	}
+}
+
+// §9.3 F13 障碍物形状：目标路径的父段是常规文件（ours 侧判「不存在」）——
+// 备份必须跳过它、继续处理其余目标，而不是整轮报错中止。
+func TestBackupSkipsPathUnderFileAncestor(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "i am a file\n", 0o644) // 父段是常规文件
+	writeFile(t, dir, "b.txt", "keep\n", 0o644)
+	rel, err := Backup(dir, "20261009-090000", []string{"a/b", "b.txt"})
+	if err != nil {
+		t.Fatalf("父段是文件的路径应跳过而非中止：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, rel, "a", "b")); !os.IsNotExist(err) {
+		t.Error("障碍物路径不该产生备份条目")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, rel, "b.txt"))
+	if err != nil || string(data) != "keep\n" {
+		t.Fatalf("其余目标应继续备份：%q, %v", data, err)
 	}
 }
