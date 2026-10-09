@@ -1,0 +1,49 @@
+# 冲突往返：第一轮写 conflicts/ 并退出 2；第二轮第 4 步拒绝（不执行、磁盘零
+# 变化）；收敛后冲突清除、base 推进、摘要出现「已解决 1」；末跑全 Noop。
+
+xinit init --template $WORK/tpl --yes out
+
+# 双方都改 a.txt（模板 v1 → v2；本地 v1 → local）
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+cp $WORK/local-a.txt $WORK/out/a.txt
+
+cd out
+
+# 第一轮：新冲突 → theirs 进 conflicts/、磁盘保持本地、两条出路都打印
+xinit-code update
+stdout 'merge-conflict\s+a\.txt'
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 1'
+stdout '出路一'
+stdout '出路二'
+stdout 'exit=2'
+cmp a.txt $WORK/local-a.txt
+cmp .xinit/conflicts/a.txt $WORK/new-a.txt
+
+# 第二轮：conflicts/ 里仍未解决 → 第 4 步拒绝、不执行（磁盘零变化）
+xinit-code update
+stdout '未解决的冲突'
+stdout 'exit=2'
+cmp a.txt $WORK/local-a.txt
+cmp .xinit/conflicts/a.txt $WORK/new-a.txt
+
+# 收敛：本地改到与模板一致（行 4）→ 冲突清除、base 推进
+cp $WORK/new-a.txt a.txt
+xinit-code update
+stdout '已解决 1'
+stdout 'exit=0'
+! exists .xinit/conflicts/a.txt
+cmp .xinit/base/a.txt $WORK/new-a.txt
+
+# 幂等（§13 M2 ④）：再跑全 Noop
+xinit-code update
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0'
+stdout 'exit=0'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- new-a.txt --
+a2
+-- local-a.txt --
+local

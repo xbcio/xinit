@@ -1,0 +1,36 @@
+# §9.3 拒绝通道端到端：用户有个目录 asset.txt，模板新增同路径文件——
+# 绝不允许顶掉用户的目录；同一轮其余路径照常处理（拒绝 ≠ 中止）。
+# （折叠形态——未跟踪 license vs 模板新增 LICENSE——在大小写不敏感 FS 上
+# 走 ConflictBothAdded 安全通道而非折叠拒绝（评审 I-3）；其 CRITICAL 安全
+# 语义由 T8 TestFoldRefusesUntrackedCollision 在真实 APFS 上验证。）
+
+xinit init --template $WORK/tpl --yes out
+
+# 用户自己放的东西（从未被 xinit 管理）：目录顶在模板新增文件的路径上
+exec mkdir $WORK/out/asset.txt
+cp $WORK/new-asset.txt $WORK/tpl/asset.txt
+cp $WORK/new-extra.txt $WORK/tpl/extra.txt
+
+cd out
+xinit-code update
+stdout 'write\s+extra\.txt'
+stdout '汇总: 写入 1、删除 0、chmod 0、冲突 0'
+stdout '折叠拒绝 / 障碍物'
+stdout 'refuse\s+asset\.txt'
+# 出口指引（实际文案为准）：目录障碍物分支的出口是「移走或改名该目录」，
+# 不引导 prune.txt（只有符号链接/折叠/路径逃逸分支才提 prune.txt）；
+# brief 原文的 stdout 'prune\.txt' 与实跑不符，按实际输出钉住本行
+stdout '在磁盘上是目录（模板要写文件）；移走或改名该目录后重跑即可收敛'
+stdout 'exit=2'
+# 用户目录原样；asset.txt 不进 state、模板内容没有以任何名义落盘
+exec sh -c 'test -d asset.txt'
+! grep 'asset\.txt' .xinit/state.json
+# 其余路径照常写入
+cmp extra.txt $WORK/new-extra.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- new-asset.txt --
+模板的 asset
+-- new-extra.txt --
+extra-ok

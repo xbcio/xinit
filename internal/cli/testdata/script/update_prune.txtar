@@ -1,0 +1,37 @@
+# prune（§8.0）：写进 .xinit/prune.txt 的路径静默脱离管理——不进 files、
+# 清 base 残片、工作树文件不动、报告里完全不出现它。
+
+xinit init --template $WORK/tpl --yes out
+
+# 模板继续演进（legacy.txt 也被改了，但用户已决定不再管理它）
+cp $WORK/new-legacy.txt $WORK/tpl/legacy.txt
+cp $WORK/new-keep.txt $WORK/tpl/keep.txt
+
+# 用户写 prune 名单
+cp $WORK/prune.txt $WORK/out/.xinit/prune.txt
+
+cd out
+xinit-code update
+stdout 'write\s+keep\.txt'
+stdout 'exit=0'
+! stdout 'legacy'
+! exists .xinit/base/legacy.txt
+! grep 'legacy' .xinit/state.json
+# 工作树文件保持原样（init 版本）；其余路径照常更新
+cmp legacy.txt $WORK/want-legacy.txt
+cmp keep.txt $WORK/new-keep.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/legacy.txt --
+l1
+-- tpl/keep.txt --
+k1
+-- new-legacy.txt --
+l2
+-- new-keep.txt --
+k2
+-- want-legacy.txt --
+l1
+-- prune.txt --
+legacy.txt

@@ -1,0 +1,71 @@
+# update 端到端（§10.2）：init 之后模板推进（a.txt 改、b.txt 删、c.txt 增、
+# d.txt 删但本地改过）——动作行对应决策表行，树 / base / state 三处一致。
+# 末尾 [unix] 段覆盖 R7（模板只改 exec 位 → chmod 落地）与 ④ 幂等。
+
+xinit init --template $WORK/tpl --yes out
+
+# ── 模板推进到 v2（dir 源就地改）──
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+rm $WORK/tpl/b.txt
+cp $WORK/new-c.txt $WORK/tpl/c.txt
+rm $WORK/tpl/d.txt
+# 本地改过 d.txt（模板随后删掉它 → 行 9 keep-warned）
+cp $WORK/local-d.txt $WORK/out/d.txt
+
+cd out
+xinit-code update
+stdout 'write\s+a\.txt'
+stdout 'delete\s+b\.txt'
+stdout 'write\s+c\.txt'
+stdout 'keep-warned\s+d\.txt'
+stdout '汇总: 写入 2、删除 1、chmod 0、冲突 0'
+stdout '备份: \.xinit/backup/'
+stdout 'exit=0'
+stderr '当前目录不是 git 仓库'
+
+# 行 2 / 8 / 13：工作树
+cmp a.txt $WORK/new-a.txt
+! exists b.txt
+cmp c.txt $WORK/new-c.txt
+# 行 9：本地内容保留，base 保持旧值（找回模板版本用 cp .xinit/base/d.txt d.txt）
+cmp d.txt $WORK/local-d.txt
+cmp .xinit/base/d.txt $WORK/d-v1.txt
+# base 全量同步 + 行 8 的残片清理
+cmp .xinit/base/a.txt $WORK/new-a.txt
+! exists .xinit/base/b.txt
+cmp .xinit/base/c.txt $WORK/new-c.txt
+! grep 'b\.txt' .xinit/state.json
+
+# ── R7（仅 Unix 能断言 exec 语义）：模板把 s.sh 标成 exec，内容不变 ──
+[unix] exec chmod 0755 $WORK/tpl/s.sh
+[unix] xinit-code update
+# Print 无逐路径 chmod 行（评审 I-2：brief-vs-brief 矛盾）——汇总行证明
+# 有 1 个 chmod 动作，磁盘 exec 位直接实测（test -x 必须排在断言之后：
+# stdout 只匹配「上一条命令」的输出，exec 会抢占它）
+[unix] stdout '汇总: 写入 0、删除 0、chmod 1、冲突 0'
+[unix] stdout 'exit=0'
+[unix] exec sh -c 'test -x s.sh'
+# 幂等（§13 M2 ④）：exec 已对齐，再跑一位不改
+[unix] xinit-code update
+[unix] stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0'
+[unix] stdout 'exit=0'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- tpl/b.txt --
+b1
+-- tpl/d.txt --
+d1
+-- tpl/s.sh --
+#!/bin/sh
+echo hi
+-- new-a.txt --
+a2
+-- new-c.txt --
+c2
+-- local-d.txt --
+d-local
+-- d-v1.txt --
+d1

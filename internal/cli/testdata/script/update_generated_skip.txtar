@@ -1,0 +1,32 @@
+# L7 跳过（§8.2）：hooksRun=false 时 generated 路径不判冲突、不改磁盘、
+# base 与 generated 位保持旧值——status 因此把它单列在 generated 而不是 modified。
+
+xinit init --template $WORK/tpl --yes out
+
+# 本地改过生成物 + 模板也改了它
+cp $WORK/local-gen.txt $WORK/out/gen.txt
+cp $WORK/new-gen.txt $WORK/tpl/gen.txt
+
+cd out
+xinit-code update
+stdout '跳过（generated 且钩子不会运行）'
+stdout 'exit=0'
+cmp gen.txt $WORK/local-gen.txt
+! exists .xinit/conflicts/gen.txt
+
+# 位与 base 保持旧值：status 把 gen.txt 单列在 generated（而不是 modified）
+xinit-code status
+stdout 'generated\s+gen\.txt'
+! stdout 'modified\s+gen\.txt'
+stdout 'exit=0'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+generated:
+  paths: ["gen.txt"]
+-- tpl/gen.txt --
+g1
+-- local-gen.txt --
+g-local
+-- new-gen.txt --
+g2

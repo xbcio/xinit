@@ -1,0 +1,26 @@
+# status 端到端：dir 源 → 「无版本概念」说明；本地改动单列 modified；
+# 不创建 .xinit/lock（§11.4：status 什么都不写）。
+
+xinit init --template $WORK/tpl --yes out
+
+cp $WORK/edited.txt $WORK/out/a.txt
+
+cd out
+xinit-code status
+stdout 'xinit status: '
+stdout 'dir 源：无版本概念'
+stdout 'modified\s+a\.txt'
+stdout 'prune 名单: 0 条'
+stdout 'engine_version: 0\.1\.0（与当前引擎一致）'
+stdout 'exit=0'
+! exists .xinit/lock
+! stdout 'modified\s+b\.txt'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- tpl/b.txt --
+b1
+-- edited.txt --
+a-edited
