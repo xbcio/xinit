@@ -17,10 +17,13 @@ const conflictHeader = "交互式冲突解决（%d 条，§19.4）：逐条选�
 	"  想先查看模板新内容：回答 n 或直接回车——模板版会写入 .xinit/conflicts/<路径>；查看后按报告给出的 --accept 命令收敛，或手工把文件改到与模板一致后重跑。\n"
 
 // askableConflict 报告该冲突路径是否在可问闭集内（§19.4.1）：
-// kind ∈ {Merge(判冲突), ConflictBinary, ConflictBothAdded} ∧ theirs 内容存在。
+// kind ∈ {Merge(判冲突), ConflictBinary, ConflictBothAdded} ∧ theirs 表里有
+// 该路径。判据是**键存在性**（不是值非 nil）：空渲染的模板文件（Go template
+// 渲染出空内容）同样是一条合法冲突——「改用模板版」就是写一个空文件，与
+// buildChanges / advanceState 的 `b, ok := theirsRendered[P]` 同语义。
 // 闭集而非「排除 ConflictKind」：将来新增 Kind 默认不提问，需显式加入。
 func askableConflict(p string, kind plan.ActionKind, conflicted map[string]bool, theirsRendered map[string][]byte) bool {
-	if theirsRendered[p] == nil {
+	if _, ok := theirsRendered[p]; !ok {
 		return false
 	}
 	switch kind {

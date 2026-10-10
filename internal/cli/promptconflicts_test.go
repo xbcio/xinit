@@ -21,8 +21,8 @@ func cfPtr(m plan.FileMeta) *plan.FileMeta { return &m }
 
 // TestAskableConflict 锁住 §19.4.1 的可问闭集：Merge 且本轮判冲突、
 // ConflictBinary、ConflictBothAdded 可问；ConflictKind、Merge 未判冲突、
-// theirs 内容缺失一律不问。闭集（而非「排除 ConflictKind」）意味着将来新增
-// Kind 默认不问，需显式加入。
+// theirs 表里**没有该路径**（模板已删）一律不问。闭集（而非「排除
+// ConflictKind」）意味着将来新增 Kind 默认不问，需显式加入。
 func TestAskableConflict(t *testing.T) {
 	theirs := map[string][]byte{"a.txt": []byte("t\n")}
 	for _, tc := range []struct {
@@ -43,14 +43,38 @@ func TestAskableConflict(t *testing.T) {
 		}
 	}
 
-	// theirs 缺失（模板已删该路径）：没有正常写入通道 ⇒ 不问（出口是 --accept）。
+	// theirs 里没有该键（模板已删该路径）：没有正常写入通道 ⇒ 不问
+	// （出口是 --accept）。空表与 nil 表都是「键缺失」。
 	conflicted := map[string]bool{"a.txt": true}
 	for _, kind := range []plan.ActionKind{plan.Merge, plan.ConflictBinary, plan.ConflictBothAdded} {
 		if askableConflict("a.txt", kind, conflicted, map[string][]byte{}) {
-			t.Errorf("%v：theirs 缺失时不得提问", kind)
+			t.Errorf("%v：theirs 表里没有该键时不得提问", kind)
 		}
 		if askableConflict("a.txt", kind, conflicted, nil) {
 			t.Errorf("%v：theirs 表为 nil 时不得提问", kind)
+		}
+	}
+
+	// 空渲染（键在、值为 nil）：theirs **存在**，只是渲染结果为空（Go template
+	// 渲染出空内容时 bytes.Buffer.Bytes() 返回 nil）。「改用模板版」= 走正常
+	// 写入通道写一个空文件，是合法选择 ⇒ 必须提问。判据是**键存在性**，与
+	// buildChanges / advanceState 的 `b, ok := theirsRendered[P]` 同语义——
+	// 用 `== nil` 会把这条合法冲突静默吞掉（终审 M1）。
+	empty := map[string][]byte{"a.txt": nil}
+	for _, tc := range []struct {
+		name       string
+		kind       plan.ActionKind
+		conflicted map[string]bool
+		want       bool
+	}{
+		{"Merge 且判冲突", plan.Merge, map[string]bool{"a.txt": true}, true},
+		{"ConflictBinary", plan.ConflictBinary, map[string]bool{"a.txt": true}, true},
+		{"ConflictBothAdded", plan.ConflictBothAdded, map[string]bool{"a.txt": true}, true},
+		{"ConflictKind（仍不问）", plan.ConflictKind, map[string]bool{"a.txt": true}, false},
+		{"Merge 未判冲突（仍不问）", plan.Merge, map[string]bool{}, false},
+	} {
+		if got := askableConflict("a.txt", tc.kind, tc.conflicted, empty); got != tc.want {
+			t.Errorf("空渲染 theirs / %s: askableConflict = %v，期望 %v", tc.name, got, tc.want)
 		}
 	}
 }
