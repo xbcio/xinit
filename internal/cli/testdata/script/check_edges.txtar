@@ -48,6 +48,8 @@ stdout '^  FAIL  files 键 "/.*/sentinel\.txt" 不是规范的相对路径（§4
 # 原记账路径改名后 base 中的两份成为残片（A5 连带，接受）
 stdout '^  FAIL  base/a\.txt 不在记账中'
 stdout '^  FAIL  base/sub/b\.txt 不在记账中'
+# 计数锁定：2 条 A1 + 2 条 A5，别无他行
+stdout '^检查汇总: 4 项失败、0 项警告、2 项跳过（退出码 6）$'
 stdout 'exit=6'
 cp $WORK/pristine.json .xinit/state.json
 
@@ -56,6 +58,9 @@ exec sed -e 's|"sub/b.txt": {|"A.txt": {|' $WORK/pristine.json
 cp stdout .xinit/state.json
 xinit-code check
 stdout '^  FAIL  "A\.txt" 与 "a\.txt" 折叠等价冲突（§9\.3）$'
+# 计数锁定：A2 + 连带的 A4 缺失（base/A.txt）与 A5 残片（base/sub/b.txt）
+# ——连带行按 §18.9-6「接受」，只锁总数不锁文面
+stdout '^检查汇总: 3 项失败、0 项警告、2 项跳过（退出码 6）$'
 stdout 'exit=6'
 cp $WORK/pristine.json .xinit/state.json
 
@@ -67,7 +72,8 @@ stdout '^  FAIL  files\["sub/b\.txt"\]\.src 为空（§4\.3）$'
 stdout '^  FAIL  files\["a\.txt"\]\.binary=true 但 base 内容是 false$'
 stdout '^  FAIL  files\["a\.txt"\]\.mixed_eol=true 但 base 内容是 false$'
 stdout '^  FAIL  files\["a\.txt"\]\.exec=true 但 base 文件无可执行位$'
-# binary 位翻转改变 hash 口径（CompareHash 按记录位）——A4 连带与否不作断言
+# 内容无 CR，binary 两种口径 hash 相同 → A4 不连带；实测 4 项失败（A3 + A7/A8/A9）
+stdout '^检查汇总: 4 项失败、0 项警告、2 项跳过（退出码 6）$'
 stdout 'exit=6'
 cp $WORK/pristine.json .xinit/state.json
 
