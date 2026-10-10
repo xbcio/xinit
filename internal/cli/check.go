@@ -456,7 +456,7 @@ func checkTemplateSide(r *checkReport, st *state.State, fetch bool) (func(), err
 	if !semver.IsValid(tpl.Revision) {
 		r.skip(secD, "记录的 revision %q 不是 vX.Y.Z 格式，无法做版本比较（§11.4）", tpl.Revision)
 	} else if tags, err := template.ListTags(tpl.Source, cacheRoot, false, false); err != nil {
-		r.skip(secD, "无法读取模板 tag（%s；先运行 xinit update 建立缓存，§11.4）", checkEscapePath(err.Error()))
+		r.skip(secD, "无法读取模板 tag（%s；§11.4）", checkEscapePath(err.Error()))
 	} else {
 		var newer []string
 		for _, t := range template.SemverTags(tags) {

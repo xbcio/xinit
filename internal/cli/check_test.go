@@ -780,6 +780,7 @@ func TestGroupDRevisionNotSemver(t *testing.T) {
 }
 
 func TestGroupDCommitMissing(t *testing.T) {
+	// 同时注入 D2：锁定输出顺序 D1→D2→D3（§18.5 流程注）——D3 延后到 D2 之后。
 	cacheRoot := isolateCacheT(t)
 	bare, _ := mkMirroredBareT(t, cacheRoot, "v1.0.0")
 	missing := "0123456789abcdef0123456789abcdef01234567"
@@ -787,35 +788,68 @@ func TestGroupDCommitMissing(t *testing.T) {
 		s.Template.Source = bare
 		s.Template.Revision = "v1.0.0"
 		s.Template.Commit = missing
+		s.EngineVersion = "v0"
 	})
 	r, lines := runGroupD(t, dir, st, false)
 	texts := lineTexts(lines)
-	want := []string{"warn 记录的 commit " + missing + " 在模板源中取不到：base 一旦损坏将无法自动重建（§5.2）"}
-	if !slices.Equal(texts, want) {
-		t.Errorf("D 组 = %v, want %v", texts, want)
+	want := []string{
+		fmt.Sprintf("warn engine_version 记录 v0，当前 %s——渲染结果可能有漂移（§7.6）", EngineVersion),
+		"warn 记录的 commit " + missing + " 在模板源中取不到：base 一旦损坏将无法自动重建（§5.2）",
 	}
-	if r.Fails != 0 || r.Warns != 1 {
-		t.Errorf("Fails/Warns = %d/%d, want 0/1", r.Fails, r.Warns)
+	if !slices.Equal(texts, want) {
+		t.Errorf("D 组 = %v, want %v（D2 须在 D3 之前）", texts, want)
+	}
+	if r.Fails != 0 || r.Warns != 2 {
+		t.Errorf("Fails/Warns = %d/%d, want 0/2", r.Fails, r.Warns)
 	}
 }
 
 func TestGroupDFetchRefreshesMirror(t *testing.T) {
-	// fetch 经 RepoDir 一次定位透传：镜像建好后源上新打的 tag，fetch=false
-	// 看不到、fetch=true 刷新后可见（§18.7）。
-	cacheRoot := isolateCacheT(t)
-	bare, commits := mkMirroredBareT(t, cacheRoot, "v1.0.0")
-	runGitT(t, bare, "tag", "v1.1.0", commits["v1.0.0"])
-	dir, st := writeStateAndBase(t, nil, func(s *state.State) {
-		s.Template.Source = bare
-		s.Template.Revision = "v1.0.0"
-		s.Template.Commit = commits["v1.0.0"]
+	// fetch 经 RepoDir 一次定位透传（§18.7）。
+	t.Run("tag", func(t *testing.T) {
+		// 镜像建好后源上新打的 tag：fetch=false 看不到、fetch=true 刷新后可见。
+		cacheRoot := isolateCacheT(t)
+		bare, commits := mkMirroredBareT(t, cacheRoot, "v1.0.0")
+		runGitT(t, bare, "tag", "v1.1.0", commits["v1.0.0"])
+		dir, st := writeStateAndBase(t, nil, func(s *state.State) {
+			s.Template.Source = bare
+			s.Template.Revision = "v1.0.0"
+			s.Template.Commit = commits["v1.0.0"]
+		})
+		if _, lines := runGroupD(t, dir, st, false); len(lines) != 0 {
+			t.Errorf("fetch=false 不应看到新 tag: %v", lineTexts(lines))
+		}
+		_, lines := runGroupD(t, dir, st, true)
+		want := []string{"warn 本地镜像中有 1 个更高的 semver tag：v1.1.0（最新 v1.1.0；xinit update --revision v1.1.0 升级）"}
+		if texts := lineTexts(lines); !slices.Equal(texts, want) {
+			t.Errorf("fetch=true D 组 = %v, want %v", texts, want)
+		}
 	})
-	if _, lines := runGroupD(t, dir, st, false); len(lines) != 0 {
-		t.Errorf("fetch=false 不应看到新 tag: %v", lineTexts(lines))
-	}
-	_, lines := runGroupD(t, dir, st, true)
-	want := []string{"warn 本地镜像中有 1 个更高的 semver tag：v1.1.0（最新 v1.1.0；xinit update --revision v1.1.0 升级）"}
-	if texts := lineTexts(lines); !slices.Equal(texts, want) {
-		t.Errorf("fetch=true D 组 = %v, want %v", texts, want)
-	}
+	t.Run("commit-nonsemver", func(t *testing.T) {
+		// 锁定 fetch 的位置（§18.5「不要把 fetch 单独传给 D1」）：revision 非
+		// semver 时 D1 不调 ListTags，刷新只能来自 RepoDir——D3 据此判定。
+		// state.commit 只存在于镜像建好后源上新推的提交。
+		cacheRoot := isolateCacheT(t)
+		bare, commits := mkMirroredBareT(t, cacheRoot, "v1.0.0")
+		tree := runGitT(t, bare, "rev-parse", commits["v1.0.0"]+"^{tree}")
+		newer := runGitT(t, bare, "commit-tree", tree, "-p", commits["v1.0.0"], "-m", "newer")
+		runGitT(t, bare, "update-ref", "refs/heads/main", newer)
+		dir, st := writeStateAndBase(t, nil, func(s *state.State) {
+			s.Template.Source = bare
+			s.Template.Revision = "main"
+			s.Template.Commit = newer
+		})
+		d1 := `skip 记录的 revision "main" 不是 vX.Y.Z 格式，无法做版本比较（§11.4）`
+
+		_, lines := runGroupD(t, dir, st, false)
+		want := []string{d1, "warn 记录的 commit " + newer + " 在模板源中取不到：base 一旦损坏将无法自动重建（§5.2）"}
+		if texts := lineTexts(lines); !slices.Equal(texts, want) {
+			t.Errorf("fetch=false（陈旧镜像）D 组 = %v, want %v", texts, want)
+		}
+
+		_, lines = runGroupD(t, dir, st, true)
+		if texts := lineTexts(lines); !slices.Equal(texts, []string{d1}) {
+			t.Errorf("fetch=true（RepoDir 刷新后）D 组 = %v, want [%s]", texts, d1)
+		}
+	})
 }
