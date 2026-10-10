@@ -248,8 +248,9 @@ func classifyMigrations(projectDir string, actions []plan.Action, base *baseSnap
 			ob := oursBytes[p.Old]
 			res, err := merge.ThreeWay(ob, base.Bytes[p.Old], theirsRendered[p.New])
 			if err != nil {
-				// 防御：前置过滤后 ThreeWay 近乎不可能报 err；按 §17.2「Error →
-				// fallback」整对回退，不中止整轮 update（保守优先）。
+				// 防御环境级失败（临时目录 / 写输入文件 / git merge-file 不可用）——
+				// 与前置过滤无关，分支可达，勿删。按 §17.2「Error → fallback」整对
+				// 回退，不中止整轮 update（保守优先）。
 				note.Status, note.Reason = "fallback", "三方合并失败"
 				notes = append(notes, note)
 				continue
