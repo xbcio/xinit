@@ -20,7 +20,7 @@ var excludeHeader = []byte("# xinit 的本地状态，不进版本控制\n")
 //
 // 非 git 仓时静默返回 nil —— 调用点会另行给出警告。
 func EnsureGitExcluded(projectDir string) error {
-	p, ok := gitExcludePath(projectDir)
+	p, ok := GitExcludePath(projectDir)
 	if !ok {
 		return nil
 	}
@@ -56,11 +56,11 @@ func EnsureGitExcluded(projectDir string) error {
 	return WriteFileAtomic(p, buf.Bytes(), 0o644)
 }
 
-// gitExcludePath 返回 .git/info/exclude 的绝对路径。
+// GitExcludePath 返回 .git/info/exclude 的绝对路径（worktree/submodule 安全：git rev-parse --git-path）。
 //
 // 必须走 `git rev-parse --git-path` —— worktree 和 submodule 里
 // .git 是一个**文件**而不是目录，直接拼 .git/info/exclude 会写错地方。
-func gitExcludePath(projectDir string) (string, bool) {
+func GitExcludePath(projectDir string) (string, bool) {
 	cmd := exec.Command("git", "-C", projectDir, "rev-parse", "--git-path", "info/exclude")
 	out, err := cmd.Output()
 	if err != nil {
@@ -94,7 +94,7 @@ func IsGitTracked(projectDir, relPath string) (bool, error) {
 		return false, nil
 	}
 	// 不是 git 仓（或 git 不可用）
-	if _, ok := gitExcludePath(projectDir); !ok {
+	if _, ok := GitExcludePath(projectDir); !ok {
 		return false, nil
 	}
 	return false, fmt.Errorf("git ls-files: %w\n%s", err, strings.TrimSpace(stderr.String()))

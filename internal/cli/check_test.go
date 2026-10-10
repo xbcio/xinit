@@ -417,3 +417,156 @@ func TestGroupATemplateFields(t *testing.T) {
 	_, lines := runGroupA(t, dir, st)
 	wantLines(t, lines, 0)
 }
+
+func TestGroupABaseRootAbnormalKeepsA1(t *testing.T) {
+	// base 根异常只跳过 A4–A9（§18.2）：A1 非法键照常报（T1 复审 parked）。
+	dir, st := writeStateAndBase(t, map[string][]byte{"a.txt": []byte("a\n")}, func(s *state.State) {
+		s.Files["../x"] = state.FileState{Src: "x", Hash: "sha256:00"}
+	})
+	base := state.BaseDir(dir)
+	real := filepath.Join(dir, "real-base")
+	if err := os.Rename(base, real); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, base); err != nil {
+		t.Fatal(err)
+	}
+	_, lines := runGroupA(t, dir, st)
+	wantLines(t, lines, 2,
+		`files 键 "../x" 不是规范的相对路径（§4.3）`,
+		"base 树不可用：.xinit/base 不是目录（symlink 等")
+}
+
+// runGroup 跑一个组函数并返回该组的行。
+func runGroup(t *testing.T, fn func(*checkReport, string, *state.State) error, sec int, dir string, st *state.State) (*checkReport, []*checkLine) {
+	t.Helper()
+	r := newCheckReport(st.Template.Source)
+	if err := fn(r, dir, st); err != nil {
+		t.Fatal(err)
+	}
+	return r, r.Sections[sec].Lines
+}
+
+// lineTexts 把行渲染为「级别词 文本」，便于锚断言。
+func lineTexts(lines []*checkLine) []string {
+	var out []string
+	for _, l := range lines {
+		out = append(out, l.Kind.String()+" "+l.Text)
+	}
+	return out
+}
+
+func TestGroupBNoConflicts(t *testing.T) {
+	dir, st := writeStateAndBase(t, map[string][]byte{"a.txt": []byte("a\n")}, nil)
+	r, lines := runGroup(t, checkGroupB, secB, dir, st)
+	if len(lines) != 0 || r.Fails != 0 {
+		t.Errorf("B 组应无行: %v (Fails=%d)", lineTexts(lines), r.Fails)
+	}
+}
+
+func TestGroupBConflicts(t *testing.T) {
+	dir, st := writeStateAndBase(t, map[string][]byte{"a.txt": []byte("a\n")}, nil)
+	writeFilesT(t, filepath.Join(dir, state.DirName, "conflicts"), map[string]string{
+		"a.txt":      "theirs\n",
+		"orphan.txt": "x\n",
+	})
+	r, lines := runGroup(t, checkGroupB, secB, dir, st)
+	if len(lines) != 1 {
+		t.Fatalf("B 组应恰一行: %v", lineTexts(lines))
+	}
+	l := lines[0]
+	if l.Kind != kindFail || l.Text != "未解决的冲突（2 条，§10.4）：" {
+		t.Errorf("节头 = %s %q", l.Kind, l.Text)
+	}
+	if r.Fails != 1 {
+		t.Errorf("Fails = %d, want 1", r.Fails)
+	}
+	want := []string{
+		"conflict             a.txt",
+		"stale                orphan.txt（孤立条目，下轮 update 将清理）",
+		"出路一：编辑 .xinit/conflicts/<路径> 手工解决后，运行 xinit update --accept <路径> 声明已解决（§10.3）。",
+		"出路二：本轮已无事可做时直接运行 xinit update——陈旧条目随本轮自动清理（§10.2 第 8 步）。",
+	}
+	if !slices.Equal(l.Detail, want) {
+		t.Errorf("Detail:\n%s\nwant:\n%s", strings.Join(l.Detail, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestGroupCPruneBadGlob(t *testing.T) {
+	dir, st := writeStateAndBase(t, nil, nil)
+	writeFilesT(t, dir, map[string]string{".xinit/prune.txt": "# c\nok/*.txt\na/[\n"})
+	r, lines := runGroup(t, checkGroupC, secC, dir, st)
+	texts := lineTexts(lines)
+	if !slices.ContainsFunc(texts, func(s string) bool {
+		return strings.HasPrefix(s, "FAIL ") && strings.Contains(s, `prune.txt 条目 "a/["`) &&
+			strings.Contains(s, "不是合法 glob") && strings.Contains(s, "§3.2")
+	}) {
+		t.Errorf("缺 C1 FAIL 行: %v", texts)
+	}
+	if r.Fails != 1 {
+		t.Errorf("Fails = %d, want 1（合法条目不报）", r.Fails)
+	}
+}
+
+func TestGroupCPruneOK(t *testing.T) {
+	dir, st := writeStateAndBase(t, nil, nil)
+	writeFilesT(t, dir, map[string]string{".xinit/prune.txt": "docs/**\n!docs/keep.md\nREADME.md\n"})
+	runGitT(t, dir, "init", "-q")
+	writeFilesT(t, dir, map[string]string{".git/info/exclude": ".xinit/\n"})
+	_, lines := runGroup(t, checkGroupC, secC, dir, st)
+	if len(lines) != 0 {
+		t.Errorf("C 组应无行: %v", lineTexts(lines))
+	}
+}
+
+func TestGroupCTracked(t *testing.T) {
+	dir, st := writeStateAndBase(t, nil, nil)
+	runGitT(t, dir, "init", "-q")
+	runGitT(t, dir, "add", "-f", ".xinit/state.json")
+	r, lines := runGroup(t, checkGroupC, secC, dir, st)
+	texts := lineTexts(lines)
+	if !slices.Contains(texts, "FAIL .xinit/ 已被 git 跟踪：状态目录不应进入版本历史（§5.5）；请 git rm -r --cached .xinit/ 后提交") {
+		t.Errorf("缺 C2 FAIL 行: %v", texts)
+	}
+	if r.Fails != 1 {
+		t.Errorf("Fails = %d, want 1", r.Fails)
+	}
+}
+
+func TestGroupCExcludeMissing(t *testing.T) {
+	dir, st := writeStateAndBase(t, nil, nil)
+	runGitT(t, dir, "init", "-q")
+	r, lines := runGroup(t, checkGroupC, secC, dir, st)
+	texts := lineTexts(lines)
+	want := "warn .git/info/exclude 缺少 .xinit/ 行（init/update 会自动补写；补上可避免 git add -A 误纳状态目录，§5.5）"
+	if !slices.Equal(texts, []string{want}) {
+		t.Errorf("C 组 = %v, want [%s]", texts, want)
+	}
+	if r.Fails != 0 {
+		t.Errorf("Fails = %d, want 0", r.Fails)
+	}
+}
+
+func TestGroupCExcludeOK(t *testing.T) {
+	dir, st := writeStateAndBase(t, nil, nil)
+	runGitT(t, dir, "init", "-q")
+	// 带首尾空白也命中（TrimSpace 口径同 EnsureGitExcluded）。
+	writeFilesT(t, dir, map[string]string{".git/info/exclude": "# x\n  .xinit/  \n"})
+	_, lines := runGroup(t, checkGroupC, secC, dir, st)
+	if len(lines) != 0 {
+		t.Errorf("C 组应无行: %v", lineTexts(lines))
+	}
+}
+
+func TestGroupCNotGit(t *testing.T) {
+	dir, st := writeStateAndBase(t, nil, nil)
+	r, lines := runGroup(t, checkGroupC, secC, dir, st)
+	texts := lineTexts(lines)
+	want := "skip 无法定位 git 仓库：跳过 .xinit/ 跟踪与 exclude 检查（§5.5）"
+	if !slices.Equal(texts, []string{want}) {
+		t.Errorf("C 组 = %v, want [%s]", texts, want)
+	}
+	if r.Skips != 1 || r.Fails != 0 {
+		t.Errorf("Skips/Fails = %d/%d", r.Skips, r.Fails)
+	}
+}

@@ -404,7 +404,7 @@ func checkDestUsable(dest string, force bool) error {
 
 // gitExcludeReady 报告 dest 位于 git 仓内（含 enclosing repo）——即
 // state.EnsureGitExcluded 能真正落地 .git/info/exclude 的情形。判据与
-// state 包内 gitExcludePath 是同一条查询（git rev-parse --git-path，
+// state 包内 GitExcludePath 是同一条查询（git rev-parse --git-path，
 // worktree/submodule 下 .git 是文件，直接拼路径会写错地方）。返回 false
 // 时调用点按「不在 git 仓库内」提示：这是唯一可达的失败原因——git 可执行
 // 文件缺失/不可用会先被 Execute 的 RequireGit 拦下（rc=1，到不了这里）。

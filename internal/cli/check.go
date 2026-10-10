@@ -332,3 +332,72 @@ func checkBaseTables(r *checkReport, base string, st *state.State, legal []strin
 
 	return nil
 }
+
+// checkGroupB 执行 B1（§18.3）：只读列举 conflicts/，不做「本轮仍冲突」
+// 判定（那是 diff 的预测）。出路两行是 check 专属文案，不复用 conflictExits。
+func checkGroupB(r *checkReport, projectDir string, st *state.State) error {
+	entries, err := listConflicts(projectDir)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	l := r.fail(secB, "未解决的冲突（%d 条，§10.4）：", len(entries))
+	for _, p := range entries {
+		if _, ok := st.Files[p]; ok {
+			l.Detail = append(l.Detail, fmt.Sprintf("%-20s %s", "conflict", checkEscapePath(p)))
+		} else {
+			l.Detail = append(l.Detail, fmt.Sprintf("%-20s %s（孤立条目，下轮 update 将清理）", "stale", checkEscapePath(p)))
+		}
+	}
+	l.Detail = append(l.Detail,
+		"出路一：编辑 .xinit/conflicts/<路径> 手工解决后，运行 xinit update --accept <路径> 声明已解决（§10.3）。",
+		"出路二：本轮已无事可做时直接运行 xinit update——陈旧条目随本轮自动清理（§10.2 第 8 步）。")
+	return nil
+}
+
+// checkGroupC 执行 C1–C3（§18.4）。C1 不依赖 git；非 git 判定先于 C2——
+// IsGitTracked 在非 git 仓返回假「未跟踪」。只读：不调 EnsureGitExcluded。
+func checkGroupC(r *checkReport, projectDir string, st *state.State) error {
+	// C1：逐条编译，以定位非法条目（与 expandPrune 同语义）。
+	pats, err := state.ReadPrune(projectDir)
+	if err != nil {
+		return err
+	}
+	for _, pat := range pats {
+		if _, err := fsutil.CompileGlob([]string{pat}); err != nil {
+			r.fail(secC, "prune.txt 条目 %q 不是合法 glob：%v（§3.2）", pat, err)
+		}
+	}
+
+	excludePath, ok := state.GitExcludePath(projectDir)
+	if !ok {
+		r.skip(secC, "无法定位 git 仓库：跳过 .xinit/ 跟踪与 exclude 检查（§5.5）")
+		return nil
+	}
+
+	// C2
+	tracked, err := state.IsGitTracked(projectDir, state.DirName)
+	if err != nil {
+		return fmt.Errorf("无法确认 .xinit/ 是否被 git 跟踪: %w", err)
+	}
+	if tracked {
+		r.fail(secC, "%s/ 已被 git 跟踪：状态目录不应进入版本历史（§5.5）；请 git rm -r --cached %s/ 后提交",
+			state.DirName, state.DirName)
+	}
+
+	// C3：与 EnsureGitExcluded 同口径，只读。
+	data, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("读取 %s: %w", excludePath, err)
+	}
+	entry := state.DirName + "/"
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == entry {
+			return nil
+		}
+	}
+	r.warn(secC, ".git/info/exclude 缺少 .xinit/ 行（init/update 会自动补写；补上可避免 git add -A 误纳状态目录，§5.5）")
+	return nil
+}
