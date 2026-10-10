@@ -19,6 +19,7 @@ const (
 	CodeHookFail  = 3 // 钩子失败
 	CodeNeedTrust = 4 // 需要信任确认
 	CodeChanged   = 5 // diff 有非 Noop / status --fetch 有更新
+	CodeCheck     = 6 // check 有 FAIL 项（§18.1）
 )
 
 // ExitError 携带进程退出码；main 用 errors.As 取出它。
