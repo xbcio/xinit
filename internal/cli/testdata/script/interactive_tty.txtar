@@ -1,0 +1,54 @@
+# 唯一 PTY 用例（§19.6「interactive_tty.txtar」；验收 #1 的**真 TTY 分支**，非门禁）。
+# `ttyin -stdin <file>` 给**下一条**被 exec 的命令接真终端作为 stdin（cmd.go:414-439、
+# testscript.go:1038-1066）⇒ `hooks.Interactive(os.Stdin)` 判真 ⇒ 不传 --interactive
+# 也走交互路径：vars 三问 + 信任门一问，全部由 answers.txt 驱动。
+# 必须单独一行：`ttyin` 是内置命令，接受 `-stdin` + **一个**文件参数；写成
+# `ttyin -stdin f cmd …` 会因参数个数不符报 usage 错（cmd.go:433-435）。
+# stdout 仍是普通管道（只有 stdin 被换成 pty）⇒ `stdout` 断言有效；终端回显要断言的
+# 场合才用 `ttyout`，本用例不用。
+# 护栏逐字用 spec §19.6/§19.7 #1 的 `[!linux] [!darwin] skip`：两个否定条件同时成立
+# （既非 linux 也非 darwin）才 skip——即只在 pty 受支持平台运行。pty 仅 unix 支持；
+# go-internal 自测在 darwin 上有上游 skip 记录（go.dev/issue/61779）——本机 darwin 实测
+# 见 task-4-report.md（未追加 `[darwin] skip`）。
+[!linux] [!darwin] skip
+
+# 模板骨架同 interactive_init.txtar（vars 声明 prompt + render + post_init 钩子）；
+# answers.txt = 该脚本 ans.txt 的前三行回答 + 末行 y 供信任门（那边靠 --interactive
+# 打开会话，本用例靠 pty 本身）。
+ttyin -stdin $WORK/answers.txt
+xinit-code init --template $WORK/tpl out2
+stdout '产品显示名 \[Demo\]: '
+stdout '信任并执行？\[y/N\]'
+stdout 'exit=0'
+cmp out2/greeting.txt $WORK/want.txt
+exists out2/hook_out.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+vars:
+  - name: product
+    prompt: 产品显示名
+    default: Demo
+  - name: team
+    prompt: 团队
+    default: ""
+  - name: component
+    prompt: 组件名
+    required: true
+    pattern: '^[a-z][a-z0-9-]*$'
+  - name: silent
+    default: x
+render:
+  - paths: ["greeting.txt"]
+hooks:
+  post_init: |
+    echo ok > hook_out.txt
+-- tpl/greeting.txt --
+{{ .product }}/{{ .team }}/{{ .component }}/{{ .silent }}
+-- answers.txt --
+MyApp
+
+core
+y
+-- want.txt --
+MyApp//core/x

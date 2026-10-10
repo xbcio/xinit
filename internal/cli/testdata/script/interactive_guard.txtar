@@ -1,0 +1,192 @@
+# 交互护栏组（§19.6「护栏组」；验收 #16/#17/#19）：五组「不该提问」的场景。
+# 每组都先 `stdin` 一份含 y 的回答文件：若实现错误地提问，该问题会被答成「改用
+# 模板版」——后面的磁盘断言与退码断言随即转红（负向断言因此有牙齿，不是同义反复）。
+# 通道证据形态同 T3：`stdout` 正向 + `! stdout` 定向负断言（stderr 恒含既有
+# 「不在 git 仓库」提示与 git 警告，禁用 `! stderr .`）。
+
+# ════ ① 阻塞轮不提问（§19.7 #17）═══════════════════════════════════════
+# 轮 1（无 --interactive，但管道里预填 y）：制造冲突 ⇒ conflicts/a.txt 落盘。
+# 这同时钉住 §19.6 零回归 2/3：管道 + 无旗标 ⇒ 不读 stdin、不打任何交互文本。
+xinit init --template $WORK/tpl1 --yes p1
+cp $WORK/new-a.txt $WORK/tpl1/a.txt
+cp $WORK/local-a.txt $WORK/p1/a.txt
+cd p1
+stdin $WORK/yes.txt
+xinit-code update
+! stdout '交互式冲突解决'
+! stdout '改用模板版'
+! stdout '\[y/N\]'
+stdout 'exit=2'
+cmp .xinit/conflicts/a.txt $WORK/new-a.txt
+
+# 轮 2：--interactive——第 4 步早退（existing ∩ 本轮 conflicted ≠ ∅）落在第 4b 步
+# **之前**（§19.4.1 次序论证第 1 条）⇒ 预填的 y 不被消费、零交互文本、零写。
+stdin $WORK/yes.txt
+xinit-code update --interactive
+stdout '未解决的冲突（1 条）——先处理它们，update 才会执行：'
+! stdout '交互式冲突解决'
+! stdout '改用模板版？'
+stdout 'exit=2'
+cmp a.txt $WORK/local-a.txt
+cmp .xinit/conflicts/a.txt $WORK/new-a.txt
+
+# ════ ② --dry-run 恒不提问（§19.7 #19）════════════════════════════════
+# 冲突轮：第 4b 步的守卫（!DryRun ∧ ps != nil）恒不成立 ⇒ 不读 stdin、零写。
+# state.json 快照逐字节比对是「未读 stdin、未写任何文件」的直接证据。
+cp .xinit/state.json $WORK/state-pre.json
+stdin $WORK/yes.txt
+xinit-code update --interactive --dry-run
+stdout 'exit=5'
+! stdout '交互式冲突解决'
+! stdout '改用模板版？'
+cmp a.txt $WORK/local-a.txt
+cmp .xinit/state.json $WORK/state-pre.json
+
+# 干净轮：同一条命令、同一份回答文件 ⇒ 退出码 0（dry-run 的 5 由「有非 Noop」
+# 决定，与冲突无关）；state.json 同样逐字节不变。
+cd ..
+xinit init --template $WORK/tpl2 --yes p2
+cd p2
+cp .xinit/state.json $WORK/state-clean.json
+stdin $WORK/yes.txt
+xinit-code update --interactive --dry-run
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0'
+stdout 'exit=0'
+! stdout '交互式冲突解决'
+cmp .xinit/state.json $WORK/state-clean.json
+cd ..
+
+# ════ ③ --no-hooks 跳过的 generated 路径不被提问（§19.7 #19 后半）═══════
+# 夹具：模板声明 generated["gen.txt"] + post_update ⇒ 该路径有两条不进 conflicted
+# 的去路：不带 --no-hooks 走行 5 覆盖（写 theirs + overwritten 另存本地原内容），
+# 带 --no-hooks 走 §8.2 L7 跳过（零写、base 与 generated 位保持旧值）。
+# 两条去路的动作都带 Note（`write`/`noop` 行），Note 以「路径（备注）」形态印在
+# 报告里 ⇒ 本组**不能**用任务书原样给的 `! stdout 'gen\.txt（'`（它匹配报告自己的
+# 备注行，恒 FAIL）；改用瞄准提问本身的负断言：
+# 无表头（可问条数 0 ⇒ C1 整块不打印）+ 无提问行（`改用模板版？` 只出现在提问行；
+# 全角 `？` 不是正则元字符，无需转义）。
+xinit init --template $WORK/tpl3 --yes p3
+xinit init --template $WORK/tpl3 --yes p4
+cp $WORK/local-gen.txt $WORK/p3/gen.txt
+cp $WORK/local-gen.txt $WORK/p4/gen.txt
+cp $WORK/new-gen.txt $WORK/tpl3/gen.txt
+
+# 轮 A（行 5 覆盖，钩子会运行）：--yes 预先确认信任门（§10.5——披露照旧、只是不问）
+cd p3
+stdin $WORK/yes.txt
+xinit-code update --interactive --yes
+stdout 'write\s+gen\.txt（模板生成物：本地改动被模板覆盖'
+stdout 'overwritten\s+gen\.txt'
+stdout 'exit=0'
+! stdout '交互式冲突解决'
+! stdout '改用模板版？'
+cmp gen.txt $WORK/new-gen.txt
+cd ..
+
+# 轮 B（§8.2 L7 跳过）：--no-hooks ⇒ 跳过行照旧，仍零提问、零写
+cd p4
+stdin $WORK/yes.txt
+xinit-code update --interactive --no-hooks
+stdout '跳过（generated 且钩子不会运行）'
+stdout 'exit=0'
+! stdout '交互式冲突解决'
+! stdout '改用模板版？'
+cmp gen.txt $WORK/local-gen.txt
+cd ..
+
+# ════ ④ theirs 缺失的冲突不被提问（§19.7 #16 前半）═════════════════════
+# 可问闭集 =「kind ∈ {Merge(判冲突), ConflictBinary, ConflictBothAdded} ∧
+# theirsRendered[P] != nil」（§19.4.1）。夹具：模板删除 b.bin（P ∉ theirs），本地把
+# b.bin 换成符号链接（base 侧是 regular）⇒ §8.1 第一步的类型冲突：该冲突**同时**
+# 落在闭集的两个合取项之外（ConflictKind + theirs 缺失）——脚本侧只能钉住「报告
+# 照旧、无 C1/C2」（§19.7 #16 落点），两个合取项各自的真值表由 promptconflicts_test.go
+# 的 TestAskableConflict 承担（含 theirs 表为空/nil 时三种 Kind 一律 false 的直判）。
+# 报告照旧 = 冲突行 + 类型冲突的既有出口文案（prune / 移走障碍物）；而 ConflictKind
+# 也不在 `--accept` 可用集里（§10.3「accept 改变不了类型」）⇒ 连 `accept?` 行都没有。
+# b.bin 是二进制（含 NUL）：txtar 放不下 NUL，按先例用 printf 构造（update_migrate_vars.txtar:9）。
+exec sh -c 'printf "B\000v1" > "$WORK/tpl4/b.bin"'
+xinit init --template $WORK/tpl4 --yes p5
+rm p5/b.bin
+exec ln -s nowhere p5/b.bin
+rm $WORK/tpl4/b.bin
+cd p5
+stdin $WORK/yes.txt
+xinit-code update --interactive
+stdout 'conflict-kind\s+b\.bin（类型冲突：base 侧是 regular、ours 侧是 symlink'
+stdout 'conflict\s+b\.bin'
+stdout '冲突（1 条）需要你处理：'
+stdout 'exit=2'
+! stdout '交互式冲突解决'
+! stdout '改用模板版？'
+! stdout 'accept\?'
+# theirs 缺失 ⇒ 无 conflicts/ 内容条目（§10.3/§19.4.1 ：「它可能根本没有 theirs 内容」）
+! exists .xinit/conflicts/b.bin
+cd ..
+
+# ════ ⑤ 非冲突的 Clean Merge 不被提问（§19.7 #16 后半）════════════════════
+# 三方快照在**分离**的两处改动（base 三行：本地改第 1 行、模板改第 3 行）⇒
+# §8.6 干净合并：动作仍是 Merge 但不在 conflicted 里 ⇒ 无 C1/C2，报告打 merge 标签
+# 且不带任何备注（`c.txt（` 不出现）。
+# 注意改动**不相邻**：base 只有两行、本地改第 1 行、模板改第 2 行时，git merge-file
+# 的两个 hunk 相邻、并成一个重叠区 ⇒ 判冲突（实测；本用例必须留中间那行上下文）。
+xinit init --template $WORK/tpl5 --yes p6
+cp $WORK/local-c.txt $WORK/p6/c.txt
+cp $WORK/new-c.txt $WORK/tpl5/c.txt
+cd p6
+stdin $WORK/yes.txt
+xinit-code update --interactive
+stdout 'merge\s+c\.txt'
+stdout '汇总: 写入 1、删除 0、chmod 0、冲突 0、合并 1'
+stdout 'exit=0'
+! stdout '交互式冲突解决'
+! stdout '改用模板版'
+! stdout 'c\.txt（'
+cmp c.txt $WORK/want-c.txt
+
+-- tpl1/xinit.yml --
+manifest_version: 1
+-- tpl1/a.txt --
+a1
+-- new-a.txt --
+a2
+-- local-a.txt --
+local
+-- tpl2/xinit.yml --
+manifest_version: 1
+-- tpl2/z.txt --
+z1
+-- tpl3/xinit.yml --
+manifest_version: 1
+generated:
+  paths: ["gen.txt"]
+hooks:
+  post_update: |
+    exit 0
+-- tpl3/gen.txt --
+g1
+-- new-gen.txt --
+g2
+-- local-gen.txt --
+g-local
+-- tpl4/xinit.yml --
+manifest_version: 1
+-- tpl5/xinit.yml --
+manifest_version: 1
+-- tpl5/c.txt --
+l1
+l2
+l3
+-- local-c.txt --
+local1
+l2
+l3
+-- new-c.txt --
+l1
+l2
+t3
+-- want-c.txt --
+local1
+l2
+t3
+-- yes.txt --
+y
