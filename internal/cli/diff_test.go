@@ -129,8 +129,9 @@ func TestDiffMatchesRealRun(t *testing.T) {
 	}
 }
 
-// §7.5：模板把 old.txt 改名成 new.txt（内容不变），本地改过 old.txt——
-// diff 报「疑似改名」（动作仍按行 9/13 走）；update 不报。
+// §17（取代 §7.5 的「只报告」）：模板把 old.txt 改名成 new.txt（内容不变），
+// 本地改过 old.txt——dry-run 与实跑同产出 migrated 行；动作改写为 Delete+Merge，
+// 实跑后 new.txt = 本地字节、old.txt 删除（§17.8 端到端，含 base.Bytes 接线）。
 func TestDiffReportsSuspectedRename(t *testing.T) {
 	repo, proj := initProjectT(t, map[string]string{
 		"xinit.yml": tmplYAML,
@@ -142,32 +143,34 @@ func TestDiffReportsSuspectedRename(t *testing.T) {
 	}
 	commitT(t, repo, map[string]string{"new.txt": "shared\ncontent\n"}, "v1.1.0")
 
+	want := []MigrationNote{{Old: "old.txt", New: "new.txt", Status: "migrated"}}
 	rep, err := runUpdate(UpdateOptions{ProjectDir: proj, DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rep.Renames) != 1 {
-		t.Fatalf("Renames = %+v，want 1 条", rep.Renames)
+	if !reflect.DeepEqual(rep.Migrations, want) {
+		t.Fatalf("dry-run Migrations = %+v", rep.Migrations)
 	}
-	if rn := rep.Renames[0]; rn.Old != "old.txt" || rn.New != "new.txt" || !rn.LocalKept {
-		t.Errorf("Renames[0] = %+v（old 应判 KeepWarned → LocalKept=true）", rn)
-	}
-	// 动作仍按行 9/13 走——v1 不做自动改名
 	byPath := map[string]plan.Action{}
 	for _, a := range rep.Actions {
 		byPath[a.Path] = a
 	}
-	if byPath["old.txt"].Kind != plan.KeepWarned || byPath["new.txt"].Kind != plan.WriteTheirs {
-		t.Errorf("动作被改名检测改写了？old=%v new=%v", byPath["old.txt"].Kind, byPath["new.txt"].Kind)
+	if byPath["old.txt"].Kind != plan.Delete || byPath["new.txt"].Kind != plan.Merge || byPath["new.txt"].MigratedFrom != "old.txt" {
+		t.Errorf("动作未按 §17.3 改写：old=%+v new=%+v", byPath["old.txt"], byPath["new.txt"])
 	}
 
-	// update（非 dry-run）不产出改名（§7.5：只在 diff 里检测）
 	real, err := runUpdate(UpdateOptions{ProjectDir: proj})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(real.Renames) != 0 {
-		t.Errorf("update 不该产出 Renames: %+v", real.Renames)
+	if !reflect.DeepEqual(real.Migrations, want) {
+		t.Errorf("实跑 Migrations = %+v", real.Migrations)
+	}
+	if got := mustContent(t, proj, "new.txt"); got != "shared\ncontent\nlocal\n" {
+		t.Errorf("new.txt = %q，应为迁移后的本地字节", got)
+	}
+	if _, err := os.Stat(filepath.Join(proj, "old.txt")); !os.IsNotExist(err) {
+		t.Errorf("old.txt 应被删除：%v", err)
 	}
 }
 

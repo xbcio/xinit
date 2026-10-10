@@ -86,14 +86,16 @@ type UpdateReport struct {
 	// dry-run 为将写入）。「参考：conflicts/」行只在它有值时打印。
 	ConflictFiles []string
 	// Acceptable 是冲突全集里可 --accept 的路径（非 ConflictKind；dry-run 同）。
-	Acceptable    []string
-	Resolved      []string // 上轮 conflicts/ 里本轮已收敛、已清理的路径
-	Blocked       []string // 第 4 步拒绝：conflicts/ 里仍未解决、必须先处理的路径
-	Refused       []apply.Refusal
-	Degraded      []string     // §5.2 降级为 base✗ 的路径
-	Renames       []RenameNote // §7.5：只在 dry-run（diff / --dry-run）产出
-	HookName      string       // "post_update"；未声明钩子的清单为 ""
-	HookOutput    []string     // 钩子合并输出，按行（空输出为 nil）
+	Acceptable []string
+	Resolved   []string // 上轮 conflicts/ 里本轮已收敛、已清理的路径
+	Blocked    []string // 第 4 步拒绝：conflicts/ 里仍未解决、必须先处理的路径
+	Refused    []apply.Refusal
+	Degraded   []string     // §5.2 降级为 base✗ 的路径
+	Renames    []RenameNote // §7.5：只在 dry-run（diff / --dry-run）产出
+	// Migrations 是 §17 路径迁移的报告行（dry-run 与实跑同产出，按 Old 排序）。
+	Migrations    []MigrationNote
+	HookName      string   // "post_update"；未声明钩子的清单为 ""
+	HookOutput    []string // 钩子合并输出，按行（空输出为 nil）
 	HookFailed    bool
 	HookExitCode  int
 	HookBlock     string   // 失败时重打失败命令用

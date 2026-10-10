@@ -65,6 +65,8 @@ type Action struct {
 	// 本轮按「模板生成物」覆盖——调用方须先另存本地版本到
 	// .xinit/overwritten/<Path>（§8.2 :614），再执行写入。
 	OverwriteGenerated bool
+	// MigratedFrom 由 cli 迁移分类（§17）设置；plan 包自身从不设置。
+	MigratedFrom string
 }
 
 // PruneSet 是 prune.txt 展开后的精确 Dst 集合。

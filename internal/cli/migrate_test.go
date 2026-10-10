@@ -1,9 +1,16 @@
 package cli
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/xbcio/xinit/internal/apply"
+	"github.com/xbcio/xinit/internal/fsutil"
+	"github.com/xbcio/xinit/internal/merge"
 	"github.com/xbcio/xinit/internal/plan"
 	"github.com/xbcio/xinit/internal/render"
 	"github.com/xbcio/xinit/internal/state"
@@ -373,5 +380,237 @@ func TestDecideMigrationStatic(t *testing.T) {
 				t.Errorf("非 skip 决策不得给理由，得到 %q", reason)
 			}
 		})
+	}
+}
+
+// migFixture 是编排层单测的最小场景：P=old/a.txt（行 9 KeepWarned）、
+// Q=new/a.txt（行 13 WriteTheirs），Part A 同 Src 配对。
+type migFixture struct {
+	actions        []plan.Action
+	base           *baseSnapshot
+	ours, theirs   plan.Snap
+	oursBytes      map[string][]byte
+	theirsRendered map[string][]byte
+	newSrc         map[string]string
+	st             *state.State
+}
+
+func newMigFixture(baseB, oursB, theirsB []byte) *migFixture {
+	const p, q = "old/a.txt", "new/a.txt"
+	meta := func(b []byte) plan.FileMeta {
+		bin := fsutil.IsBinary(b)
+		return plan.FileMeta{Kind: render.KindRegular, Binary: bin,
+			MixedEOL: fsutil.DetectEOL(b) == fsutil.EOLMixed, Hash: fsutil.CompareHash(b, bin)}
+	}
+	tq := meta(theirsB)
+	return &migFixture{
+		actions: []plan.Action{
+			{Path: q, Kind: plan.WriteTheirs, NewBase: &tq},
+			{Path: p, Kind: plan.KeepWarned, Note: "v1 keep"},
+		},
+		base:           &baseSnapshot{Metas: map[string]plan.FileMeta{p: meta(baseB)}, Bytes: map[string][]byte{p: baseB}},
+		ours:           plan.Snap{p: meta(oursB)},
+		theirs:         plan.Snap{q: tq},
+		oursBytes:      map[string][]byte{p: oursB},
+		theirsRendered: map[string][]byte{q: theirsB},
+		newSrc:         map[string]string{q: "a.txt.tmpl"},
+		st:             &state.State{Files: map[string]state.FileState{p: {Src: "a.txt.tmpl"}}},
+	}
+}
+
+func (f *migFixture) run(t *testing.T, dir string) ([]MigrationNote, map[string][]byte) {
+	t.Helper()
+	merged := map[string][]byte{}
+	notes, err := classifyMigrations(dir, f.actions, f.base, f.ours, f.oursBytes, f.theirs,
+		f.theirsRendered, f.newSrc, f.st, merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return notes, merged
+}
+
+// assertMigrated 钉 §17.3 的 P/Q 改写形态与 merged[Q] 字节。
+func assertMigrated(t *testing.T, f *migFixture, notes []MigrationNote, merged map[string][]byte, want []byte) {
+	t.Helper()
+	if len(notes) != 1 || notes[0] != (MigrationNote{Old: "old/a.txt", New: "new/a.txt", Status: "migrated"}) {
+		t.Fatalf("notes = %+v", notes)
+	}
+	if got, ok := merged["new/a.txt"]; !ok || !bytes.Equal(got, want) {
+		t.Fatalf("merged[Q] = %q, want %q", got, want)
+	}
+	q, p := f.actions[0], f.actions[1]
+	if q.Kind != plan.Merge || q.MigratedFrom != "old/a.txt" || q.NewBase == nil ||
+		*q.NewBase != f.theirs["new/a.txt"] || !strings.HasPrefix(q.Note, "路径迁移自 old/a.txt：本地改动已保留") {
+		t.Fatalf("Q 动作 = %+v", q)
+	}
+	if p.Kind != plan.Delete || p.NewBase != nil || p.Note != "路径迁移：本地改动已迁移到 new/a.txt" {
+		t.Fatalf("P 动作 = %+v", p)
+	}
+}
+
+// assertUntouched：fallback/skip 不改写动作、不注入 merged。
+func assertUntouched(t *testing.T, f *migFixture, notes []MigrationNote, merged map[string][]byte, status, reason string) {
+	t.Helper()
+	if len(notes) != 1 || notes[0].Status != status || notes[0].Reason != reason {
+		t.Fatalf("notes = %+v, want %s/%q", notes, status, reason)
+	}
+	if len(merged) != 0 {
+		t.Fatalf("merged 不应注入：%v", merged)
+	}
+	q, p := f.actions[0], f.actions[1]
+	if q.Kind != plan.WriteTheirs || q.MigratedFrom != "" || q.Note != "" || q.NewBase == nil {
+		t.Fatalf("Q 动作被改写：%+v", q)
+	}
+	if p.Kind != plan.KeepWarned || p.Note != "v1 keep" {
+		t.Fatalf("P 动作被改写：%+v", p)
+	}
+}
+
+func TestClassifyMigrationsDirectCRLF(t *testing.T) {
+	base := []byte("a\r\nb\r\n")
+	ours := []byte("a\r\nb\r\nlocal\r\n")
+	f := newMigFixture(base, ours, base)
+	notes, merged := f.run(t, t.TempDir())
+	assertMigrated(t, f, notes, merged, ours) // 逐字节，CRLF 不归一
+}
+
+func TestClassifyMigrationsDirectBinary(t *testing.T) {
+	base := []byte{0x00, 0x01, 0x02}
+	ours := []byte{0x00, 0x01, 0x02, 0xff, 0x00}
+	f := newMigFixture(base, ours, base)
+	notes, merged := f.run(t, t.TempDir())
+	assertMigrated(t, f, notes, merged, ours)
+}
+
+func TestClassifyMigrationsCleanMerge(t *testing.T) {
+	base := []byte("1\r\n2\r\n3\r\n4\r\n5\r\n")
+	ours := []byte("1 local\r\n2\r\n3\r\n4\r\n5\r\n")
+	theirs := []byte("1\n2\n3\n4\n5 tpl\n")
+	f := newMigFixture(base, ours, theirs)
+	res, err := merge.ThreeWay(ours, base, theirs)
+	if err != nil || res.Outcome != merge.Clean {
+		t.Fatalf("前提：应干净合并，got %v %v", res.Outcome, err)
+	}
+	want := fsutil.FromLF(res.Bytes, fsutil.DetectEOL(ours))
+	notes, merged := f.run(t, t.TempDir())
+	assertMigrated(t, f, notes, merged, want)
+	if !bytes.Equal(want, []byte("1 local\r\n2\r\n3\r\n4\r\n5 tpl\r\n")) {
+		t.Fatalf("EOL 还原口径不符：%q", want)
+	}
+}
+
+func TestClassifyMigrationsConflictFallback(t *testing.T) {
+	f := newMigFixture([]byte("x\n"), []byte("ours\n"), []byte("theirs\n"))
+	notes, merged := f.run(t, t.TempDir())
+	assertUntouched(t, f, notes, merged, "fallback", "模板与本地都在改且相冲突")
+}
+
+func TestClassifyMigrationsMixedEOLFallback(t *testing.T) {
+	f := newMigFixture([]byte("x\n"), []byte("a\r\nb\n"), []byte("y\n"))
+	notes, merged := f.run(t, t.TempDir())
+	assertUntouched(t, f, notes, merged, "fallback", "二进制或混合行尾不参与三方合并")
+}
+
+// 预检 skip（§17.4）：Q 的父目录里预造折叠等价的未跟踪文件 → 写 Q 会被拒。
+func TestClassifyMigrationsPrecheckSkip(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "new", "A.txt"), []byte("u"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := []byte("x\n")
+	f := newMigFixture(base, []byte("local\n"), base)
+	want, err := predictRefusals(dir, apply.Changes{Writes: map[string][]byte{"new/a.txt": nil}})
+	if err != nil || len(want) != 1 {
+		t.Fatalf("前提：Q 应被折叠拒绝，got %v %v", want, err)
+	}
+	notes, merged := f.run(t, dir)
+	assertUntouched(t, f, notes, merged, "skip", want[0].Reason)
+}
+
+func TestClassifyMigrationsExec(t *testing.T) {
+	base := []byte("x\n")
+	for _, tc := range []struct {
+		name                  string
+		baseX, oursX, theirsX bool
+		wantExec, wantWarn    bool
+	}{
+		{"本地 exec 差异 → 取 ours[P].Exec + Note", false, true, false, true, true},
+		{"本地无差异 → 取 theirs[Q].Exec", false, false, true, true, false},
+		{"本地无差异且 theirs 非 exec → 仍给结论 false（N3）", true, true, false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newMigFixture(base, []byte("local\n"), base)
+			setExec := func(s map[string]plan.FileMeta, k string, x bool) { m := s[k]; m.Exec = x; s[k] = m }
+			setExec(f.base.Metas, "old/a.txt", tc.baseX)
+			setExec(f.ours, "old/a.txt", tc.oursX)
+			setExec(f.theirs, "new/a.txt", tc.theirsX)
+			nb := f.theirs["new/a.txt"]
+			f.actions[0].NewBase = &nb
+			f.run(t, t.TempDir())
+			q := f.actions[0]
+			if got := strings.Contains(q.Note, "新路径保留本地 exec 位"); got != tc.wantWarn {
+				t.Errorf("Note = %q, 警告 want %v", q.Note, tc.wantWarn)
+			}
+			if q.NewBase.Exec != tc.theirsX {
+				t.Errorf("NewBase.Exec = %v, want theirs %v", q.NewBase.Exec, tc.theirsX)
+			}
+			got, ok := execConclusion(q, f.base.Metas, f.ours, f.theirs)
+			if !ok || got != tc.wantExec {
+				t.Errorf("execConclusion = %v,%v want %v,true", got, ok, tc.wantExec)
+			}
+		})
+	}
+}
+
+// R9-M4①：Part A 与 Part B 混合，按 Old 全局排序。
+func TestDetectMigrationPairsMixedOrder(t *testing.T) {
+	actions := []plan.Action{
+		{Path: "z/a.txt", Kind: plan.Delete},
+		{Path: "y/a.txt", Kind: plan.WriteTheirs},
+		{Path: "b.txt", Kind: plan.Delete},
+		{Path: "c.txt", Kind: plan.WriteTheirs},
+	}
+	base := plan.Snap{"z/a.txt": migMeta("h-z"), "b.txt": migMeta("h-b")}
+	theirs := plan.Snap{"y/a.txt": migMeta("h-y"), "c.txt": migMeta("h-b")}
+	files := map[string]state.FileState{"z/a.txt": {Src: "a.tmpl"}, "b.txt": {Src: "b.tmpl"}}
+	newSrc := map[string]string{"y/a.txt": "a.tmpl", "c.txt": "c.tmpl"}
+	got := detectMigrationPairs(actions, base, nil, theirs, files, newSrc)
+	want := []migrationPair{{Old: "b.txt", New: "c.txt"}, {Old: "z/a.txt", New: "y/a.txt", PartA: true}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+// R9-M4②：baseBytes 缺键（区别于显式空切片）同样按空内容 skip。
+func TestDecideMigrationBaseBytesMissingKey(t *testing.T) {
+	p := migrationPair{Old: "old.go", New: "new.go"}
+	got, reason := decideMigration(p, plan.Snap{"old.go": migMeta("h1")}, plan.Snap{"old.go": migMeta("h-o")},
+		plan.Snap{"new.go": migMeta("h1")}, map[string][]byte{})
+	if got != migSkip || reason != "空内容配对不自动迁移" {
+		t.Fatalf("got %s %q", migName(got), reason)
+	}
+}
+
+// R9-M4③：ours 非 nil、与 theirs 同 hash 但 base 不同 → 照常 Part B 配对
+// （§17.7：配对准据与 ours 内容无关）。
+func TestDetectMigrationPairsIgnoresOurs(t *testing.T) {
+	actions := []plan.Action{{Path: "d/old.go", Kind: plan.KeepWarned}, {Path: "d/new.go", Kind: plan.WriteTheirs}}
+	base := plan.Snap{"d/old.go": migMeta("h1")}
+	ours := plan.Snap{"d/old.go": migMeta("h2")}
+	theirs := plan.Snap{"d/new.go": migMeta("h1")}
+	files := map[string]state.FileState{"d/old.go": {Src: "old.go"}}
+	got := detectMigrationPairs(actions, base, ours, theirs, files, map[string]string{"d/new.go": "new.go"})
+	want := []migrationPair{{Old: "d/old.go", New: "d/new.go"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v", got)
+	}
+	// 反证：ours 与 theirs 同 hash 而 base 不同 → 不配
+	got = detectMigrationPairs(actions, plan.Snap{"d/old.go": migMeta("h0")}, plan.Snap{"d/old.go": migMeta("h1")},
+		theirs, files, map[string]string{"d/new.go": "new.go"})
+	if len(got) != 0 {
+		t.Fatalf("ours==theirs≠base 不应配对，got %+v", got)
 	}
 }

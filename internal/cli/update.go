@@ -255,6 +255,13 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	// 条目与 c.Conflicts 一致（apply.rebuildConflicts 全量重建），无需另取。
 	rep.ConflictFiles = sortedStringKeys(conflicts)
 
+	// 8a. 路径迁移分类（§17）：动作表后处理——可迁移对改写为 Delete+Merge 并注入 merged。
+	mignotes, err := classifyMigrations(projectDir, actions, baseSnap, oursSnap, oursBytes, theirsSnap, theirsRendered, newSrc, st, merged)
+	if err != nil {
+		return nil, err
+	}
+	rep.Migrations = mignotes
+
 	// 8b. --accept 后处理（§10.3）：紧跟 merge 分类之后。
 	for _, p := range o.Accept {
 		if !acceptSet[p] {
@@ -794,6 +801,7 @@ func buildChanges(base plan.Snap, oursSnap, theirsSnap plan.Snap, actions []plan
 
 // execConclusion 报告该路径本轮是否有 §8.3 的 exec 结论（R7 前件）：
 //
+//	迁移 Merge（MigratedFrom ≠ ""，§17.3）       → 恒有结论（见 migratedExec）；
 //	Kind ∉ {Noop, WriteTheirs, Merge}          → 无结论；
 //	三方都在 ∧ ours.exec == base.exec          → 有结论，目标 = NewBase.Exec；
 //	ours✗ ∧ WriteTheirs（行 13，模板新增）      → 有结论 = theirs 的 exec；
@@ -809,6 +817,11 @@ func execConclusion(a plan.Action, base, ours, theirs plan.Snap) (bool, bool) {
 	case plan.Noop, plan.WriteTheirs, plan.Merge:
 	default:
 		return false, false
+	}
+	// §17.3：Q 是磁盘新建文件——必须在 !ook 提前返回之前，且不套用「与磁盘
+	// 一致则省略」（无结论即以默认权限落盘、丢 exec 位，N3）。
+	if a.Kind == plan.Merge && a.MigratedFrom != "" {
+		return migratedExec(a, base, ours), true
 	}
 	o, ook := ours[a.Path]
 	if !ook {

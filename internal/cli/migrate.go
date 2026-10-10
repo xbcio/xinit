@@ -4,6 +4,9 @@ import (
 	"path"
 	"sort"
 
+	"github.com/xbcio/xinit/internal/apply"
+	"github.com/xbcio/xinit/internal/fsutil"
+	"github.com/xbcio/xinit/internal/merge"
 	"github.com/xbcio/xinit/internal/plan"
 	"github.com/xbcio/xinit/internal/render"
 	"github.com/xbcio/xinit/internal/state"
@@ -137,6 +140,8 @@ const (
 // （generated → 空内容[Part B] → 类型 → 置信度[Part B]）→ 第 2 步
 // 直搬/合并分流。返回的 reason 仅 migSkip 非空（§17.6 的 MigrationNote 口径）。
 //
+// 前件：p 必须来自 detectMigrationPairs（⇒ ours[p.Old] 存在，行 8/9 的旧候选）。
+//
 // 不在本函数的两件事（需 projectDir 或盘上字节，由迁移分类负责）：§17.4 的
 // 拒绝预检，与 §17.2 第 2 步的 Binary/MixedEOL 前置过滤（b/o/t 任一命中 →
 // fallback，不进入三方合并）。本函数只按快照元数据分流。
@@ -153,8 +158,8 @@ func decideMigration(p migrationPair, base, ours, theirs plan.Snap,
 		return migSkip, "生成物路径不参与迁移"
 	}
 	// 空内容的 1:1 配对不可信（.gitkeep 类）。只限 Part B：Part A 靠同 Src，
-	// 空占位被本地填写后位移正是其旗舰场景（N2）。base 字节缺失（降级 base）
-	// 同样按不迁移处理——保守优先。
+	// 空占位被本地填写后位移正是其旗舰场景（N2）。base 字节
+	// 缺键是对迁移分类传参错误的防御（降级 base 不写 Metas、P 不成候选）——保守优先。
 	if !p.PartA && len(baseBytes[p.Old]) == 0 {
 		return migSkip, "空内容配对不自动迁移"
 	}
@@ -173,4 +178,129 @@ func decideMigration(p migrationPair, base, ours, theirs plan.Snap,
 		return migDirect, ""
 	}
 	return migMerge, ""
+}
+
+// classifyMigrations 是 §17.2–§17.4 的迁移分类：merge 分类之后、--accept 后处理
+// 之前对动作表做后处理。按 Old 字节序逐对：rename/skip 只记报告行；可迁移对
+// 先跑 §17.4 拒绝预检，再做内容迁移（直搬 / 前置过滤 / 三方合并），Clean 落地
+// 后**就地改写** actions（P → Delete，Q → Merge+MigratedFrom）并把 Q 的字节注入
+// merged——buildChanges 等下游经既有通道消费，零改动。
+func classifyMigrations(projectDir string, actions []plan.Action, base *baseSnapshot,
+	ours plan.Snap, oursBytes map[string][]byte, theirs plan.Snap, theirsRendered map[string][]byte,
+	newSrc map[string]string, st *state.State, merged map[string][]byte,
+) ([]MigrationNote, error) {
+	pairs := detectMigrationPairs(actions, base.Metas, ours, theirs, st.Files, newSrc)
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	// §17.4 预检的删除集：本轮全部 Delete 动作 ∪ 前序已通过预检的迁移对 P。
+	var dels []string
+	for _, a := range actions {
+		if a.Kind == plan.Delete {
+			dels = append(dels, a.Path)
+		}
+	}
+	idx := make(map[string]int, len(actions))
+	for i := range actions {
+		idx[actions[i].Path] = i
+	}
+
+	var notes []MigrationNote
+	for _, p := range pairs {
+		note := MigrationNote{Old: p.Old, New: p.New}
+		// baseBytes 必须是 base.Bytes（Dst 键域，与 Metas 同源）。
+		d, reason := decideMigration(p, base.Metas, ours, theirs, base.Bytes)
+		switch d {
+		case migRename:
+			note.Status = "rename"
+			notes = append(notes, note)
+			continue
+		case migSkip:
+			note.Status, note.Reason = "skip", reason
+			notes = append(notes, note)
+			continue
+		}
+
+		// §17.4 拒绝预检：落在本对（P 或 Q）上的拒绝 → 整对 skip。
+		dset := append(append([]string{}, dels...), p.Old)
+		refs, err := predictRefusals(projectDir, apply.Changes{Deletes: dset, Writes: map[string][]byte{p.New: nil}})
+		if err != nil {
+			return nil, err
+		}
+		if r, hit := refusalOn(refs, p.Old, p.New); hit {
+			note.Status, note.Reason = "skip", r
+			notes = append(notes, note)
+			continue
+		}
+		dels = append(dels, p.Old)
+
+		// 第 2 步：内容迁移。
+		var out []byte
+		if d == migDirect {
+			out = oursBytes[p.Old] // 原样字节：不归一、二进制同样适用
+		} else {
+			o, b, t := ours[p.Old], base.Metas[p.Old], theirs[p.New]
+			if o.Binary || o.MixedEOL || b.Binary || b.MixedEOL || t.Binary || t.MixedEOL {
+				note.Status, note.Reason = "fallback", "二进制或混合行尾不参与三方合并"
+				notes = append(notes, note)
+				continue
+			}
+			ob := oursBytes[p.Old]
+			res, err := merge.ThreeWay(ob, base.Bytes[p.Old], theirsRendered[p.New])
+			if err != nil {
+				return nil, err
+			}
+			if res.Outcome != merge.Clean {
+				note.Status, note.Reason = "fallback", "模板与本地都在改且相冲突"
+				notes = append(notes, note)
+				continue
+			}
+			out = fsutil.FromLF(res.Bytes, fsutil.DetectEOL(ob))
+		}
+
+		// §17.3 动作改写（就地）。
+		pi, pok := idx[p.Old]
+		qi, qok := idx[p.New]
+		if !pok || !qok {
+			continue // 不可达：配对来自动作表本身
+		}
+		pa := &actions[pi]
+		pa.Kind, pa.NewBase = plan.Delete, nil
+		pa.Note = "路径迁移：本地改动已迁移到 " + p.New
+		qa := &actions[qi]
+		qa.Kind, qa.MigratedFrom = plan.Merge, p.Old
+		qa.Note = "路径迁移自 " + p.Old + "：本地改动已保留"
+		plan.SettleMergeClean(qa, base.Metas, ours, theirs) // 按 Path=Q 原样调用，不重映射
+		if o, ok := ours[p.Old]; ok {
+			if b, ok := base.Metas[p.Old]; ok && o.Exec != b.Exec {
+				qa.Note += "；新路径保留本地 exec 位"
+			}
+		}
+		merged[p.New] = out
+		note.Status = "migrated"
+		notes = append(notes, note)
+	}
+	return notes, nil
+}
+
+// refusalOn 找落在 P 或 Q 上的第一条拒绝（refs 已按 Path 排序）。
+func refusalOn(refs []apply.Refusal, p, q string) (string, bool) {
+	for _, r := range refs {
+		if r.Path == p || r.Path == q {
+			return r.Reason, true
+		}
+	}
+	return "", false
+}
+
+// migratedExec 是迁移 Merge 动作的磁盘 exec 目标（§17.3）：本地改过权限
+// （ours[P].Exec ≠ base[P].Exec）→ ours[P].Exec；否则 NewBase.Exec（= theirs[Q]）。
+// ours[P]/base[P] 缺键防御 → NewBase.Exec。
+func migratedExec(a plan.Action, base, ours plan.Snap) bool {
+	o, ook := ours[a.MigratedFrom]
+	b, bok := base[a.MigratedFrom]
+	if ook && bok && o.Exec != b.Exec {
+		return o.Exec
+	}
+	return a.NewBase.Exec
 }
