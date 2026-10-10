@@ -59,13 +59,6 @@ func conflictExitsFor(hasFiles bool) string {
 	return conflictExits
 }
 
-// RenameNote 是 §7.5 的「疑似改名」一行。动作本身仍按行 8/9/13 走——
-// v1 不做自动改名，只提示本地改动需要手工迁移。
-type RenameNote struct {
-	Old, New  string
-	LocalKept bool // 旧路径是 KeepWarned（行 9）：本地改动需手动迁移
-}
-
 // UpdateReport 是 update / diff 的完整结果；Print 的输出就是用户看到的报告。
 type UpdateReport struct {
 	Header      string // "xinit update" / "xinit diff"
@@ -90,8 +83,7 @@ type UpdateReport struct {
 	Resolved   []string // 上轮 conflicts/ 里本轮已收敛、已清理的路径
 	Blocked    []string // 第 4 步拒绝：conflicts/ 里仍未解决、必须先处理的路径
 	Refused    []apply.Refusal
-	Degraded   []string     // §5.2 降级为 base✗ 的路径
-	Renames    []RenameNote // §7.5：只在 dry-run（diff / --dry-run）产出
+	Degraded   []string // §5.2 降级为 base✗ 的路径
 	// Migrations 是 §17 路径迁移的报告行（dry-run 与实跑同产出，按 Old 排序）。
 	Migrations    []MigrationNote
 	HookName      string   // "post_update"；未声明钩子的清单为 ""
@@ -168,14 +160,10 @@ func (r *UpdateReport) Print(w io.Writer) {
 	}
 	fmt.Fprintln(w)
 
-	if len(r.Renames) > 0 {
-		fmt.Fprintf(w, "疑似改名（§7.5，diff 只报告、不自动迁移）：%d 条\n", len(r.Renames))
-		for _, rn := range r.Renames {
-			hint := "旧路径按行 8 删除，本地无改动"
-			if rn.LocalKept {
-				hint = "你本地对旧路径的改动需手动迁移到新路径"
-			}
-			fmt.Fprintf(w, "  %-20s %s → %s（%s）\n", "rename?", rn.Old, rn.New, hint)
+	if len(r.Migrations) > 0 {
+		fmt.Fprintf(w, "路径迁移（§17）：%d 条\n", len(r.Migrations))
+		for _, m := range r.Migrations {
+			fmt.Fprintf(w, "  %-20s %s → %s（%s）\n", m.Status, m.Old, m.New, migrationText(m))
 		}
 	}
 	if len(r.Degraded) > 0 {
@@ -230,13 +218,38 @@ func (r *UpdateReport) Print(w io.Writer) {
 }
 
 // kindLabel 是报告行的稳定前缀。与 plan.ActionKind.String() 一致，
-// 只有「Merge 且本轮判冲突」要区分成 merge-conflict（它的落地是
-// conflicts/ 而不是工作树，读者必须能一眼分开）。
+// 只有两处例外：迁移改写后的 Q（MigratedFrom ≠ ""，§17.3）单独成 migrate
+// 标签——它虽是 Merge 动作，落地却是「新路径磁盘新建 + 内容来自旧路径」；
+// 以及「Merge 且本轮判冲突」区分成 merge-conflict（它的落地是 conflicts/
+// 而不是工作树，读者必须能一眼分开）。
 func kindLabel(a plan.Action, conflicted bool) string {
+	// migrate 判在最前：迁移动作的 Kind 仍是 Merge，冲突分支不得抢先
+	// （§17.6 的标签由 MigratedFrom 驱动，不随 conflicted 变化）。
+	if a.MigratedFrom != "" {
+		return "migrate"
+	}
 	if a.Kind == plan.Merge && conflicted {
 		return "merge-conflict"
 	}
 	return a.Kind.String()
+}
+
+// migrationText 是 §17.6 四态行的括号文案。MigratedFrom / 理由由迁移分类
+// 产出，此处只负责措辞——fallback 与 skip 必须带上理由原文（不得弱化事实：
+// fallback 行还要给人工去向）。
+func migrationText(m MigrationNote) string {
+	switch m.Status {
+	case "migrated":
+		return "本地改动已随迁移保留；旧路径按删除处理"
+	case "fallback":
+		return "迁移未完成：" + m.Reason + "——已按行 9 保留本地、行 13 写入模板版；本地改动需手工合并到新路径，或把旧路径写进 .xinit/prune.txt"
+	case "rename":
+		return "本地无改动，按行 8/13 完成改名"
+	case "skip":
+		return "跳过：" + m.Reason
+	}
+	// 四态由分类器独占产出，出现第五值即代码缺陷：原文照打，不静默。
+	return m.Status + "：" + m.Reason
 }
 
 func noteSuffix(note string) string {

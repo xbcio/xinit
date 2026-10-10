@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xbcio/xinit/internal/fsutil"
@@ -129,9 +130,10 @@ func TestDiffMatchesRealRun(t *testing.T) {
 	}
 }
 
-// §17（取代 §7.5 的「只报告」）：模板把 old.txt 改名成 new.txt（内容不变），
-// 本地改过 old.txt——dry-run 与实跑同产出 migrated 行；动作改写为 Delete+Merge，
-// 实跑后 new.txt = 本地字节、old.txt 删除（§17.8 端到端，含 base.Bytes 接线）。
+// §17（取代 §7.5 的旧「只报告」承诺，v1 语义已退役）：模板把 old.txt 改名成
+// new.txt（内容不变），本地改过 old.txt——dry-run 与实跑同产出 migrated 行；
+// 动作改写为 Delete+Merge，实跑后 new.txt = 本地字节、old.txt 删除
+// （§17.8 端到端，含 base.Bytes 接线）。
 func TestDiffReportsSuspectedRename(t *testing.T) {
 	repo, proj := initProjectT(t, map[string]string{
 		"xinit.yml": tmplYAML,
@@ -158,6 +160,22 @@ func TestDiffReportsSuspectedRename(t *testing.T) {
 	if byPath["old.txt"].Kind != plan.Delete || byPath["new.txt"].Kind != plan.Merge || byPath["new.txt"].MigratedFrom != "old.txt" {
 		t.Errorf("动作未按 §17.3 改写：old=%+v new=%+v", byPath["old.txt"], byPath["new.txt"])
 	}
+	// 报告面（§17.6）：迁移节 + Q 的 migrate 行 + P 的 delete 行（Note 说明迁移）。
+	var buf strings.Builder
+	rep.Print(&buf)
+	for _, want := range []string{
+		"路径迁移（§17）：1 条\n",
+		"  migrated             old.txt → new.txt（本地改动已随迁移保留；旧路径按删除处理）",
+		"  migrate              new.txt（路径迁移自 old.txt：本地改动已保留）",
+		"  delete               old.txt（路径迁移：本地改动已迁移到 new.txt）",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("dry-run 报告缺 %q:\n%s", want, buf.String())
+		}
+	}
+	if strings.Contains(buf.String(), "疑似改名") {
+		t.Errorf("旧「疑似改名」节应随 §17.6 退役:\n%s", buf.String())
+	}
 
 	real, err := runUpdate(UpdateOptions{ProjectDir: proj})
 	if err != nil {
@@ -174,7 +192,8 @@ func TestDiffReportsSuspectedRename(t *testing.T) {
 	}
 }
 
-// §7.5 的多对多歧义（两个同名内容的旧路径 ← 一个新增路径）不报。
+// §17.1 的配对歧义（两个同 hash 旧候选 ← 一个新增路径）不配、不报迁移行
+// （旧 §7.5「疑似改名」判据由 Part B 接管后的同形断言）。
 func TestDiffRenameAmbiguityNotReported(t *testing.T) {
 	repo, proj := initProjectT(t, map[string]string{
 		"xinit.yml": tmplYAML,
@@ -193,8 +212,8 @@ func TestDiffRenameAmbiguityNotReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rep.Renames) != 0 {
-		t.Errorf("一对多歧义必须不报（§7.5）: %+v", rep.Renames)
+	if len(rep.Migrations) != 0 {
+		t.Errorf("一对多歧义必须不配对（§17.1）: %+v", rep.Migrations)
 	}
 }
 

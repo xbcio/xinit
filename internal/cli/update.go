@@ -355,8 +355,6 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		rep.Merged = sortedStringKeys(merged)
 		rep.Overwritten = overwrittenPaths(actions, refused)
 		rep.Resolved = except(existing, conflicted)
-		// §7.5：改名配对检测只进 diff/--dry-run 的报告（update 不产出）
-		rep.Renames = detectRenames(actions, baseSnap.Metas, theirsSnap)
 		rep.ExitCode = dryRunExit(actions)
 		return rep, nil
 	}
@@ -1014,55 +1012,6 @@ func dryRunExit(actions []plan.Action) int {
 		}
 	}
 	return CodeOK
-}
-
-// detectRenames 是 §7.5 的改名配对检测（只被 diff/--dry-run 调用；update
-// 不产出——规范原文「v1 只在 diff 里做配对检测」）。动作本身仍按行 8/9/13
-// 走，这里只产出「疑似」提示。
-//
-// 配对判据：旧候选（theirs 里已消失的路径——行 8 Delete / 行 9 KeepWarned）
-// 与新增候选（行 13：base✗ 的 WriteTheirs）在**模板空间**内容相同，即
-// base[P].Hash == theirs[Q].Hash（§9.1 归一化 hash，路径变量写进内容时
-// hash 不等 → 不配对，属可接受的漏报）。只报告 1:1 唯一配对；空文件、
-// 相同 LICENSE 造成的多对多歧义一律不报（§7.5 的歧义成本）。
-func detectRenames(actions []plan.Action, base plan.Snap, theirs plan.Snap) []RenameNote {
-	oldsByHash := map[string][]string{}
-	kinds := map[string]plan.ActionKind{}
-	for _, a := range actions {
-		kinds[a.Path] = a.Kind
-		switch a.Kind {
-		case plan.Delete, plan.KeepWarned:
-			if b, ok := base[a.Path]; ok {
-				oldsByHash[b.Hash] = append(oldsByHash[b.Hash], a.Path)
-			}
-		}
-	}
-	newsByHash := map[string][]string{}
-	for _, a := range actions {
-		if a.Kind != plan.WriteTheirs {
-			continue
-		}
-		if _, inBase := base[a.Path]; inBase {
-			continue // 行 2（模板改了已有路径）不是改名候选
-		}
-		if t, ok := theirs[a.Path]; ok {
-			newsByHash[t.Hash] = append(newsByHash[t.Hash], a.Path)
-		}
-	}
-	out := make([]RenameNote, 0, len(oldsByHash))
-	for h, olds := range oldsByHash {
-		news := newsByHash[h]
-		if len(olds) != 1 || len(news) != 1 {
-			continue // 一对多 / 多对一：歧义，不报（§7.5）
-		}
-		out = append(out, RenameNote{
-			Old:       olds[0],
-			New:       news[0],
-			LocalKept: kinds[olds[0]] == plan.KeepWarned,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Old < out[j].Old })
-	return out
 }
 
 // restoreRefused 把被拒路径（折叠拒绝、障碍物、删除路径逃逸）的 NewBase
