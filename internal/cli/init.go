@@ -145,12 +145,20 @@ func Init(
 		}
 	}
 
-	// 3. 求值 vars
+	// 3. 求值 vars（§6 第 3 步；交互采集见 §19.3）：优先级
+	//    --config > 交互回答 > 清单 default。全部交互都在任何内容写入之前。
 	provided := map[string]string{}
 	if configPath != "" {
 		if provided, err = LoadConfig(configPath); err != nil {
 			return err
 		}
+	}
+	answers, err := collectVars(compiled, provided, ps)
+	if err != nil {
+		return err
+	}
+	for k, v := range answers { // 仅并入非空回答；不注入 default、不注入空值
+		provided[k] = v
 	}
 	vars, err := render.EvalVars(compiled, provided)
 	if err != nil {

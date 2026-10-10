@@ -1,0 +1,103 @@
+# 交互式 init 的 vars 采集（§19.3；验收 #2/#3/#5–#8/#11/#12）。
+# --interactive 让管道下的 stdin 也能驱动提问（testscript 的 stdin 恒为管道）；
+# 提问顺序 = 清单声明顺序，回答不回显（§19.2.5），落地由生成内容与 state.vars
+# 双断言。模板同时声明 vars 与 post_init：让 --yes / --no-hooks 的「不改变 vars
+# 路径」成为非平凡断言（信任门与钩子确实存在、确实被这两种旗标短路）。
+# render: 规则是必须的：文件内容走 Go template 需清单声明 render.paths（§7.1
+# 阶段 5），否则 {{ … }} 按 ModeSubst 原样透传。
+
+# 轮 1：裸跑（无 --yes）——vars 三问 + 信任门一问，全部由 ans.txt 驱动
+stdin $WORK/ans.txt
+xinit-code init --template $WORK/tpl --interactive out1
+stdout 'exit=0'
+# V1/V3/V2 逐字且**连续**出现 ⇒ 顺序 = 声明顺序、无其它输出夹在中间
+stdout '产品显示名 \[Demo\]: 团队（可留空）: 组件名（必填）: '
+# silent 未声明 prompt ⇒ 零提示行（§19.3 提问条件）
+! stdout 'silent'
+# 信任门照旧，且第 4 行 y 被**同一个** reader 消费（§19.2.3 共享 reader）
+stdout '信任并执行？\[y/N\]'
+# 回答落地：生成内容（空答取 default、team 段为空）+ state.vars 逐字节
+cmp out1/greeting.txt $WORK/want.txt
+grep '"vars": \{\n    "component": "core",\n    "product": "MyApp",\n    "silent": "x",\n    "team": ""\n  \}' out1/.xinit/state.json
+# 未被问的文件与钩子照常
+exists out1/plain.txt
+exists out1/hook_out.txt
+
+# 轮 2：--yes（信任门短路 ⇒ ans.txt 末行 y 成为多余输入，被忽略）
+# 断言 vars 路径一字不变：同一回答流 ⇒ 提示逐字相同、生成内容与 state.json
+# 逐字节相同（轮 1/2 都走 Consent，整份状态可比）
+stdin $WORK/ans.txt
+xinit-code init --template $WORK/tpl --interactive --yes out2
+stdout 'exit=0'
+stdout '产品显示名 \[Demo\]: 团队（可留空）: 组件名（必填）: '
+! stdout '信任并执行？'
+cmp out1/greeting.txt out2/greeting.txt
+cmp out1/.xinit/state.json out2/.xinit/state.json
+
+# 轮 3：--no-hooks（信任门短路、钩子不执行）——vars 路径仍一字不变
+stdin $WORK/ans.txt
+xinit-code init --template $WORK/tpl --interactive --no-hooks out3
+stdout 'exit=0'
+stdout '产品显示名 \[Demo\]: 团队（可留空）: 组件名（必填）: '
+! stdout '模板钩子'
+cmp out1/greeting.txt out3/greeting.txt
+! exists out3/hook_out.txt
+# state.vars 逐字节相同（§19.7 #11）。整份 state.json 与轮 1/2 **不可比**：
+# --no-hooks 只记「已见」（值空串）而确认路径记模板版本（值 = 树 hash），
+# 见 hooks.Seen / hooks.Consent —— 差异仅限钩子记录，vars 段相同。
+grep '"vars": \{\n    "component": "core",\n    "product": "MyApp",\n    "silent": "x",\n    "team": ""\n  \}' out3/.xinit/state.json
+
+# 轮 4：--config 提供 product（第一档优先级，§19.7 #7）——该变量不问，答案流短一行
+stdin $WORK/ans4.txt
+xinit-code init --template $WORK/tpl --interactive --config $WORK/cfg.yml --yes out4
+stdout 'exit=0'
+! stdout '产品显示名'
+stdout '团队（可留空）: 组件名（必填）: '
+grep '"vars": \{\n    "component": "core",\n    "product": "FromCfg",\n    "silent": "x",\n    "team": ""\n  \}' out4/.xinit/state.json
+
+# 轮 0：不带 --interactive——答案流在磁盘上、stdin 可读，但没有会话就不读、不问
+# （§19.7 #3/#12）：prompt 被完全忽略，退化为既有 EvalVars 报错、零写
+stdin $WORK/ans.txt
+xinit-code init --template $WORK/tpl --yes out0
+stdout 'exit=1'
+! stdout '产品显示名'
+stderr '变量 "component" 是必填项，未提供且无默认值；请用 --config 指定'
+! exists out0/.xinit
+! exists out0/greeting.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+vars:
+  - name: product
+    prompt: 产品显示名
+    default: Demo
+  - name: team
+    prompt: 团队
+    default: ""
+  - name: component
+    prompt: 组件名
+    required: true
+    pattern: '^[a-z][a-z0-9-]*$'
+  - name: silent
+    default: x
+render:
+  - paths: ["greeting.txt"]
+hooks:
+  post_init: |
+    echo ok > hook_out.txt
+-- tpl/greeting.txt --
+{{ .product }}/{{ .team }}/{{ .component }}/{{ .silent }}
+-- tpl/plain.txt --
+plain
+-- ans.txt --
+MyApp
+
+core
+y
+-- ans4.txt --
+
+core
+-- cfg.yml --
+product: FromCfg
+-- want.txt --
+MyApp//core/x

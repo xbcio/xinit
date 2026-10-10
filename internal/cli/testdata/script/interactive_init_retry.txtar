@@ -1,0 +1,58 @@
+# vars 采集的重问与中止（§19.3 V4/V5/V6；验收 #9/#10）。
+# 被问变量只有 component（required + pattern），使三轮输入与断言自洽；
+# 重问无上限但每次消费一行输入，输入耗尽即转向 EOF 分支（不存在死循环）。
+
+# ① pattern 失败 ⇒ V4 文案 + 重问（提示行第二遍）；坏值不进结果
+stdin $WORK/ans-bad.txt
+xinit-code init --template $WORK/tpl --interactive out1
+stdout 'exit=0'
+stdout '组件名（必填）: 变量 "component" 的值 "Bad..Name" 不匹配 pattern "\^\[a-z\]\[a-z0-9-\]\*\$"；请重答（§19.3）'
+stdout '请重答（§19.3）\n组件名（必填）: '
+cmp out1/greeting.txt $WORK/want.txt
+grep '"component": "ok-name"' out1/.xinit/state.json
+! grep 'Bad\.\.Name' out1/.xinit/state.json
+
+# ② required 且无默认值：空答生效值为空 ⇒ V5 文案 + 重问
+stdin $WORK/ans-empty.txt
+xinit-code init --template $WORK/tpl --interactive out2
+stdout 'exit=0'
+stdout '组件名（必填）: 变量 "component" 是必填项且无默认值；请重答（§19.3）'
+stdout '请重答（§19.3）\n组件名（必填）: '
+cmp out2/greeting.txt $WORK/want.txt
+grep '"component": "ok-name"' out2/.xinit/state.json
+
+# ③ 输入耗尽 ⇒ V6 中止、退 1、**项目零写**（§19.3 EOF 表）
+# 不能断言 `! exists out3`：checkDestUsable 在提问之前的入口处已 MkdirAll 出
+# dest，空目录存在属既有路径（§6）—— 故断言口径是「无生成物」。
+stdin $WORK/ans-eof.txt
+xinit-code init --template $WORK/tpl --interactive out3
+stdout 'exit=1'
+stdout '组件名（必填）: 变量 "component" 的值 "MyApp" 不匹配 pattern'
+stdout '请重答（§19.3）\n组件名（必填）: '
+stderr '变量 "component" 的交互采集未完成：输入已结束（EOF）；本轮未做任何修改；非交互场景请用 --config 指定（§19.3）'
+exists out3
+! exists out3/.xinit
+! exists out3/greeting.txt
+[unix] exec sh -c 'test -z "$(ls -A out3)"'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+vars:
+  - name: component
+    prompt: 组件名
+    required: true
+    pattern: '^[a-z][a-z0-9-]*$'
+render:
+  - paths: ["greeting.txt"]
+-- tpl/greeting.txt --
+{{ .component }}
+-- ans-bad.txt --
+Bad..Name
+ok-name
+-- ans-empty.txt --
+
+ok-name
+-- ans-eof.txt --
+MyApp
+-- want.txt --
+ok-name
