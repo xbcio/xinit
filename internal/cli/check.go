@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/xbcio/xinit/internal/fsutil"
@@ -51,10 +52,11 @@ type checkLine struct {
 	Detail []string
 }
 
-// checkSection 是一个检查组。
+// checkSection 是一个检查组。Lines 存指针：fail/warn/skip 返回的行指针
+// 在同组后续追加（切片扩容）后仍有效，调用方可随时挂 Detail。
 type checkSection struct {
 	Title string
-	Lines []checkLine
+	Lines []*checkLine
 }
 
 // checkReport 是 §18.6 报告的数据；Print 只管排版。
@@ -89,8 +91,9 @@ func newCheckReport(source string) *checkReport {
 // add 追加一行并返回其指针（调用方可挂 Detail）。
 func (r *checkReport) add(sec int, k checkKind, format string, args ...any) *checkLine {
 	s := &r.Sections[sec]
-	s.Lines = append(s.Lines, checkLine{Kind: k, Text: fmt.Sprintf(format, args...)})
-	return &s.Lines[len(s.Lines)-1]
+	ln := &checkLine{Kind: k, Text: fmt.Sprintf(format, args...)}
+	s.Lines = append(s.Lines, ln)
+	return ln
 }
 
 func (r *checkReport) fail(sec int, format string, args ...any) *checkLine {
@@ -114,7 +117,7 @@ func (r *checkReport) Print(w io.Writer) {
 	for _, s := range r.Sections {
 		fmt.Fprintf(w, "%s:\n", s.Title)
 		for _, l := range s.Lines {
-			fmt.Fprintf(w, "  %-4s %s\n", l.Kind, l.Text)
+			fmt.Fprintf(w, "  %-5s %s\n", l.Kind, l.Text)
 			for _, d := range l.Detail {
 				fmt.Fprintf(w, "  %s\n", d)
 			}
@@ -178,6 +181,17 @@ func listBaseTree(base string) (regular map[string]baseFile, nonRegular map[stri
 	return regular, nonRegular, nil
 }
 
+// checkEscapePath 渲染 base/%s 形态消息里的路径：含控制字符（< 0x20 或
+// 0x7F）时返回 strconv.Quote 形式，避免换行把一条检查行拆成两行；否则原样。
+func checkEscapePath(p string) string {
+	for i := 0; i < len(p); i++ {
+		if p[i] < 0x20 || p[i] == 0x7f {
+			return strconv.Quote(p)
+		}
+	}
+	return p
+}
+
 // validCheckKey 判定 files 键是否为规范相对路径（§4.3）：非空、非绝对、
 // 按 / 分段无空/"."/".." 段、path.Clean 不变。state.Load 不查，check 补全。
 func validCheckKey(p string) bool {
@@ -195,10 +209,6 @@ func validCheckKey(p string) bool {
 // checkGroupA 执行 A1–A10（§18.2）。返回的错误只来自 IO 意外；
 // 判定结果一律进报告。
 func checkGroupA(r *checkReport, projectDir string, st *state.State) error {
-	regular, nonRegular, err := listBaseTree(state.BaseDir(projectDir))
-	if err != nil {
-		return err
-	}
 	keys := sortedStringKeys(st.Files)
 
 	// A1：非法键仅报 A1，不参与 A2–A9。
@@ -231,32 +241,71 @@ func checkGroupA(r *checkReport, projectDir string, st *state.State) error {
 		}
 	}
 
+	// base 根异常（不存在 / 非目录）：报一条根因，跳过 A4–A9 的表驱动判定
+	// ——逐键报缺失只会淹掉真因（§18.2 A4 注）。
+	base := state.BaseDir(projectDir)
+	info, err := os.Lstat(base)
+	switch {
+	case os.IsNotExist(err):
+		r.fail(secA, "base 树不可用：.xinit/base %s（全部记账路径按缺失处理，§5.1）", "不存在")
+	case err != nil:
+		return err
+	case !info.IsDir():
+		r.fail(secA, "base 树不可用：.xinit/base %s（全部记账路径按缺失处理，§5.1）",
+			fmt.Sprintf("不是目录（symlink 等；类型 %s）", info.Mode().Type()))
+	default:
+		if err := checkBaseTables(r, base, st, legal, legalSet); err != nil {
+			return err
+		}
+	}
+
+	// A10
+	if k := st.Template.Kind; k != template.KindGit.String() && k != template.KindDir.String() {
+		r.fail(secA, "template.kind %q 非法（§4.2）", k)
+	}
+	if st.Template.Source == "" {
+		r.fail(secA, "template.source 为空（§4.2）")
+	}
+	if st.Template.Commit == "" {
+		r.fail(secA, "template.commit 为空（§4.2）")
+	}
+	return nil
+}
+
+// checkBaseTables 执行 A4–A9：只基于一次 listBaseTree 的两张表查，
+// 不按键拼路径读盘（§18.2）。legal 是通过 A1 的键（已排序）。
+func checkBaseTables(r *checkReport, base string, st *state.State, legal []string, legalSet map[string]bool) error {
+	regular, nonRegular, err := listBaseTree(base)
+	if err != nil {
+		return err
+	}
+
 	// A4：只查 regular 表；nonRegular 中的键由 A6 独占报告。
 	for _, p := range legal {
 		f, ok := regular[p]
 		if !ok {
 			if _, nr := nonRegular[p]; !nr {
-				r.fail(secA, "base/%s 缺失（§5.1——update 将按 §5.2 处理）", p)
+				r.fail(secA, "base/%s 缺失（§5.1——update 将按 §5.2 处理）", checkEscapePath(p))
 			}
 			continue
 		}
 		fst := st.Files[p]
 		if got := fsutil.CompareHash(f.content, fst.Binary); got != fst.Hash {
 			r.fail(secA, "base/%s 与记账 hash 不符（got %s, want %s；§5.1——update 将按 §5.2 处理）",
-				p, got, fst.Hash)
+				checkEscapePath(p), got, fst.Hash)
 		}
 	}
 
 	// A5
 	for _, p := range sortedStringKeys(regular) {
 		if !legalSet[p] {
-			r.fail(secA, "base/%s 不在记账中（残片；update 将清除）", p)
+			r.fail(secA, "base/%s 不在记账中（残片；update 将清除）", checkEscapePath(p))
 		}
 	}
 
 	// A6
 	for _, p := range sortedStringKeys(nonRegular) {
-		r.fail(secA, "base/%s 不是普通文件（%s）", p, nonRegular[p])
+		r.fail(secA, "base/%s 不是普通文件（%s）", checkEscapePath(p), nonRegular[p])
 	}
 
 	// A7–A9：记录位与 base 内容/mode 对照，仅对 regular 中的键。
@@ -281,15 +330,5 @@ func checkGroupA(r *checkReport, projectDir string, st *state.State) error {
 		}
 	}
 
-	// A10
-	if k := st.Template.Kind; k != template.KindGit.String() && k != template.KindDir.String() {
-		r.fail(secA, "template.kind %q 非法（§4.2）", k)
-	}
-	if st.Template.Source == "" {
-		r.fail(secA, "template.source 为空（§4.2）")
-	}
-	if st.Template.Commit == "" {
-		r.fail(secA, "template.commit 为空（§4.2）")
-	}
 	return nil
 }

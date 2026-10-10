@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -48,19 +50,32 @@ func TestPrintFailsSummary(t *testing.T) {
 	r.Print(&buf)
 	want := "xinit check: src\n" +
 		"A 状态与 base 树（§4.3 / §5.1 / §5.2）:\n" +
-		"  FAIL base/a.txt 缺失\n" +
+		"  FAIL  base/a.txt 缺失\n" +
 		"  附加行 x\n" +
 		"B 冲突残留（§10.4）:\n" +
 		"C 配置与 git 契约（§3.2 / §5.5）:\n" +
-		"  warn w\n" +
+		"  warn  w\n" +
 		"D 模板面（§5.2 / §7.6 / §11.4）:\n" +
-		"  skip s\n" +
+		"  skip  s\n" +
 		"检查汇总: 1 项失败、1 项警告、1 项跳过（退出码 6）\n"
 	if got := buf.String(); got != want {
 		t.Errorf("输出:\n%s\nwant:\n%s", got, want)
 	}
-	if !strings.Contains(buf.String(), "（退出码 6）") {
-		t.Error("汇总行应带退出码 6")
+}
+
+func TestCheckLinePointerStable(t *testing.T) {
+	// 回归（T1 评审 Important-1）：同组先追加两行、再给第一行挂 Detail——
+	// 切片扩容不得让早先返回的行指针失效。
+	r := newCheckReport("src")
+	first := r.fail(secB, "one")
+	for i := 0; i < 8; i++ {
+		r.fail(secB, "more %d", i)
+	}
+	first.Detail = []string{"detail-of-one"}
+	var buf bytes.Buffer
+	r.Print(&buf)
+	if !strings.Contains(buf.String(), "  FAIL  one\n  detail-of-one\n") {
+		t.Errorf("第一行的 Detail 丢失:\n%s", buf.String())
 	}
 }
 
@@ -73,6 +88,10 @@ func writeStateAndBase(t *testing.T, files map[string][]byte, mutate func(*state
 	st := state.New(EngineVersion)
 	st.Template = state.TemplateRef{Source: "https://example.com/t.git", Kind: "git", Revision: "v1.0.0", Commit: "abc123"}
 	base := state.BaseDir(dir)
+	// base 目录恒建（空模板也有 base 根）：根缺失是单独的注入场景。
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for p, c := range files {
 		bin := fsutil.IsBinary(c)
 		st.Files[p] = state.FileState{
@@ -144,6 +163,9 @@ func TestGroupAValidKey(t *testing.T) {
 		".":       false,
 		"a/..":    false,
 		"x/":      false,
+		"./a":     false,
+		"a/b/":    false,
+		"a/../b":  false,
 	} {
 		if got := validCheckKey(p); got != want {
 			t.Errorf("validCheckKey(%q) = %v, want %v", p, got, want)
@@ -165,13 +187,99 @@ func TestGroupAClean(t *testing.T) {
 }
 
 func TestGroupAMissingBaseDir(t *testing.T) {
-	// base 目录整棵缺失：不是 IO 错误，每个键报缺失。
-	dir, st := writeStateAndBase(t, map[string][]byte{"a.txt": []byte("a\n")}, nil)
+	// base 目录整棵缺失：一条根因行，不逐键报缺失（§18.2 A4 注）。
+	dir, st := writeStateAndBase(t, map[string][]byte{
+		"a.txt": []byte("a\n"),
+		"b.txt": []byte("b\n"),
+	}, nil)
 	if err := os.RemoveAll(state.BaseDir(dir)); err != nil {
 		t.Fatal(err)
 	}
 	_, lines := runGroupA(t, dir, st)
-	wantLines(t, lines, 1, "base/a.txt 缺失（§5.1")
+	wantLines(t, lines, 1, "base 树不可用：.xinit/base 不存在（全部记账路径按缺失处理，§5.1）")
+}
+
+func TestGroupABaseRootSymlink(t *testing.T) {
+	// base 根被换成指向真实目录的符号链接：一条根因行（含「不是目录」），
+	// 无逐键缺失；A1–A3 与 A10 照常。
+	dir, st := writeStateAndBase(t, map[string][]byte{"a.txt": []byte("a\n")}, func(s *state.State) {
+		s.Template.Commit = ""
+	})
+	base := state.BaseDir(dir)
+	real := filepath.Join(dir, "real-base")
+	if err := os.Rename(base, real); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, base); err != nil {
+		t.Fatal(err)
+	}
+	_, lines := runGroupA(t, dir, st)
+	wantLines(t, lines, 2,
+		"base 树不可用：.xinit/base 不是目录（symlink 等",
+		"template.commit 为空（§4.2）")
+	for _, l := range lines {
+		if strings.Contains(l, "缺失（§5.1") {
+			t.Errorf("根因已报，不应逐键报缺失: %s", l)
+		}
+	}
+}
+
+func TestGroupAResidueIgnoresIllegalKey(t *testing.T) {
+	// A5 只收合法键：非法键 a/./b.txt 不能让 base 中的 a/b.txt 逃过残片判定。
+	dir, st := writeStateAndBase(t, nil, func(s *state.State) {
+		s.Files["a/./b.txt"] = state.FileState{Src: "b.txt", Hash: "sha256:00"}
+	})
+	base := state.BaseDir(dir)
+	if err := os.MkdirAll(filepath.Join(base, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "a", "b.txt"), []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, lines := runGroupA(t, dir, st)
+	wantLines(t, lines, 2,
+		`files 键 "a/./b.txt" 不是规范的相对路径（§4.3）`,
+		"base/a/b.txt 不在记账中（残片")
+}
+
+func TestGroupAEscapesControlChars(t *testing.T) {
+	// 合法键含换行（通过 A1：不含坏段）：base/%s 形态的消息不得裂行。
+	dir, st := writeStateAndBase(t, map[string][]byte{"ok.txt": []byte("o\n")}, func(s *state.State) {
+		s.Files["x\ny"] = state.FileState{Src: "x", Hash: "sha256:00"}
+	})
+	r, lines := runGroupA(t, dir, st)
+	wantLines(t, lines, 1, `base/"x\ny" 缺失（§5.1`)
+	var buf bytes.Buffer
+	r.Print(&buf)
+	for _, l := range strings.Split(buf.String(), "\n") {
+		if strings.HasPrefix(l, "y ") {
+			t.Errorf("输出裂行:\n%s", buf.String())
+		}
+	}
+	if got := checkEscapePath("a/b.txt"); got != "a/b.txt" {
+		t.Errorf("普通路径应原样: %q", got)
+	}
+	if got := checkEscapePath("a\x7fb"); got != `"a\x7fb"` {
+		t.Errorf("DEL 应转义: %q", got)
+	}
+}
+
+func TestGroupANonRegularFIFO(t *testing.T) {
+	// A6 不止符号链接：FIFO 同样报非普通文件。用 mkfifo 命令而非
+	// syscall.Mkfifo——后者在 windows 上不存在，会让本文件在该平台编译失败。
+	if runtime.GOOS == "windows" {
+		t.Skip("windows 无 FIFO")
+	}
+	mkfifo, err := exec.LookPath("mkfifo")
+	if err != nil {
+		t.Skip("无 mkfifo 命令")
+	}
+	dir, st := writeStateAndBase(t, map[string][]byte{"a.txt": []byte("a\n")}, nil)
+	if out, err := exec.Command(mkfifo, filepath.Join(state.BaseDir(dir), "pipe")).CombinedOutput(); err != nil {
+		t.Fatalf("mkfifo: %v: %s", err, out)
+	}
+	_, lines := runGroupA(t, dir, st)
+	wantLines(t, lines, 1, "base/pipe 不是普通文件（p")
 }
 
 func TestGroupAKeyIllegal(t *testing.T) {
@@ -194,20 +302,11 @@ func TestGroupAFoldCollision(t *testing.T) {
 		s.Files["A.txt"] = s.Files["a.txt"]
 	})
 	_, lines := runGroupA(t, dir, st)
-	// 大小写不敏感文件系统上 base/A.txt 读得到（A4 无行）；敏感文件系统上
-	// A4 连带一行缺失——接受（§18.9 验收 6），只断言折叠行存在且只有一条。
-	n := 0
-	for _, l := range lines {
-		if strings.Contains(l, "折叠等价冲突（§9.3）") {
-			n++
-			if !strings.Contains(l, `"A.txt" 与 "a.txt"`) {
-				t.Errorf("折叠行键序: %s", l)
-			}
-		}
-	}
-	if n != 1 {
-		t.Errorf("折叠行 %d 条, want 1:\n%s", n, strings.Join(lines, "\n"))
-	}
+	// A4 按真实文件名查表（base 里只有 a.txt），注入场景必连带一行
+	// base/A.txt 缺失——与文件系统大小写敏感性无关（§18.9 验收 6 接受）。
+	wantLines(t, lines, 2,
+		`"A.txt" 与 "a.txt" 折叠等价冲突（§9.3）`,
+		"base/A.txt 缺失（§5.1")
 }
 
 func TestGroupASrcEmpty(t *testing.T) {
