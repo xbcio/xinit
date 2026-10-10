@@ -1,0 +1,93 @@
+# 冲突轮交互：保留本地（默认）与部分选择（§19.4.4；验收 #14/#15/#18）。
+# 三个独立工程，避免上一轮的 conflicts/ 让本轮落进第 4 步早退（阻塞轮不提问，
+# §19.4.1 第 1 条）——那正是「回答 n 之后没有第二次询问」的机制本身。
+
+# ── 夹具：模板 v1（a.txt + 二进制 b.bin）─────────────────────────────
+# b.bin 含 NUL ⇒ fsutil.IsBinary 判真、行 6 走 ConflictBinary（无三方合并）
+exec sh -c 'printf "B\000v1" > "$WORK/tpl2/b.bin"'
+exec sh -c 'printf "B\000v2" > "$WORK/new-b.bin" && printf "B\000local" > "$WORK/local-b.bin"'
+xinit init --template $WORK/tpl1 --yes p1
+xinit init --template $WORK/tpl2 --yes p2
+xinit init --template $WORK/tpl2 --yes p3
+# 模板双侧都改（v1 → v2），三个工程各自把 a.txt / b.bin 改成本地版
+cp $WORK/new-a.txt $WORK/tpl1/a.txt
+cp $WORK/new-a.txt $WORK/tpl2/a.txt
+cp $WORK/new-b.bin $WORK/tpl2/b.bin
+cp $WORK/local-a.txt p1/a.txt
+cp $WORK/local-a.txt p2/a.txt
+cp $WORK/local-b.bin p2/b.bin
+cp $WORK/local-a.txt p3/a.txt
+cp $WORK/local-b.bin p3/b.bin
+
+# ════ ① 直接回车 = 保留本地：报告与不带 --interactive 的同场景逐条一致 ════
+cd p1
+stdin $WORK/enter.txt
+xinit-code update --interactive
+stdout '交互式冲突解决（1 条，§19.4）：逐条选择'
+stdout 'a\.txt（merge-conflict）改用模板版？\[y/N\]'
+# 回车 ≠ EOF：空答被读成「保留本地」，只有输入真的耗尽才打 C3 —— 这条负断言
+# 让本场景不会退化成「enter.txt 是空文件」也能通过（§19.2.3 空答/EOF 之分）
+! stdout '输入已结束（EOF）'
+stdout 'merge-conflict\s+a\.txt'
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 1'
+stdout '出路一'
+stdout '出路二'
+stdout '参考：模板新内容已写到 \.xinit/conflicts/<路径>。$'
+stdout 'exit=2'
+cmp a.txt $WORK/local-a.txt
+cmp .xinit/conflicts/a.txt $WORK/new-a.txt
+cd ..
+
+# ════ ② 部分组合（y 然后 n）：a.txt 本轮收敛、b.bin 照旧待解决 ════
+cd p2
+stdin $WORK/yes-no.txt
+xinit-code update --interactive
+stdout '交互式冲突解决（2 条，§19.4）：逐条选择'
+# 两条提问**相邻**打印 ⇒ 字节序 + kindLabel 拼写 + 回答不回显（§19.2.5）
+stdout 'a\.txt（merge-conflict）改用模板版？\[y/N\] b\.bin（conflict-binary）改用模板版？\[y/N\] '
+stdout 'write\s+a\.txt'
+stdout 'conflict\s+b\.bin'
+# 报告行 = 「accept?」+ 对齐空格 + 可复制的 accept 命令（单引号是 shell 字面量）
+stdout 'accept\?\s+xinit update --accept .b\.bin.'
+stdout '汇总: 写入 1、删除 0、chmod 0、冲突 1'
+stdout 'exit=2'
+# y 的路径：本轮收敛（工作树 = 模板版、conflicts/ 从未写入）
+cmp a.txt $WORK/new-a.txt
+! exists .xinit/conflicts/a.txt
+# n 的路径：磁盘零变化，模板版进 conflicts/
+cmp b.bin $WORK/local-b.bin
+cmp .xinit/conflicts/b.bin $WORK/new-b.bin
+cd ..
+
+# ════ ③ 输入不足（两条冲突只给一行 y）：C3 打印一次、其余保留本地 ════
+cd p3
+stdin $WORK/one-y.txt
+xinit-code update --interactive
+stdout '输入已结束（EOF）：其余 1 条冲突按「保留本地」处理（§19.4）。'
+stdout 'write\s+a\.txt'
+stdout 'conflict\s+b\.bin'
+stdout '汇总: 写入 1、删除 0、chmod 0、冲突 1'
+stdout 'exit=2'
+cmp a.txt $WORK/new-a.txt
+cmp b.bin $WORK/local-b.bin
+cmp .xinit/conflicts/b.bin $WORK/new-b.bin
+
+-- tpl1/xinit.yml --
+manifest_version: 1
+-- tpl1/a.txt --
+a1
+-- tpl2/xinit.yml --
+manifest_version: 1
+-- tpl2/a.txt --
+a1
+-- new-a.txt --
+a2
+-- local-a.txt --
+local
+-- enter.txt --
+
+-- yes-no.txt --
+y
+n
+-- one-y.txt --
+y

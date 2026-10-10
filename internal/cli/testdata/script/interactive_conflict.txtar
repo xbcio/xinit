@@ -1,0 +1,48 @@
+# 冲突轮交互：改用模板版（§19.4；验收 #13/#16）。
+# dir 源、无钩子 ⇒ 无信任门，问答流干净。答 y = 走正常写入通道（备份 + 原子写 +
+# base 推进）：本轮即收敛、conflicts/ 不留条目、退出码 0。
+# 模板新内容本轮尚未展示（C1 逐字声明）——故用「磁盘 = 模板版 + base 前移 +
+# 本地原内容进 .xinit/backup/」三处磁盘断言兜住 take-theirs 的等价性（§19.4.2）。
+
+xinit init --template $WORK/tpl --yes out
+
+# 双方都改 a.txt（模板 v1 → v2；本地 v1 → local）
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+cp $WORK/local-a.txt $WORK/out/a.txt
+
+cd out
+
+# C1（四行整块，%d = 可问条数 1）+ C2（路径与 kindLabel 同一拼写）逐字
+cp $WORK/yes.txt $WORK/ans.txt
+stdin $WORK/ans.txt
+xinit-code update --interactive
+stdout '交互式冲突解决（1 条，§19.4）：逐条选择，回答不被保存（效果即本轮的正常写入与 base 推进）。'
+stdout '  y / yes = 用模板版覆盖本地（模板新内容本轮尚未展示；原内容先备份到 \.xinit/backup/，本轮即收敛）。'
+stdout '  其他回答（含直接回车）= 保留本地（与现状一致：模板版写入 \.xinit/conflicts/<路径>，本轮退 2）。'
+stdout '  想先查看模板新内容：回答 n 或直接回车'
+stdout 'a\.txt（merge-conflict）改用模板版？\[y/N\]'
+# 被改写路径以既有 write 标签 + C4 尾注出现在报告里（§19.4.3）
+stdout 'write\s+a\.txt（交互选择「改用模板版」：本地版本已备份到 \.xinit/backup/（§19.4））'
+stdout '汇总: 写入 1、删除 0、chmod 0、冲突 0'
+stdout 'exit=0'
+# 磁盘三处：工作树 = 模板版、base 前移、conflicts/ 无该路径、备份留住本地原内容
+cmp a.txt $WORK/new-a.txt
+cmp .xinit/base/a.txt $WORK/new-a.txt
+! exists .xinit/conflicts/a.txt
+exists .xinit/backup
+exec sh -c 'cmp .xinit/backup/*/a.txt "$WORK/local-a.txt"'
+# 幂等（§19.7 #20）：收敛后重跑全 Noop
+xinit-code update
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0'
+stdout 'exit=0'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- new-a.txt --
+a2
+-- local-a.txt --
+local
+-- yes.txt --
+y

@@ -318,11 +318,7 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	}
 
 	// --accept 可用集：冲突全集里非 ConflictKind 的路径（打 accept 命令用）。
-	for _, p := range rep.Conflicted {
-		if a := findAction(actions, p); a != nil && a.Kind != plan.ConflictKind {
-			rep.Acceptable = append(rep.Acceptable, p)
-		}
-	}
+	rep.Acceptable = acceptableConflicts(rep.Conflicted, actions)
 
 	// 9. 第 4 步：未解决冲突检查（conflicts/ 现有条目 ∩ 本轮冲突集合）
 	existing, err := listConflicts(projectDir)
@@ -339,6 +335,23 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		// 顶部的版本行必须跟 AR 注解，否则与下方待解决轮的报告自相矛盾。
 		rep.Pending = true
 		return rep, nil // 不执行任何写操作、不推进任何状态（§10.2 第 4 步）
+	}
+
+	// 9c. 第 4b 步：交互式冲突解决（§10.2 第 4b 步、§19.4）——仅可交互时，
+	// 落在第 4 步之后、组装变更集之前，且在写任何内容之前。--dry-run / diff
+	// 恒不提问（只读预测）。
+	if !o.DryRun && ps != nil {
+		taken, err := promptConflicts(ps, actions, conflicted, conflicts, baseSnap.Metas, oursSnap, theirsSnap, theirsRendered)
+		if err != nil {
+			return nil, err
+		}
+		if taken > 0 {
+			// 派生字段与两个 map 同步：按与创建时逐字相同的表达式重算
+			// （不逐字段手工增删，避免静默不一致）。
+			rep.Conflicted = sortedStringKeys(conflicted)
+			rep.ConflictFiles = sortedStringKeys(conflicts)
+			rep.Acceptable = acceptableConflicts(rep.Conflicted, actions)
+		}
 	}
 
 	// 10. 组装变更集（第 8 步的输入）
