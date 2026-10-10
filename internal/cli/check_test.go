@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,7 +143,7 @@ func runGroupA(t *testing.T, dir string, st *state.State) (*checkReport, []strin
 func wantLines(t *testing.T, lines []string, n int, anchors ...string) {
 	t.Helper()
 	if len(lines) != n {
-		t.Errorf("A 组 %d 行，want %d:\n%s", len(lines), n, strings.Join(lines, "\n"))
+		t.Errorf("行数 %d 不符，want %d:\n%s", len(lines), n, strings.Join(lines, "\n"))
 	}
 	for _, a := range anchors {
 		if !slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, a) }) {
@@ -494,17 +495,20 @@ func TestGroupBConflicts(t *testing.T) {
 
 func TestGroupCPruneBadGlob(t *testing.T) {
 	dir, st := writeStateAndBase(t, nil, nil)
-	writeFilesT(t, dir, map[string]string{".xinit/prune.txt": "# c\nok/*.txt\na/[\n"})
+	// 两个非法条目夹一个合法条目：逐条定位，每条非法各报一行（§18.4）。
+	writeFilesT(t, dir, map[string]string{".xinit/prune.txt": "# c\na/[\nok/*.txt\nb/[\n"})
 	r, lines := runGroup(t, checkGroupC, secC, dir, st)
 	texts := lineTexts(lines)
-	if !slices.ContainsFunc(texts, func(s string) bool {
-		return strings.HasPrefix(s, "FAIL ") && strings.Contains(s, `prune.txt 条目 "a/["`) &&
-			strings.Contains(s, "不是合法 glob") && strings.Contains(s, "§3.2")
-	}) {
-		t.Errorf("缺 C1 FAIL 行: %v", texts)
+	for _, bad := range []string{"a/[", "b/["} {
+		if !slices.ContainsFunc(texts, func(s string) bool {
+			return strings.HasPrefix(s, "FAIL ") && strings.Contains(s, fmt.Sprintf("prune.txt 条目 %q", bad)) &&
+				strings.Contains(s, "不是合法 glob") && strings.Contains(s, "§3.2")
+		}) {
+			t.Errorf("缺 %q 的 C1 FAIL 行: %v", bad, texts)
+		}
 	}
-	if r.Fails != 1 {
-		t.Errorf("Fails = %d, want 1（合法条目不报）", r.Fails)
+	if r.Fails != 2 {
+		t.Errorf("Fails = %d, want 2（逐条报、合法条目不报）", r.Fails)
 	}
 }
 
@@ -534,16 +538,34 @@ func TestGroupCTracked(t *testing.T) {
 }
 
 func TestGroupCExcludeMissing(t *testing.T) {
-	dir, st := writeStateAndBase(t, nil, nil)
-	runGitT(t, dir, "init", "-q")
-	r, lines := runGroup(t, checkGroupC, secC, dir, st)
-	texts := lineTexts(lines)
-	want := "warn .git/info/exclude 缺少 .xinit/ 行（init/update 会自动补写；补上可避免 git add -A 误纳状态目录，§5.5）"
-	if !slices.Equal(texts, []string{want}) {
-		t.Errorf("C 组 = %v, want [%s]", texts, want)
-	}
-	if r.Fails != 0 {
-		t.Errorf("Fails = %d, want 0", r.Fails)
+	// present：git init 按默认模板建出 exclude、但无 .xinit/ 行；
+	// absent：exclude 文件不存在（init.templateDir 为空 / 用户删过）——NotExist 容忍。
+	for _, c := range []struct {
+		name   string
+		remove bool
+	}{{"present", false}, {"absent", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			dir, st := writeStateAndBase(t, nil, nil)
+			runGitT(t, dir, "init", "-q")
+			if c.remove {
+				p, ok := state.GitExcludePath(dir)
+				if !ok {
+					t.Fatal("GitExcludePath 定位失败")
+				}
+				if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+			}
+			r, lines := runGroup(t, checkGroupC, secC, dir, st)
+			texts := lineTexts(lines)
+			want := "warn .git/info/exclude 缺少 .xinit/ 行（init/update 会自动补写；补上可避免 git add -A 误纳状态目录，§5.5）"
+			if !slices.Equal(texts, []string{want}) {
+				t.Errorf("C 组 = %v, want [%s]", texts, want)
+			}
+			if r.Fails != 0 {
+				t.Errorf("Fails = %d, want 0", r.Fails)
+			}
+		})
 	}
 }
 
