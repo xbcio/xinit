@@ -1,0 +1,120 @@
+# check 端到端（§18.9 验收 4–8/10/14/17）：A 组逐项注入（A1/A2/A3/A5/A6/A7–A10）、
+# C1 非法 prune glob、D2 engine_version 漂移。每个场景从同一份干净 state.json
+# 起步（cp 复原），FAIL 场景断言退 6、仅 warn 场景断言退 0。
+# state.json 注入用 `exec sed ... ` + `cp stdout`：只用基本 s 命令与地址区间
+# （BSD/GNU sed 同义），不依赖 python/jq。
+
+xinit init --template $WORK/tpl --yes out
+exec git init -q $WORK/out
+
+cd $WORK/out
+xinit-code update
+stdout 'exit=0'
+cp .xinit/state.json $WORK/pristine.json
+
+# ── 场景 0（验收 4 反例）：含子目录的干净项目 → A6 无行、退 0 ──
+xinit-code check
+! stdout '不是普通文件'
+! stdout 'FAIL'
+stdout '^检查汇总: 通过（0 项失败、0 项警告、2 项跳过）$'
+stdout 'exit=0'
+
+# ── 场景 1（验收 4）：base 残片（A5）+ 符号链接（A6）→ 退 6 ──
+cp $WORK/stray.txt .xinit/base/stray.txt
+symlink .xinit/base/link.txt -> a.txt
+xinit-code check
+stdout '^  FAIL  base/stray\.txt 不在记账中（残片；update 将清除）$'
+stdout '^  FAIL  base/link\.txt 不是普通文件（L'
+# 符号链接只由 A6 报告：不被当成残片
+! stdout 'base/link\.txt 不在记账中'
+stdout '^检查汇总: 2 项失败、0 项警告、2 项跳过（退出码 6）$'
+stdout 'exit=6'
+! stderr .
+rm .xinit/base/stray.txt
+rm .xinit/base/link.txt
+
+# ── 场景 2（验收 5）：files 键注入 ../ 与绝对路径，均指向项目外哨兵 → A1 ──
+# 键 ../../../sentinel.txt 相对 .xinit/base 正好落到 $WORK/sentinel.txt；绝对键
+# 直接是哨兵路径。哨兵内容与记账 hash 不符——若被读取必出「hash 不符」行。
+exec sed -e 's|"a.txt": {|"../../../sentinel.txt": {|' -e 's|"sub/b.txt": {|"'$WORK'/sentinel.txt": {|' $WORK/pristine.json
+cp stdout .xinit/state.json
+xinit-code check
+stdout '^  FAIL  files 键 "\.\./\.\./\.\./sentinel\.txt" 不是规范的相对路径（§4\.3）$'
+stdout '^  FAIL  files 键 "/.*/sentinel\.txt" 不是规范的相对路径（§4\.3）$'
+# 非法键不参与 A4–A9：不读 base 外文件
+! stdout 'hash 不符'
+! stdout 'sentinel\.txt 缺失'
+! stdout 'files\[".*sentinel'
+# 原记账路径改名后 base 中的两份成为残片（A5 连带，接受）
+stdout '^  FAIL  base/a\.txt 不在记账中'
+stdout '^  FAIL  base/sub/b\.txt 不在记账中'
+stdout 'exit=6'
+cp $WORK/pristine.json .xinit/state.json
+
+# ── 场景 3（验收 6）：折叠碰撞 A.txt / a.txt → A2 ──
+exec sed -e 's|"sub/b.txt": {|"A.txt": {|' $WORK/pristine.json
+cp stdout .xinit/state.json
+xinit-code check
+stdout '^  FAIL  "A\.txt" 与 "a\.txt" 折叠等价冲突（§9\.3）$'
+stdout 'exit=6'
+cp $WORK/pristine.json .xinit/state.json
+
+# ── 场景 4（验收 7/8）：src 置空（A3）+ binary/mixed_eol/exec 位翻转（A7–A9）──
+exec sed -e '/"a.txt": {/,/}/ s/"binary": false/"binary": true/' -e '/"a.txt": {/,/}/ s/"mixed_eol": false/"mixed_eol": true/' -e '/"a.txt": {/,/}/ s/"exec": false/"exec": true/' -e 's|"src": "sub/b.txt"|"src": ""|' $WORK/pristine.json
+cp stdout .xinit/state.json
+xinit-code check
+stdout '^  FAIL  files\["sub/b\.txt"\]\.src 为空（§4\.3）$'
+stdout '^  FAIL  files\["a\.txt"\]\.binary=true 但 base 内容是 false$'
+stdout '^  FAIL  files\["a\.txt"\]\.mixed_eol=true 但 base 内容是 false$'
+stdout '^  FAIL  files\["a\.txt"\]\.exec=true 但 base 文件无可执行位$'
+# binary 位翻转改变 hash 口径（CompareHash 按记录位）——A4 连带与否不作断言
+stdout 'exit=6'
+cp $WORK/pristine.json .xinit/state.json
+
+# ── 场景 5（验收 8）：template 字段非法（kind/source/commit）→ A10 三行；
+# D1/D3 合并为一条 skip 指向 A10（§18.7）──
+exec sed -e 's|"kind": "dir"|"kind": "bogus"|' -e 's|"source": ".*"|"source": ""|' -e 's|"commit": ".*"|"commit": ""|' $WORK/pristine.json
+cp stdout .xinit/state.json
+xinit-code check
+stdout '^  FAIL  template\.kind "bogus" 非法（§4\.2）$'
+stdout '^  FAIL  template\.source 为空（§4\.2）$'
+stdout '^  FAIL  template\.commit 为空（§4\.2）$'
+stdout '^  skip  template 字段非法（见 A10）：跳过模板面检查$'
+! stdout 'dir 源'
+stdout '^检查汇总: 3 项失败、0 项警告、1 项跳过（退出码 6）$'
+stdout 'exit=6'
+cp $WORK/pristine.json .xinit/state.json
+
+# ── 场景 6（验收 10）：prune.txt 非法 glob → C1 逐条定位（合法条目不报）──
+cp $WORK/prune-bad.txt .xinit/prune.txt
+xinit-code check
+stdout '^  FAIL  prune\.txt 条目 "a\[" 不是合法 glob：.*（§3\.2）$'
+! stdout '"ok\.txt"'
+stdout '^检查汇总: 1 项失败、0 项警告、2 项跳过（退出码 6）$'
+stdout 'exit=6'
+rm .xinit/prune.txt
+
+# ── 场景 7（验收 14/17）：engine_version 不一致 → D2 warn、仅 warn → 退 0 ──
+exec sed -e 's|"engine_version": ".*"|"engine_version": "0.0.0-old"|' $WORK/pristine.json
+cp stdout .xinit/state.json
+xinit-code check
+stdout '^  warn  engine_version 记录 0\.0\.0-old，当前 \S+——渲染结果可能有漂移（§7\.6）$'
+! stdout 'FAIL'
+stdout '^检查汇总: 通过（0 项失败、1 项警告、2 项跳过）$'
+stdout 'exit=0'
+! stderr .
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- tpl/sub/b.txt --
+b1
+-- stray.txt --
+stray
+-- sentinel.txt --
+outside-the-project
+-- prune-bad.txt --
+# 注释与空行由 ReadPrune 过滤
+ok.txt
+a[

@@ -1,0 +1,112 @@
+# check 端到端（§18.9 验收 13/15/17）：D 组模板面（git 源，裸仓走镜像路径）。
+#   ① 镜像缺失 → D1/D3 合并一条 skip、退 0、零 clone（缓存根不被创建）；--fetch 同样降级；
+#   ② 本地镜像有更高 tag → D1 warn、退 0；镜像未刷新时新 tag 不可见；
+#   ③ --fetch 刷新后 warn 计数随之变化、退出码不变；
+#   ④ --fetch 网络失败（源不可达、镜像已存在）→ stderr 警告、按本地缓存继续；
+#   ⑤ D3：记录的 commit 在模板源中取不到 → warn、退 0。
+# 缓存根：darwin 走 $HOME/Library/Caches、Linux 走 $XDG_CACHE_HOME——两者同时隔离。
+
+env GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=x@x GIT_COMMITTER_NAME=x GIT_COMMITTER_EMAIL=x@x
+env GIT_CEILING_DIRECTORIES=$WORK
+env HOME=$WORK/home
+env XDG_CACHE_HOME=$WORK/home/xdg
+mkdir $WORK/home
+
+# 模板：工作仓打 v1.0.0 / v1.1.0，克隆为裸仓（裸仓 ⇒ repoDirFor 走镜像）
+exec git -c init.defaultBranch=main init -q $WORK/w
+cp $WORK/xinit.yml $WORK/w/xinit.yml
+cp $WORK/v1.txt $WORK/w/a.txt
+exec git -C $WORK/w add -A
+exec git -C $WORK/w commit -qm v1.0
+exec git -C $WORK/w tag v1.0.0
+cp $WORK/v11.txt $WORK/w/a.txt
+exec git -C $WORK/w commit -qam v1.1
+exec git -C $WORK/w tag v1.1.0
+exec git clone -q --bare $WORK/w $WORK/tpl.git
+
+# init（允许首次 clone，建立镜像）→ git 仓 → update 钉到 v1.0.0（init 记录的 revision 是 HEAD）
+xinit init --template $WORK/tpl.git --yes out
+exec git init -q $WORK/out
+cd $WORK/out
+xinit-code update --revision v1.0.0
+stdout 'exit=0'
+
+# ── 态 ①：镜像缺失（缓存指向空目录）→ 合并 skip、退 0、零 clone ──
+env HOME=$WORK/empty-home
+env XDG_CACHE_HOME=$WORK/cache
+mkdir $WORK/empty-home
+xinit-code check
+stdout '^D 模板面（§5\.2 / §7\.6 / §11\.4）:$'
+stdout '^  skip  模板面检查需要本地镜像缓存（先运行 xinit update 建立缓存，§11\.4）$'
+! stdout 'semver tag'
+! stdout 'FAIL'
+stdout '^检查汇总: 通过（0 项失败、0 项警告、1 项跳过）$'
+stdout 'exit=0'
+! stderr .
+! exists $WORK/cache/xinit
+! exists $WORK/empty-home/Library/Caches/xinit
+
+# --fetch 且镜像缺失：同样降级为 skip、不中断、不 clone
+xinit-code check --fetch
+stdout '^  skip  模板面检查需要本地镜像缓存'
+stdout '^检查汇总: 通过（0 项失败、0 项警告、1 项跳过）$'
+stdout 'exit=0'
+! exists $WORK/cache/xinit
+! exists $WORK/empty-home/Library/Caches/xinit
+
+# ── 态 ②：恢复已建立镜像的缓存 → 本地镜像有更高 tag → D1 warn、退 0 ──
+env HOME=$WORK/home
+env XDG_CACHE_HOME=$WORK/home/xdg
+xinit-code check
+stdout '^  warn  本地镜像中有 1 个更高的 semver tag：v1\.1\.0（最新 v1\.1\.0；xinit update --revision v1\.1\.0 升级）$'
+! stdout 'skip'
+! stdout 'FAIL'
+stdout '^检查汇总: 通过（0 项失败、1 项警告、0 项跳过）$'
+stdout 'exit=0'
+! stderr .
+
+# 模板源新增 v1.2.0；不带 --fetch 只读本地镜像：新 tag 不可见
+cp $WORK/v12.txt $WORK/w/a.txt
+exec git -C $WORK/w commit -qam v1.2
+exec git -C $WORK/w tag v1.2.0
+exec git -C $WORK/w push -q $WORK/tpl.git main v1.2.0
+xinit-code check
+stdout '更高的 semver tag：v1\.1\.0（最新 v1\.1\.0；'
+! stdout 'v1\.2\.0'
+stdout 'exit=0'
+
+# ── 态 ③：--fetch 刷新镜像 → warn 计数变化，退出码不变（区别于 status --fetch 的 5）──
+xinit-code check --fetch
+stdout '^  warn  本地镜像中有 2 个更高的 semver tag：v1\.1\.0, v1\.2\.0（最新 v1\.2\.0；xinit update --revision v1\.2\.0 升级）$'
+stdout '^检查汇总: 通过（0 项失败、1 项警告、0 项跳过）$'
+stdout 'exit=0'
+! stderr .
+
+# ── 态 ④：--fetch 网络失败（源不可达、镜像已存在）→ stderr 警告、按本地缓存继续 ──
+mv $WORK/tpl.git $WORK/tpl.git.away
+xinit-code check --fetch
+stderr '更新模板镜像失败，使用本地缓存'
+! stdout 'skip'
+stdout '更高的 semver tag：v1\.1\.0, v1\.2\.0（最新 v1\.2\.0；'
+stdout 'exit=0'
+mv $WORK/tpl.git.away $WORK/tpl.git
+
+# ── 态 ⑤：D3——记录的 commit 在模板源中取不到 → warn、退 0（D1 照常）──
+cp .xinit/state.json $WORK/pristine.json
+exec sed -e 's|"commit": "[0-9a-f]*"|"commit": "0123456789abcdef0123456789abcdef01234567"|' $WORK/pristine.json
+cp stdout .xinit/state.json
+xinit-code check
+stdout '^  warn  本地镜像中有 2 个更高的 semver tag'
+stdout '^  warn  记录的 commit 0123456789abcdef0123456789abcdef01234567 在模板源中取不到：base 一旦损坏将无法自动重建（§5\.2）$'
+stdout '^检查汇总: 通过（0 项失败、2 项警告、0 项跳过）$'
+stdout 'exit=0'
+cp $WORK/pristine.json .xinit/state.json
+
+-- xinit.yml --
+manifest_version: 1
+-- v1.txt --
+v1.0
+-- v11.txt --
+v1.1
+-- v12.txt --
+v1.2

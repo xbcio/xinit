@@ -1,0 +1,69 @@
+# check 端到端（§18.9 验收 11/12/17）：C 组 git 契约三态矩阵与退出码对照——
+#   ① .xinit/ 被跟踪 → C2 FAIL（含 git rm -r --cached 出路）、退 6；
+#   ② 未跟踪但 exclude 缺行 → C3 warn、退 0；
+#   ③ 非 git 仓 → C2/C3 合并 skip、退 0；C1 不依赖 git 照跑（非法 glob → 退 6）。
+# RequireGit 只要求 git 可用、不要求 cwd 在仓内：③ 的退 0 即对照证据。
+
+# GIT_CEILING_DIRECTORIES：$WORK 之外即使恰好是 git 仓，也不会被向上找到
+env GIT_CEILING_DIRECTORIES=$WORK
+
+xinit init --template $WORK/tpl --yes out
+exec git init -q $WORK/out
+
+cd $WORK/out
+xinit-code update
+stdout 'exit=0'
+
+# ── 态 ①：.xinit/ 进入 git 索引 → C2 FAIL、退 6（exclude 完好：无 C3 行）──
+exec git add -f .xinit/state.json
+xinit-code check
+stdout '^  FAIL  \.xinit/ 已被 git 跟踪：状态目录不应进入版本历史（§5\.5）；请 git rm -r --cached \.xinit/ 后提交$'
+! stdout 'exclude 缺少'
+! stdout 'skip  无法定位 git 仓库'
+stdout '^检查汇总: 1 项失败、0 项警告、2 项跳过（退出码 6）$'
+stdout 'exit=6'
+! stderr .
+exec git rm -r -q --cached .xinit
+
+# ── 态 ②：未跟踪 + exclude 删行 → C3 warn、退 0 ──
+cp $WORK/exclude-empty .git/info/exclude
+xinit-code check
+stdout '^  warn  \.git/info/exclude 缺少 \.xinit/ 行（init/update 会自动补写；补上可避免 git add -A 误纳状态目录，§5\.5）$'
+! stdout '已被 git 跟踪'
+! stdout 'FAIL'
+stdout '^检查汇总: 通过（0 项失败、1 项警告、2 项跳过）$'
+stdout 'exit=0'
+! stderr .
+# check 只读：exclude 未被补写
+cmp .git/info/exclude $WORK/exclude-empty
+
+# ── 态 ③：非 git 仓 → C2/C3 skip、退 0 ──
+# init 在非 git 目录可行（只出 exclude 提示），直接构造；不 git init。
+cd $WORK
+xinit init --template $WORK/tpl --yes nogit
+! exists $WORK/nogit/.git
+cd $WORK/nogit
+xinit-code check
+stdout '^  skip  无法定位 git 仓库：跳过 \.xinit/ 跟踪与 exclude 检查（§5\.5）$'
+! stdout '已被 git 跟踪'
+! stdout 'exclude 缺少'
+! stdout 'FAIL'
+stdout '^检查汇总: 通过（0 项失败、0 项警告、3 项跳过）$'
+stdout 'exit=0'
+! stderr .
+
+# 非 git 仓下 C1 照跑：非法 glob → FAIL、退 6，skip 行仍在
+cp $WORK/prune-bad.txt .xinit/prune.txt
+xinit-code check
+stdout '^  FAIL  prune\.txt 条目 "a\[" 不是合法 glob：.*（§3\.2）$'
+stdout '^  skip  无法定位 git 仓库'
+stdout '^检查汇总: 1 项失败、0 项警告、3 项跳过（退出码 6）$'
+stdout 'exit=6'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- exclude-empty --
+-- prune-bad.txt --
+a[

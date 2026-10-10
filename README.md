@@ -309,6 +309,16 @@ xinit adopt: /path/to/minimal-template@v1.1.0
 
 默认**不联网**、**不写任何文件**（包括 `.git/info/exclude`）。不带 `--fetch` 时恒为退出码 0（除非出错）。
 
+### `xinit check` — 只读门禁检查
+
+断言「`.xinit/` 内部自洽 + git 契约成立 + 模板可继续更新」，供 CI 与本地门禁消费。跑完全部检查再汇总（不在首个失败处中止），分四组输出：**A 状态与 base 树**（`files` 键合法性、折叠碰撞、base 与记账 hash 对应、残片/非普通文件、binary/mixed_eol/exec 位、template 字段）、**B 冲突残留**（`.xinit/conflicts/` 非空）、**C 配置与 git 契约**（`prune.txt` glob 可编译、`.xinit/` 未被 git 跟踪、exclude 含 `.xinit/`）、**D 模板面**（本地镜像有更高 tag、引擎版本漂移、记录的 commit 可取）。每行以 `FAIL` / `warn` / `skip` 开头，末尾一行汇总。
+
+| 旗标 | 语义 |
+| --- | --- |
+| `--fetch` | 联网刷新模板镜像缓存后再检查模板面 |
+
+**只读**：不加项目锁、不写项目内任何文件（包括 `.git/info/exclude` 与 `conflicts/`）、不修复任何东西；不 clone 镜像，默认不联网（镜像缺失时模板面检查降级为 `skip`）。退出码：有 `FAIL` → **6**；只有 `warn` / `skip` → 0（含 `--fetch` 下的「有更高 tag」——落后不算不健康，这一点与 `status --fetch` 的 5 不同）；不是 xinit 项目或 `state.json` 损坏 → 1。
+
 ### `xinit adopt` — 重建基线
 
 把模板在指定版本的**渲染结果**记为 base（不是磁盘内容），磁盘与渲染结果的差异全部视为本地改动。
@@ -515,7 +525,7 @@ $ xinit update
 
 ## 7. `.xinit/` 目录说明
 
-派生项目根目录下的 `.xinit/` 是状态目录，**不进版本控制**（`init`/`update` 幂等写入 `.git/info/exclude`；`status` 只报告不写入）。
+派生项目根目录下的 `.xinit/` 是状态目录，**不进版本控制**（`init`/`update` 幂等写入 `.git/info/exclude`；`status` 与 `check` 只报告不写入）。
 
 | 条目 | 职责 |
 | --- | --- |
@@ -524,7 +534,7 @@ $ xinit update
 | `conflicts/` | 未解决的冲突路径 → 模板版本；目录存在即「有冲突待处理」 |
 | `overwritten/` | 被模板覆盖掉的你的内容（`generated` 路径），持久保留 |
 | `backup/` | 每次 `update` 改写前的原内容 + exec 位，按运行开始时刻分目录（同名时追加 `-2`、`-3`），**不覆盖、不自动清理** |
-| `lock` | 项目锁，防止并发 `update`（`diff` 只读不加锁） |
+| `lock` | 项目锁，防止并发 `update`（`diff` / `status` / `check` 只读不加锁） |
 | `prune.txt` | 一行一个路径：这些路径脱离管理、不再同步 |
 
 ## 8. 退出码表
@@ -537,8 +547,9 @@ $ xinit update
 | 3 | 钩子失败（文件与状态已正确落盘） |
 | 4 | 需要信任确认 |
 | 5 | `diff` 发现有非 `Noop` 的动作；或 `status --fetch` 发现有可用更新 |
+| 6 | 检查发现问题（`xinit check` 有 `FAIL` 项） |
 
-`diff` 无动作时返回 0；`status` 不带 `--fetch` 时恒为 0（除非出错）；`--no-hooks` 下被跳过的 `generated` 路径不需要你处理，**不影响退出码**。
+`diff` 无动作时返回 0；`status` 不带 `--fetch` 时恒为 0（除非出错）；`check` 只有 `warn` / `skip` 时返回 0；`--no-hooks` 下被跳过的 `generated` 路径不需要你处理，**不影响退出码**。
 
 ## 9. 钩子与信任
 
@@ -590,4 +601,4 @@ make check     # fmt + vet + test，提交前跑这个
 测试结构：
 
 - **单元测试**在各 `internal/*` 包里（渲染、清单、决策表、合并、状态、模板获取等）。
-- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（31 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`adopt` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
+- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（36 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
