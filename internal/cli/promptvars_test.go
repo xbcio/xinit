@@ -66,12 +66,16 @@ func TestCollectVarsOnlyPrompted(t *testing.T) {
 	c := compiledVars(t)
 
 	// 无 --config：四个声明了 prompt 的变量被问；silent 没有 prompt ⇒ 零提示。
-	ps, out := newTestSession("MyApp\n\ncore\n\n")
+	// 末尾多备一行空输入：万一实现误问 silent，采集仍能走完，使下面的
+	// 「输出形态」断言成为主探测器（而不是先撞上 EOF 中止而短路）。
+	ps, out := newTestSession("MyApp\n\ncore\n\n\n")
 	if _, err := collectVars(c, nil, ps); err != nil {
 		t.Fatalf("collectVars: %v", err)
 	}
 	got := out.String()
-	if strings.Contains(got, "silent") {
+	// 误问未声明 prompt 的变量时，实际输出形态是 V1 的 ` [x]: `（Prompt 为空）；
+	// 只查变量名捕不到（提示行不含变量名，§19.3）。
+	if strings.Contains(got, "[x]: ") {
 		t.Errorf("未声明 prompt 的变量不应被问：%q", got)
 	}
 	for _, want := range []string{"产品显示名", "团队", "组件名", "组件全名"} {
@@ -301,5 +305,31 @@ func TestCollectVarsNilSession(t *testing.T) {
 	}
 	if out.Len() == 0 {
 		t.Fatal("同一清单在会话下应产生提示行")
+	}
+}
+
+func TestCollectVarsReadErrorWraps(t *testing.T) {
+	// V7：非 EOF 的读错误上抛（普通错误，退 1），文案前缀点名变量，且 %w 保留
+	// 错误链 —— 调用方仍可用 errors.Is/As 判定根因（errReader/errBoom 复用
+	// prompt_test.go 的既有助手）。
+	c := compiledVars(t)
+	config := map[string]string{"product": "P", "team": "T", "derived": "D"}
+	ps := newPromptSession(errReader{}, &bytes.Buffer{})
+	answers, err := collectVars(c, config, ps)
+	if err == nil {
+		t.Fatal("读错误应上抛")
+	}
+	if !strings.Contains(err.Error(), `变量 "component" 的交互采集失败: `) {
+		t.Errorf("V7 文案应点名变量并带前缀：%v", err)
+	}
+	if !errors.Is(err, errBoom) {
+		t.Errorf("应保留根因（%%w）：%v", err)
+	}
+	if _, ok := answers["component"]; ok {
+		t.Errorf("失败时不得产生该键：%v", answers)
+	}
+	var ee *ExitError
+	if errors.As(err, &ee) {
+		t.Errorf("读错误上抛是普通错误（退 1），不应是 ExitError：%v", err)
 	}
 }

@@ -12,8 +12,10 @@ xinit-code init --template $WORK/tpl --interactive out1
 stdout 'exit=0'
 # V1/V3/V2 逐字且**连续**出现 ⇒ 顺序 = 声明顺序、无其它输出夹在中间
 stdout '产品显示名 \[Demo\]: 团队（可留空）: 组件名（必填）: '
-# silent 未声明 prompt ⇒ 零提示行（§19.3 提问条件）
+# silent 未声明 prompt ⇒ 零提示行（§19.3 提问条件）；瞄准点是误问时的**实际
+# 输出形态**（V1 且 Prompt 为空 = ` [x]: `），只查变量名捕不到（提示行不含变量名）
 ! stdout 'silent'
+! stdout '\[x\]: '
 # 信任门照旧，且第 4 行 y 被**同一个** reader 消费（§19.2.3 共享 reader）
 stdout '信任并执行？\[y/N\]'
 # 回答落地：生成内容（空答取 default、team 段为空）+ state.vars 逐字节
@@ -40,6 +42,8 @@ xinit-code init --template $WORK/tpl --interactive --no-hooks out3
 stdout 'exit=0'
 stdout '产品显示名 \[Demo\]: 团队（可留空）: 组件名（必填）: '
 ! stdout '模板钩子'
+# 与轮 2 对称：--no-hooks 下信任门同样短路，剩余的第 4 行 y 不得被误消费
+! stdout '信任并执行？'
 cmp out1/greeting.txt out3/greeting.txt
 ! exists out3/hook_out.txt
 # state.vars 逐字节相同（§19.7 #11）。整份 state.json 与轮 1/2 **不可比**：
