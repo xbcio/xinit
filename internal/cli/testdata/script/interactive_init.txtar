@@ -12,12 +12,18 @@ xinit-code init --template $WORK/tpl --interactive out1
 stdout 'exit=0'
 # V1/V3/V2 逐字且**连续**出现 ⇒ 顺序 = 声明顺序、无其它输出夹在中间
 stdout '产品显示名 \[Demo\]: 团队（可留空）: 组件名（必填）: '
+# §19.7 #5：vars 提示行的通道证据（stdout 正向 + stderr 定向负断言）——stderr
+# 恒含既有「不在 git 仓库」提示，故不做 `! stderr .`
+! stderr '产品显示名'
 # silent 未声明 prompt ⇒ 零提示行（§19.3 提问条件）；瞄准点是误问时的**实际
 # 输出形态**（V1 且 Prompt 为空 = ` [x]: `），只查变量名捕不到（提示行不含变量名）
 ! stdout 'silent'
 ! stdout '\[x\]: '
 # 信任门照旧，且第 4 行 y 被**同一个** reader 消费（§19.2.3 共享 reader）
 stdout '信任并执行？\[y/N\]'
+# §19.7 #5：信任门提问的通道证据（`？` 是 Confirm 的正文，与 printHookAsk 的
+# 「信任并执行：…」指引行不混淆）
+! stderr '信任并执行？'
 # 回答落地：生成内容（空答取 default、team 段为空）+ state.vars 逐字节
 cmp out1/greeting.txt $WORK/want.txt
 grep '"vars": \{\n    "component": "core",\n    "product": "MyApp",\n    "silent": "x",\n    "team": ""\n  \}' out1/.xinit/state.json

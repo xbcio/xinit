@@ -25,6 +25,10 @@ stdin $WORK/enter.txt
 xinit-code update --interactive
 stdout '交互式冲突解决（1 条，§19.4）：逐条选择'
 stdout 'a\.txt（merge-conflict）改用模板版？\[y/N\]'
+# §19.7 #5：交互文本的通道证据（stdout 正向 + stderr 定向负断言；stderr 恒含
+# 既有「不在 git 仓库」提示，故不做 `! stderr .`）
+! stderr '交互式冲突解决'
+! stderr '改用模板版'
 # 回车 ≠ EOF：空答被读成「保留本地」，只有输入真的耗尽才打 C3 —— 这条负断言
 # 让本场景不会退化成「enter.txt 是空文件」也能通过（§19.2.3 空答/EOF 之分）
 ! stdout '输入已结束（EOF）'
