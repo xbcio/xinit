@@ -1,4 +1,5 @@
 /xinit
+/bin
 
 # OMC 本地运行状态（.omc/skills/ 为可提交例外）
 /.omc/*
