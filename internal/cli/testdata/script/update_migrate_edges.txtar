@@ -1,0 +1,218 @@
+# §17 边界：行 12（验收 6）、generated（验收 7）、歧义（验收 8）、拒绝预检
+# 与重试（验收 12/16）、混合 EOL（验收 14）、dry-run 一致（验收 9）、
+# 名字与目录都变（验收 17）——各自独立模板 / 工程。
+
+# ════ 场景 7：本地删 P + 模板改名 P→Q → 行 12，不进候选（验收 6）════
+xinit init --template $WORK/t7 --yes p7
+rm p7/foo.txt
+mv $WORK/t7/foo.txt $WORK/t7/bar.txt
+cd p7
+xinit-code update
+! stdout '路径迁移'
+stdout '^  write                bar\.txt$'
+stdout 'exit=0'
+cmp bar.txt $WORK/f1.txt
+! exists foo.txt
+cd ..
+
+# ════ 场景 8：Q 命中 generated → skip，按 v1 行为（验收 7）════
+xinit init --template $WORK/t8 --yes p8
+cp $WORK/local.txt p8/foo.txt
+mv $WORK/t8/foo.txt $WORK/t8/gen.txt
+cd p8
+xinit-code update
+stdout '^  skip                 foo\.txt → gen\.txt（跳过：生成物路径不参与迁移）$'
+! stdout 'migrate '
+stdout '^  keep-warned          foo\.txt'
+stdout 'exit=0'
+# 行 9 保留本地；Q 按行 13 写模板版（未迁移本地改动）
+cmp foo.txt $WORK/local.txt
+cmp gen.txt $WORK/f1.txt
+cd ..
+
+# ════ 场景 9：两个同 hash 旧候选 + 一个新候选 → 不配对（验收 8）════
+xinit init --template $WORK/t9 --yes p9
+cp $WORK/local.txt p9/a.txt
+rm $WORK/t9/a.txt
+mv $WORK/t9/b.txt $WORK/t9/c.txt
+cd p9
+xinit-code update
+! stdout '路径迁移'
+! stdout 'migrate '
+stdout '^  keep-warned          a\.txt'
+stdout '^  delete               b\.txt$'
+stdout '^  write                c\.txt$'
+stdout 'exit=0'
+cmp a.txt $WORK/local.txt
+cmp c.txt $WORK/f1.txt
+cd ..
+
+# ════ 场景 17b：Part B 名字与目录都变 → skip（验收 17）════
+xinit init --template $WORK/t17 --yes p17
+cp $WORK/local.txt p17/x/foo.txt
+exec mkdir $WORK/t17/y
+mv $WORK/t17/x/foo.txt $WORK/t17/y/bar.txt
+cd p17
+xinit-code update
+stdout '^  skip                 x/foo\.txt → y/bar\.txt（跳过：名字与目录都变，配对置信度不足）$'
+stdout 'exit=0'
+cmp x/foo.txt $WORK/local.txt
+cmp y/bar.txt $WORK/f1.txt
+cd ..
+
+# ════ 场景 10：Q 被拒绝（未跟踪障碍物）→ 整对 skip、无半程；移走后重试完成
+# （验收 12/16）。平台无关形态：Q 位置预造未跟踪目录（§9.3 EISDIR 与折叠
+# 拒绝同构、同一预检通道）；darwin 另测折叠等价名（验收 12 原文）。
+xinit init --template $WORK/t10 --yes p10
+cp $WORK/local.txt p10/foo.txt
+mv $WORK/t10/foo.txt $WORK/t10/bar.txt
+exec mkdir p10/bar.txt
+cd p10
+xinit-code update
+stdout '^  skip                 foo\.txt → bar\.txt（跳过：.+）$'
+! stdout 'migrated '
+stdout 'exit=2'
+# 无半程：旧路径与本地改动原样保留、Q 未写入、state 仍记 P 不记 Q
+cmp foo.txt $WORK/local.txt
+grep '"foo\.txt"' .xinit/state.json
+! grep '"bar\.txt"' .xinit/state.json
+# 原因消除后重跑：再次配对并完成迁移
+exec rmdir bar.txt
+xinit-code update
+stdout '^  migrated             foo\.txt → bar\.txt（本地改动已随迁移保留；旧路径按删除处理）$'
+stdout 'exit=0'
+cmp bar.txt $WORK/local.txt
+! exists foo.txt
+cd ..
+
+[darwin] xinit init --template $WORK/t10d --yes p10d
+[darwin] cp $WORK/local.txt p10d/foo.txt
+[darwin] mv $WORK/t10d/foo.txt $WORK/t10d/bar.txt
+[darwin] cp $WORK/blocker.txt p10d/BAR.txt
+[darwin] cd p10d
+[darwin] xinit-code update
+[darwin] stdout '^  skip                 foo\.txt → bar\.txt（跳过：.+）$'
+[darwin] stdout 'exit=2'
+[darwin] cmp foo.txt $WORK/local.txt
+[darwin] cmp BAR.txt $WORK/blocker.txt
+[darwin] rm BAR.txt
+[darwin] xinit-code update
+[darwin] stdout '^  migrated             foo\.txt → bar\.txt'
+[darwin] stdout 'exit=0'
+[darwin] cmp bar.txt $WORK/local.txt
+[darwin] cd ..
+
+# ════ 场景 11：混合 EOL + 模板改内容 → fallback、磁盘零改写（验收 14）════
+xinit init --template $WORK/t11 --yes p11
+exec sh -c 'printf "m1\r\nlocal\nm3\n" > p11/d/old/m.txt && cp p11/d/old/m.txt "$WORK/mixed-local.txt"'
+cp $WORK/m-theirs.txt $WORK/t11/d/NAME/m.txt
+cd p11
+xinit-code update --config $WORK/new.yml
+stdout '^  fallback             d/old/m\.txt → d/new/m\.txt（迁移未完成：二进制或混合行尾不参与三方合并——'
+! stdout 'migrate '
+stdout 'exit=0'
+cmp d/old/m.txt $WORK/mixed-local.txt
+cmp d/new/m.txt $WORK/m-theirs.txt
+cd ..
+
+# ════ 场景 13：diff（dry-run）迁移节与随后实跑逐行一致（验收 9）════
+# 一个工程同时含 migrated / rename / skip / fallback 四态。
+xinit init --template $WORK/t13 --yes p13
+cp $WORK/local.txt p13/foo.txt
+cp $WORK/g-local.txt p13/x/g.txt
+exec sh -c 'printf "m1\r\nlocal\nm3\n" > p13/s/old/m.txt'
+mv $WORK/t13/foo.txt $WORK/t13/bar.txt
+exec mkdir $WORK/t13/y
+mv $WORK/t13/x/g.txt $WORK/t13/y/h.txt
+mv $WORK/t13/plain.txt $WORK/t13/plain2.txt
+cp $WORK/m-theirs.txt $WORK/t13/s/NAME/m.txt
+cd p13
+xinit-code diff --config $WORK/new.yml
+stdout '^路径迁移（§17）：4 条$'
+cp stdout $WORK/diff.out
+xinit-code update --config $WORK/new.yml
+stdout '^路径迁移（§17）：4 条$'
+stdout 'exit=0'
+cp stdout $WORK/update.out
+exec sh -c 'grep -E "^路径迁移|^  (migrated|rename|skip|fallback|migrate|delete) " "$WORK/diff.out" > "$WORK/d.lines"'
+exec sh -c 'grep -E "^路径迁移|^  (migrated|rename|skip|fallback|migrate|delete) " "$WORK/update.out" > "$WORK/u.lines"'
+grep '^  migrated             foo\.txt → bar\.txt' $WORK/d.lines
+grep '^  rename               plain\.txt → plain2\.txt' $WORK/d.lines
+grep '^  skip                 x/g\.txt → y/h\.txt' $WORK/d.lines
+grep '^  fallback             s/old/m\.txt → s/new/m\.txt' $WORK/d.lines
+cmp $WORK/d.lines $WORK/u.lines
+
+-- new.yml --
+name: new
+-- f1.txt --
+f1
+-- local.txt --
+f1
+local
+-- g-local.txt --
+g1
+local
+-- blocker.txt --
+untracked blocker
+-- m-theirs.txt --
+m1
+m2
+THEIRS
+-- t7/xinit.yml --
+manifest_version: 1
+-- t7/foo.txt --
+f1
+-- t8/xinit.yml --
+manifest_version: 1
+generated:
+  paths: ["gen.txt"]
+-- t8/foo.txt --
+f1
+-- t9/xinit.yml --
+manifest_version: 1
+-- t9/a.txt --
+f1
+-- t9/b.txt --
+f1
+-- t17/xinit.yml --
+manifest_version: 1
+-- t17/x/foo.txt --
+f1
+-- t10/xinit.yml --
+manifest_version: 1
+-- t10/foo.txt --
+f1
+-- t10d/xinit.yml --
+manifest_version: 1
+-- t10d/foo.txt --
+f1
+-- t11/xinit.yml --
+manifest_version: 1
+vars:
+  - name: name
+    default: "old"
+rename:
+  - from: "NAME"
+    to: "{{ .name }}"
+-- t11/d/NAME/m.txt --
+m1
+m2
+m3
+-- t13/xinit.yml --
+manifest_version: 1
+vars:
+  - name: name
+    default: "old"
+rename:
+  - from: "NAME"
+    to: "{{ .name }}"
+-- t13/foo.txt --
+f1
+-- t13/x/g.txt --
+g1
+-- t13/plain.txt --
+p1
+-- t13/s/NAME/m.txt --
+m1
+m2
+m3

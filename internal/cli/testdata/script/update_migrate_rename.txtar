@@ -1,0 +1,115 @@
+# §17 Part B（同内容配对）：模板物理改名。
+# 场景 4 改名（验收 2）、场景 5 二进制直搬（验收 3）、场景 6 大小写改名
+# （验收 15）、场景 12 空内容（验收 17）——各自独立模板 / 工程。
+
+# ════ 场景 4：同目录 foo.txt → bar.txt + 本地改动（验收 2）════
+xinit init --template $WORK/tpl4 --yes p4
+cp $WORK/foo-local.txt p4/foo.txt
+mv $WORK/tpl4/foo.txt $WORK/tpl4/bar.txt
+cd p4
+xinit-code update
+stdout '^路径迁移（§17）：1 条$'
+stdout '^  migrated             foo\.txt → bar\.txt（本地改动已随迁移保留；旧路径按删除处理）$'
+stdout '^  migrate              bar\.txt（路径迁移自 foo\.txt：本地改动已保留）$'
+stdout '^  delete               foo\.txt（路径迁移：本地改动已迁移到 bar\.txt）$'
+stdout 'exit=0'
+cmp bar.txt $WORK/foo-local.txt
+! exists foo.txt
+exec sh -c 'cmp .xinit/backup/*/foo.txt "$WORK/foo-local.txt"'
+! grep '"foo\.txt"' .xinit/state.json
+grep '"src": "bar\.txt"' .xinit/state.json
+! exists .xinit/base/foo.txt
+cmp .xinit/base/bar.txt $WORK/foo-v1.txt
+cd ..
+
+# ════ 场景 5：二进制（含 NUL）改名 → 直搬（验收 3）════
+exec sh -c 'mkdir -p "$WORK/tpl5" && cp "$WORK/xinit.yml" "$WORK/tpl5/" && printf "B\000v1" > "$WORK/tpl5/a.bin" && printf "B\000local" > "$WORK/bin-local"'
+xinit init --template $WORK/tpl5 --yes p5
+cp $WORK/bin-local p5/a.bin
+mv $WORK/tpl5/a.bin $WORK/tpl5/b.bin
+cd p5
+xinit-code update
+stdout '^  migrated             a\.bin → b\.bin（本地改动已随迁移保留；旧路径按删除处理）$'
+! stdout 'fallback'
+stdout 'exit=0'
+cmp b.bin $WORK/bin-local
+! exists a.bin
+cd ..
+
+# ════ 场景 6：仅大小写改名 readme.md → README.md（验收 15）════
+# 平台无关断言：darwin（大小写不敏感）走折叠放行 + 先删后写；linux 为普通
+# 改名——两者都必须迁移成功、新路径内容 = 本地版本、目录里只剩 README.md。
+xinit init --template $WORK/tpl6 --yes p6
+cp $WORK/readme-local.md p6/readme.md
+mv $WORK/tpl6/readme.md $WORK/tpl6/README.md
+cd p6
+xinit-code update
+stdout '^  migrated             readme\.md → README\.md（本地改动已随迁移保留；旧路径按删除处理）$'
+! stdout 'skip|fallback|refuse'
+stdout 'exit=0'
+cmp README.md $WORK/readme-local.md
+exec sh -c 'test "$(ls | grep -i "^readme.md$")" = README.md'
+! grep '"readme\.md"' .xinit/state.json
+xinit-code update
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0$'
+stdout 'exit=0'
+cd ..
+
+# ════ 场景 12a：Part B 空内容 .gitkeep 对 → skip（验收 17）════
+xinit init --template $WORK/tpl12 --yes p12
+cp $WORK/keep-local p12/a/.gitkeep
+mv $WORK/tpl12/a/.gitkeep $WORK/tpl12/a/.keep
+cd p12
+xinit-code update
+stdout '^  skip                 a/\.gitkeep → a/\.keep（跳过：空内容配对不自动迁移）$'
+! stdout 'migrate '
+stdout 'exit=0'
+# v1 行为：P 行 9 保留本地、Q 行 13 写模板版（空）
+cmp a/.gitkeep $WORK/keep-local
+exists a/.keep
+cd ..
+
+# ════ 场景 12b：Part A 空占位被本地填写后位移 → 迁移（验收 17）════
+xinit init --template $WORK/tpl12b --yes p12b
+cp $WORK/keep-local p12b/d/old/.gitkeep
+cd p12b
+xinit-code update --config $WORK/new.yml
+stdout '^  migrated             d/old/\.gitkeep → d/new/\.gitkeep（本地改动已随迁移保留；旧路径按删除处理）$'
+stdout 'exit=0'
+cmp d/new/.gitkeep $WORK/keep-local
+! exists d/old
+
+-- xinit.yml --
+manifest_version: 1
+-- new.yml --
+name: new
+-- tpl4/xinit.yml --
+manifest_version: 1
+-- tpl4/foo.txt --
+f1
+-- foo-v1.txt --
+f1
+-- foo-local.txt --
+f1
+local
+-- tpl6/xinit.yml --
+manifest_version: 1
+-- tpl6/readme.md --
+# r1
+-- readme-local.md --
+# r1
+local
+-- tpl12/xinit.yml --
+manifest_version: 1
+-- tpl12/a/.gitkeep --
+-- keep-local --
+filled
+-- tpl12b/xinit.yml --
+manifest_version: 1
+vars:
+  - name: name
+    default: "old"
+rename:
+  - from: "NAME"
+    to: "{{ .name }}"
+-- tpl12b/d/NAME/.gitkeep --

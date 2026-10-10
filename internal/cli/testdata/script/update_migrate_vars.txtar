@@ -1,0 +1,154 @@
+# §17 Part A（同模板源）：路径变量改值导致整目录位移。
+# 场景 1 位移（验收 1/10/11/13）、场景 2 干净合并（验收 4）、
+# 场景 3 冲突回退（验收 5）——三个独立模板 / 工程，互不串扰。
+
+# ════ 场景 1：位移 + 本地改动（CRLF 字节 + exec 位）随迁 ════
+xinit init --template $WORK/tpl1 --yes p1
+cd p1
+# 本地改 edited.txt：纯 CRLF 内容（直搬必须逐字节保留，不做 EOL 转换）
+exec sh -c 'printf "e1\r\nlocal\r\n" > src/old/edited.txt'
+exec sh -c 'printf "e1\r\nlocal\r\n" > $WORK/local-edited.txt'
+[unix] exec chmod 0755 src/old/edited.txt
+
+xinit-code update --config $WORK/new.yml
+stdout '^路径迁移（§17）：2 条$'
+stdout '^  migrated             src/old/edited\.txt → src/new/edited\.txt（本地改动已随迁移保留；旧路径按删除处理）$'
+[unix] stdout '^  migrate              src/new/edited\.txt（路径迁移自 src/old/edited\.txt：本地改动已保留；新路径保留本地 exec 位）$'
+[!unix] stdout '^  migrate              src/new/edited\.txt（路径迁移自 src/old/edited\.txt：本地改动已保留）$'
+stdout '^  delete               src/old/edited\.txt（路径迁移：本地改动已迁移到 src/new/edited\.txt）$'
+# 未改文件按行 8/13：rename 信息行 + 普通 write/delete
+stdout '^  rename               src/old/plain\.txt → src/new/plain\.txt（本地无改动，按行 8/13 完成改名）$'
+stdout '^  write                src/new/plain\.txt$'
+stdout '^  delete               src/old/plain\.txt$'
+! stdout 'fallback|skip '
+stdout 'exit=0'
+
+# 验收 10：直搬逐字节（CRLF 原样）+ 本地 exec 位保留
+cmp src/new/edited.txt $WORK/local-edited.txt
+[unix] exec sh -c 'test -x src/new/edited.txt'
+cmp src/new/plain.txt $WORK/plain.txt
+# 验收 1：旧目录清空后清理
+! exists src/old/edited.txt
+! exists src/old/plain.txt
+! exists src/old
+# 备份含旧路径原内容（本地改动双重保险）
+exec sh -c 'cmp .xinit/backup/*/src/old/edited.txt "$WORK/local-edited.txt"'
+# 验收 11：files 无 P、有 Q 且 Src 正确；base 无 P 残片、Q = theirs
+! grep '"src/old/' .xinit/state.json
+grep '"src/new/edited\.txt"' .xinit/state.json
+grep '"src": "src/NAME/edited\.txt"' .xinit/state.json
+! exists .xinit/base/src/old
+cmp .xinit/base/src/new/edited.txt $WORK/tpl1/src/NAME/edited.txt
+
+# 验收 13：重跑收敛——无写/删/冲突、无迁移节，rc=0
+xinit-code update
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0$'
+! stdout '路径迁移'
+stdout 'exit=0'
+cmp src/new/edited.txt $WORK/local-edited.txt
+cd ..
+
+# ════ 场景 2：模板同时改内容 → 三方干净合并（验收 4）════
+xinit init --template $WORK/tpl2 --yes p2
+cp $WORK/m-local.txt p2/src/old/m.txt
+cp $WORK/m-theirs.txt $WORK/tpl2/src/NAME/m.txt
+cd p2
+xinit-code update --config $WORK/new.yml
+stdout '^  migrated             src/old/m\.txt → src/new/m\.txt（本地改动已随迁移保留；旧路径按删除处理）$'
+stdout '^  migrate              src/new/m\.txt（路径迁移自 src/old/m\.txt：本地改动已保留）$'
+stdout 'exit=0'
+cmp src/new/m.txt $WORK/m-merged.txt
+! exists src/old
+cmp .xinit/base/src/new/m.txt $WORK/m-theirs.txt
+xinit-code update
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0$'
+stdout 'exit=0'
+cd ..
+
+# ════ 场景 3：同行冲突 → fallback（验收 5）════
+xinit init --template $WORK/tpl3 --yes p3
+cp $WORK/c-local.txt p3/src/old/c.txt
+cp $WORK/c-theirs.txt $WORK/tpl3/src/NAME/c.txt
+cd p3
+xinit-code update --config $WORK/new.yml
+stdout '^  fallback             src/old/c\.txt → src/new/c\.txt（迁移未完成：模板与本地都在改且相冲突——已按行 9 保留本地、行 13 写入模板版；本地改动需手工合并到新路径，或把旧路径写进 \.xinit/prune\.txt）$'
+stdout '^  keep-warned          src/old/c\.txt'
+stdout '^  write                src/new/c\.txt$'
+! stdout 'migrate '
+stdout 'exit=0'
+cmp src/old/c.txt $WORK/c-local.txt
+cmp src/new/c.txt $WORK/c-theirs.txt
+! exists .xinit/conflicts
+# 重跑稳定：无迁移节、无写删、磁盘不变
+xinit-code update
+! stdout '路径迁移'
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0$'
+stdout 'exit=0'
+cmp src/old/c.txt $WORK/c-local.txt
+cmp src/new/c.txt $WORK/c-theirs.txt
+
+-- new.yml --
+name: new
+-- tpl1/xinit.yml --
+manifest_version: 1
+vars:
+  - name: name
+    default: "old"
+rename:
+  - from: "NAME"
+    to: "{{ .name }}"
+-- tpl1/src/NAME/edited.txt --
+e1
+-- tpl1/src/NAME/plain.txt --
+p1
+-- plain.txt --
+p1
+-- tpl2/xinit.yml --
+manifest_version: 1
+vars:
+  - name: name
+    default: "old"
+rename:
+  - from: "NAME"
+    to: "{{ .name }}"
+-- tpl2/src/NAME/m.txt --
+l1
+l2
+l3
+l4
+l5
+-- m-local.txt --
+l1
+LOCAL
+l3
+l4
+l5
+-- m-theirs.txt --
+l1
+l2
+l3
+l4
+THEIRS
+-- m-merged.txt --
+l1
+LOCAL
+l3
+l4
+THEIRS
+-- tpl3/xinit.yml --
+manifest_version: 1
+vars:
+  - name: name
+    default: "old"
+rename:
+  - from: "NAME"
+    to: "{{ .name }}"
+-- tpl3/src/NAME/c.txt --
+c1
+c2
+-- c-local.txt --
+c1
+local
+-- c-theirs.txt --
+c1
+theirs
