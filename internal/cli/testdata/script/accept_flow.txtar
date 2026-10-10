@@ -9,14 +9,14 @@ cd out
 # 第一轮：冲突 → exit=2，报告打印可复制的 accept 命令
 xinit-code update
 stdout 'merge-conflict\s+a\.txt'
-stdout 'xinit update --accept "a\.txt"'
+stdout 'xinit update --accept \x27a\.txt\x27'
 stdout 'exit=2'
 
 # 用户手工解决（结果与模板不同）后直接重跑 = §10.3 的死循环：仍被拒
 cp $WORK/resolved-a.txt a.txt
 xinit-code update
 stdout '未解决的冲突'
-stdout 'xinit update --accept "a\.txt"'
+stdout 'xinit update --accept \x27a\.txt\x27'
 stdout 'exit=2'
 
 # --accept：把解决结果声明为 base → 收敛（base 推进到模板版、磁盘不动）

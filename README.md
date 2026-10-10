@@ -240,7 +240,7 @@ xinit adopt --template $WORK/minimal-template --config $WORK/order-api.vars.yml
 ```
 xinit adopt: /path/to/minimal-template@v1.1.0
 基线已重建：3 个文件（.xinit/base/ 与 .xinit/state.json）
-本地改动 1 个文件（磁盘与模板渲染结果不同；update 起按行 9 保留，模板对它们的更新不会应用）
+本地改动 1 个文件（磁盘与模板渲染结果不同）：update 起按「本地改过」保留，模板之后也改到它时走合并/冲突（行 6/7）
   local-diff           main.go
 警告：--revision 选错版本时，两版之间模板的改动在磁盘上不存在，会被当成
 「本地把模板改回去了」而永久保留——那些模板更新从此不会再被应用（§5.3）。
@@ -478,7 +478,7 @@ xinit update: /path/to/my-service-template
 汇总: 写入 0、删除 0、chmod 0、冲突 1
 冲突（1 条）需要你处理：
   conflict             docs/notes.md
-  accept?              xinit update --accept "docs/notes.md"
+  accept?              xinit update --accept 'docs/notes.md'
 出路一：手工解决冲突，使内容与模板一致（或等模板回退），重跑 update 即收敛；
         若解决结果与模板不同，用上面的 xinit update --accept <路径> 声明已解决（把你看到并认可的版本记为 base，§10.3）。
 出路二：把路径写进 .xinit/prune.txt，使其脱离管理（模板对它的改动不再同步）。

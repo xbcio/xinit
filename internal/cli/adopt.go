@@ -32,7 +32,9 @@ func newAdoptCmd() *cobra.Command {
 		Use:   "adopt",
 		Short: "把已有项目按模板渲染结果重建为受管状态（重建基线）",
 		Long: "把模板在指定版本的渲染结果记为 base（不是磁盘内容），并重建 .xinit/state.json。\n" +
-			"磁盘与渲染结果的全部差异都视为本地改动，update 起按「本地改过」保留。\n" +
+			"磁盘与渲染结果的全部差异都视为「本地改动」：update 起普通路径按「本地改过」保留，\n" +
+			"模板之后也改到它时走合并/冲突（行 6/7）；generated 路径的模板改动按行 5 覆盖\n" +
+			"（本地版本另存 .xinit/overwritten/）。\n" +
 			"注意：--revision 选错版本时，两版之间模板的改动在磁盘上并不存在，会被当成\n" +
 			"「本地把模板改回去了」而永久保留——那些模板更新从此不会再被应用（§5.3）。",
 		Args: cobra.NoArgs,
@@ -226,7 +228,23 @@ func Adopt(o AdoptOptions) error {
 		fmt.Printf("（dir 源：commit 为树 hash %s）\n", src.Commit)
 	}
 	fmt.Printf("基线已重建：%d 个文件（.xinit/base/ 与 .xinit/state.json）\n", len(entries))
-	fmt.Printf("本地改动 %d 个文件（磁盘与模板渲染结果不同；update 起按行 9 保留，模板对它们的更新不会应用）\n", len(localDiff))
+	// 本地改动的后续走向分两类（发布批次 O7/场景 6.2-6.3）：普通路径按行 3
+	// 「本地改过」保留，模板之后也改到它时走三方合并/冲突（行 6/7）；generated
+	// 路径不同——模板改动按行 5 覆盖本地内容（原版本另存 overwritten/）。
+	// 旧文案「update 起按行 9 保留，模板对它们的更新不会应用」对两类都不准
+	// （行 9 只在模板删除该路径时适用；generated 恰是被覆盖）。
+	genCount := 0
+	for _, p := range localDiff {
+		if theirs[p].Generated {
+			genCount++
+		}
+	}
+	if genCount == 0 {
+		fmt.Printf("本地改动 %d 个文件（磁盘与模板渲染结果不同）：update 起按「本地改过」保留，模板之后也改到它时走合并/冲突（行 6/7）\n", len(localDiff))
+	} else {
+		fmt.Printf("本地改动 %d 个文件（磁盘与模板渲染结果不同；其中 generated 路径 %d 个）：普通路径 update 起按「本地改过」保留、模板之后也改到它时走合并/冲突（行 6/7）；generated 路径的模板改动按行 5 覆盖本地内容（本地版本另存 .xinit/overwritten/）\n",
+			len(localDiff), genCount)
+	}
 	for _, p := range localDiff {
 		fmt.Printf("  %-20s %s\n", "local-diff", p)
 	}

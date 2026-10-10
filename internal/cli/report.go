@@ -47,7 +47,9 @@ const conflictExits = "出路一：手工解决冲突，使内容与模板一致
 
 // conflictFilesRef 只在确有 conflicts/ 内容条目时打印（评审 E1/m-3：
 // ConflictKind 且 theirs 缺失时没有条目，指向 conflicts/ 是不实信息）。
-const conflictFilesRef = "参考：模板新内容已写到 .xinit/conflicts/<路径>。"
+// 尾部的 \n 是它的一部分：它是冲突报告的末行，缺了会与后续输出黏行
+// （v1.0.1 F2/O6——dry-run 的尾注、备份行都紧跟在它后面）。
+const conflictFilesRef = "参考：模板新内容已写到 .xinit/conflicts/<路径>。\n"
 
 // conflictExitsFor 组合冲突出路文案；hasFiles=false 时省掉「参考：」句。
 func conflictExitsFor(hasFiles bool) string {
@@ -114,7 +116,9 @@ func (r *UpdateReport) Print(w io.Writer) {
 	}
 
 	// accept 可用集：冲突全集里可 --accept 的路径（T7 评审 Nit-4：命令路径
-	// 用 %q 加引号，Blocked 节与冲突节共用同一格式与文本）。
+	// 加引号，Blocked 节与冲突节共用同一格式与文本；v1.0.1 F1：引号必须是
+	// shell 字面量——%q 是 Go 引号，路径含 `$`／反引号时复制执行会被求值，
+	// 改用 shellQuote 的单引号包裹）。
 	acceptable := make(map[string]bool, len(r.Acceptable))
 	for _, p := range r.Acceptable {
 		acceptable[p] = true
@@ -130,7 +134,7 @@ func (r *UpdateReport) Print(w io.Writer) {
 		// 命令」——不打就成了悬空引用（T7 评审 Minor-1）。
 		for _, p := range r.Blocked {
 			if acceptable[p] {
-				fmt.Fprintf(w, "  %-20s xinit update --accept %q\n", "accept?", p)
+				fmt.Fprintf(w, "  %-20s xinit update --accept %s\n", "accept?", shellQuote(p))
 			}
 		}
 		// 被阻断的路径由 listConflicts 从磁盘枚举而来——conflicts/ 文件确实
@@ -189,7 +193,7 @@ func (r *UpdateReport) Print(w io.Writer) {
 		for _, p := range r.Conflicted {
 			fmt.Fprintf(w, "  %-20s %s\n", "conflict", p)
 			if acceptable[p] {
-				fmt.Fprintf(w, "  %-20s xinit update --accept %q\n", "accept?", p)
+				fmt.Fprintf(w, "  %-20s xinit update --accept %s\n", "accept?", shellQuote(p))
 			}
 		}
 		fmt.Fprint(w, conflictExitsFor(len(r.ConflictFiles) > 0))
@@ -245,6 +249,14 @@ func orNone(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// shellQuote 把路径包成可安全复制执行的 shell 字面量：单引号包裹，内部的
+// 单引号按 POSIX 惯用法转义（关闭单引号 + 反斜杠转义的单引号 + 重开）。
+// 不能用 %q——那是 Go 字符串引号，`$`、反引号、`\` 在 shell 里仍各自有
+// 含义（v1.0.1 F1）。
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // hookBlockLines 把钩子块/输出切成行（与 hooks 包的 splitLines 同语义，
