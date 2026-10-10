@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"path"
 	"sort"
 
@@ -232,7 +233,6 @@ func classifyMigrations(projectDir string, actions []plan.Action, base *baseSnap
 			notes = append(notes, note)
 			continue
 		}
-		dels = append(dels, p.Old)
 
 		// 第 2 步：内容迁移。
 		var out []byte
@@ -248,7 +248,11 @@ func classifyMigrations(projectDir string, actions []plan.Action, base *baseSnap
 			ob := oursBytes[p.Old]
 			res, err := merge.ThreeWay(ob, base.Bytes[p.Old], theirsRendered[p.New])
 			if err != nil {
-				return nil, err
+				// 防御：前置过滤后 ThreeWay 近乎不可能报 err；按 §17.2「Error →
+				// fallback」整对回退，不中止整轮 update（保守优先）。
+				note.Status, note.Reason = "fallback", "三方合并失败"
+				notes = append(notes, note)
+				continue
 			}
 			if res.Outcome != merge.Clean {
 				note.Status, note.Reason = "fallback", "模板与本地都在改且相冲突"
@@ -262,7 +266,7 @@ func classifyMigrations(projectDir string, actions []plan.Action, base *baseSnap
 		pi, pok := idx[p.Old]
 		qi, qok := idx[p.New]
 		if !pok || !qok {
-			continue // 不可达：配对来自动作表本身
+			return nil, fmt.Errorf("内部错误：迁移对 %q → %q 缺少快照", p.Old, p.New)
 		}
 		pa := &actions[pi]
 		pa.Kind, pa.NewBase = plan.Delete, nil
@@ -271,14 +275,16 @@ func classifyMigrations(projectDir string, actions []plan.Action, base *baseSnap
 		qa.Kind, qa.MigratedFrom = plan.Merge, p.Old
 		qa.Note = "路径迁移自 " + p.Old + "：本地改动已保留"
 		plan.SettleMergeClean(qa, base.Metas, ours, theirs) // 按 Path=Q 原样调用，不重映射
-		if o, ok := ours[p.Old]; ok {
-			if b, ok := base.Metas[p.Old]; ok && o.Exec != b.Exec {
-				qa.Note += "；新路径保留本地 exec 位"
-			}
+		if localExecDiff(p.Old, base.Metas, ours) {
+			qa.Note += "；新路径保留本地 exec 位"
 		}
 		merged[p.New] = out
 		note.Status = "migrated"
 		notes = append(notes, note)
+		// 只有改写成功的 P 才进后续对的预检删除集（F4 方向论证的精确形态）：
+		// 预检失败 / fallback / skip 的 P 保持原动作（可能是 KeepWarned、执行期
+		// 不删），计入会让预检集越出 liveDeletes、漏保护。
+		dels = append(dels, p.Old)
 	}
 	return notes, nil
 }
@@ -297,10 +303,16 @@ func refusalOn(refs []apply.Refusal, p, q string) (string, bool) {
 // （ours[P].Exec ≠ base[P].Exec）→ ours[P].Exec；否则 NewBase.Exec（= theirs[Q]）。
 // ours[P]/base[P] 缺键防御 → NewBase.Exec。
 func migratedExec(a plan.Action, base, ours plan.Snap) bool {
-	o, ook := ours[a.MigratedFrom]
-	b, bok := base[a.MigratedFrom]
-	if ook && bok && o.Exec != b.Exec {
-		return o.Exec
+	if localExecDiff(a.MigratedFrom, base, ours) {
+		return ours[a.MigratedFrom].Exec
 	}
 	return a.NewBase.Exec
+}
+
+// localExecDiff 是 §17.3 的「本地改过权限」判据（ours[P].Exec ≠ base[P].Exec）；
+// 任一侧缺键 → false。Note 追加与 migratedExec 共用，防判据分叉。
+func localExecDiff(p string, base, ours plan.Snap) bool {
+	o, ook := ours[p]
+	b, bok := base[p]
+	return ook && bok && o.Exec != b.Exec
 }

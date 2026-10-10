@@ -614,3 +614,62 @@ func TestDetectMigrationPairsIgnoresOurs(t *testing.T) {
 		t.Fatalf("ours==theirs≠base 不应配对，got %+v", got)
 	}
 }
+
+// R10-M2：fallback 对的 P（KeepWarned，执行期不删）不得进后续对的预检删除集。
+// 对 1：X.txt → z/X.txt 冲突 fallback；对 2：Y.txt → x.txt 直搬，但磁盘上的
+// X.txt 与 x.txt 折叠等价且不会被删 → 对 2 必须 skip。
+func TestClassifyMigrationsFallbackPNotInPrecheckSet(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "X.txt"), []byte("ours1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := func(h string) plan.FileMeta { return migMeta(h) }
+	q1, q2 := m("h-t1"), m("h-b2")
+	actions := []plan.Action{
+		{Path: "X.txt", Kind: plan.KeepWarned},
+		{Path: "Y.txt", Kind: plan.KeepWarned},
+		{Path: "x.txt", Kind: plan.WriteTheirs, NewBase: &q2},
+		{Path: "z/X.txt", Kind: plan.WriteTheirs, NewBase: &q1},
+	}
+	base := &baseSnapshot{
+		Metas: map[string]plan.FileMeta{"X.txt": m("h-b1"), "Y.txt": m("h-b2")},
+		Bytes: map[string][]byte{"X.txt": []byte("b1\n"), "Y.txt": []byte("b2\n")},
+	}
+	ours := plan.Snap{"X.txt": m("h-o1"), "Y.txt": m("h-o2")}
+	theirs := plan.Snap{"z/X.txt": q1, "x.txt": q2}
+	st := &state.State{Files: map[string]state.FileState{"X.txt": {Src: "s1"}, "Y.txt": {Src: "s2"}}}
+	merged := map[string][]byte{}
+	notes, err := classifyMigrations(dir, actions, base, ours,
+		map[string][]byte{"X.txt": []byte("ours1\n"), "Y.txt": []byte("ours2\n")}, theirs,
+		map[string][]byte{"z/X.txt": []byte("theirs1\n"), "x.txt": []byte("b2\n")},
+		map[string]string{"z/X.txt": "s1", "x.txt": "s2"}, st, merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notes) != 2 || notes[0].Status != "fallback" || notes[1].Status != "skip" {
+		t.Fatalf("notes = %+v，want [fallback, skip]", notes)
+	}
+	if len(merged) != 0 || actions[2].Kind != plan.WriteTheirs {
+		t.Fatalf("对 2 不应改写：merged=%v x.txt=%+v", merged, actions[2])
+	}
+}
+
+// R10-M3：localExecDiff 判据（缺键 → false）。
+func TestLocalExecDiff(t *testing.T) {
+	x := plan.FileMeta{Kind: render.KindRegular, Exec: true}
+	n := plan.FileMeta{Kind: render.KindRegular}
+	for _, tc := range []struct {
+		name       string
+		base, ours plan.Snap
+		want       bool
+	}{
+		{"有差异", plan.Snap{"p": n}, plan.Snap{"p": x}, true},
+		{"无差异", plan.Snap{"p": x}, plan.Snap{"p": x}, false},
+		{"ours 缺键", plan.Snap{"p": n}, plan.Snap{}, false},
+		{"base 缺键", plan.Snap{}, plan.Snap{"p": x}, false},
+	} {
+		if got := localExecDiff("p", tc.base, tc.ours); got != tc.want {
+			t.Errorf("%s: got %v", tc.name, got)
+		}
+	}
+}
