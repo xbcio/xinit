@@ -49,7 +49,7 @@ cmp keep.txt $WORK/new-keep.txt
 
 # darwin：精确判据下 gen.txt 不存在（只剩折叠名 GEN.txt）→ 本地删除行、不回写、
 # 无折叠拒绝、rc 0；GEN.txt 字节原样（无覆盖）
-[darwin] stdout '^  keep-local-delete    gen\.txt'
+[darwin] stdout '^  keep-local-delete    gen\.txt（你本地删除了该路径，模板有更新——.*cp \.xinit/base/gen\.txt gen\.txt）$'
 [darwin] ! stdout 'refuse\s+gen\.txt'
 [darwin] stdout 'exit=0'
 [darwin] cmp GEN.txt $WORK/local-gen.txt

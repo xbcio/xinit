@@ -69,7 +69,7 @@ mv $WORK/t10/foo.txt $WORK/t10/bar.txt
 exec mkdir p10/bar.txt
 cd p10
 xinit-code update
-stdout '^  skip                 foo\.txt → bar\.txt（跳过：.+）$'
+stdout '^  skip                 foo\.txt → bar\.txt（跳过：bar\.txt 在磁盘上是目录（模板要写文件）；.*（§9\.3））$'
 ! stdout 'migrated '
 stdout 'exit=2'
 # 无半程：旧路径与本地改动原样保留、Q 未写入、state 仍记 P 不记 Q
@@ -91,7 +91,7 @@ cd ..
 [darwin] cp $WORK/blocker.txt p10d/BAR.txt
 [darwin] cd p10d
 [darwin] xinit-code update
-[darwin] stdout '^  skip                 foo\.txt → bar\.txt（跳过：.+）$'
+[darwin] stdout '^  skip                 foo\.txt → bar\.txt（跳过：父目录里已有折叠等价的条目 BAR\.txt（.*（§9\.3））$'
 [darwin] stdout 'exit=2'
 [darwin] cmp foo.txt $WORK/local.txt
 [darwin] cmp BAR.txt $WORK/blocker.txt

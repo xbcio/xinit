@@ -530,6 +530,33 @@ func TestClassifyMigrationsPrecheckSkip(t *testing.T) {
 	assertUntouched(t, f, notes, merged, "skip", want[0].Reason)
 }
 
+// 预检 skip 的 P 档（§17.4 / 验收 16）：P 的父目录是指向项目根之外的符号链接
+// → 删除路径解析逃逸，拒绝落在 P 上 → 整对 skip、动作与 merged 原样。e2e 不可
+// 构造（Scan 不穿透符号链接，P 落行 12），故在此直接注入快照。
+func TestClassifyMigrationsPrecheckSkipOnP(t *testing.T) {
+	dir, outside := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "a.txt"), []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "old")); err != nil {
+		t.Fatal(err)
+	}
+	base := []byte("x\n")
+	f := newMigFixture(base, []byte("local\n"), base) // hash 相等 → 直搬档
+	want, err := predictRefusals(dir, apply.Changes{Deletes: []string{"old/a.txt"}})
+	if err != nil || len(want) != 1 || want[0].Path != "old/a.txt" {
+		t.Fatalf("前提：P 应因解析逃逸被拒，got %v %v", want, err)
+	}
+	notes, merged := f.run(t, dir)
+	assertUntouched(t, f, notes, merged, "skip", want[0].Reason)
+	if !strings.Contains(notes[0].Reason, "删除路径解析后落在项目根之外") {
+		t.Fatalf("Reason 应为删除逃逸原文：%q", notes[0].Reason)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "new", "a.txt")); !os.IsNotExist(err) {
+		t.Fatalf("Q 不应被写出：%v", err)
+	}
+}
+
 func TestClassifyMigrationsExec(t *testing.T) {
 	base := []byte("x\n")
 	for _, tc := range []struct {
