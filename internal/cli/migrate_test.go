@@ -548,9 +548,13 @@ func TestClassifyMigrationsPrecheckSkipOnP(t *testing.T) {
 		t.Fatalf("前提：P 应因解析逃逸被拒，got %v %v", want, err)
 	}
 	notes, merged := f.run(t, dir)
-	assertUntouched(t, f, notes, merged, "skip", want[0].Reason)
-	if !strings.Contains(notes[0].Reason, "删除路径解析后落在项目根之外") {
-		t.Fatalf("Reason 应为删除逃逸原文：%q", notes[0].Reason)
+	assertUntouched(t, f, notes, merged, "skip",
+		want[0].Reason+"——该对不再重试；本地改动需手工合并到新路径，或把旧路径写进 .xinit/prune.txt")
+	// §17.6 落 P 文案三要素：原文 + 不再重试 + 手工合并到新路径 / prune 旧路径
+	for _, sub := range []string{"删除路径解析后落在项目根之外", "不再重试", "手工合并到新路径", "prune.txt"} {
+		if !strings.Contains(notes[0].Reason, sub) {
+			t.Fatalf("Reason 缺 %q：%q", sub, notes[0].Reason)
+		}
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "new", "a.txt")); !os.IsNotExist(err) {
 		t.Fatalf("Q 不应被写出：%v", err)

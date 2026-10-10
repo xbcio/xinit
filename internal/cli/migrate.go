@@ -229,7 +229,13 @@ func classifyMigrations(projectDir string, actions []plan.Action, base *baseSnap
 			return nil, err
 		}
 		if r, hit := refusalOn(refs, p.Old, p.New); hit {
-			note.Status, note.Reason = "skip", r
+			note.Status, note.Reason = "skip", r.Reason
+			// §17.6「文案按此区分」：落 Q 原文透传（原因消除后重跑再次配对）；
+			// 落 P 时 Q 照常入 base、该对不再重试，必须追加人工去向。执行期
+			// 防御分支——e2e 不可达（Scan 不穿透符号链接），由注入单测钉住。
+			if r.Path == p.Old {
+				note.Reason += "——该对不再重试；本地改动需手工合并到新路径，或把旧路径写进 .xinit/prune.txt"
+			}
 			notes = append(notes, note)
 			continue
 		}
@@ -290,14 +296,15 @@ func classifyMigrations(projectDir string, actions []plan.Action, base *baseSnap
 	return notes, nil
 }
 
-// refusalOn 找落在 P 或 Q 上的第一条拒绝（refs 已按 Path 排序）。
-func refusalOn(refs []apply.Refusal, p, q string) (string, bool) {
+// refusalOn 找落在 P 或 Q 上的第一条拒绝（refs 已按 Path 排序）；返回整条
+// Refusal，调用方按 Path 区分落点。
+func refusalOn(refs []apply.Refusal, p, q string) (apply.Refusal, bool) {
 	for _, r := range refs {
 		if r.Path == p || r.Path == q {
-			return r.Reason, true
+			return r, true
 		}
 	}
-	return "", false
+	return apply.Refusal{}, false
 }
 
 // migratedExec 是迁移 Merge 动作的磁盘 exec 目标（§17.3）：本地改过权限
