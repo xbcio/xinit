@@ -1,0 +1,67 @@
+# check 端到端（§18.9 验收 1/17）：干净项目（init → git 仓 → update rc=0）
+# → 0 失败、退 0；只读：无 .xinit/lock，base / 受管文件 / exclude 前后 cmp 不变，
+# conflicts/ 不出现。末段（验收 16）：非 xinit 项目 → 前置退 1、无计数器行。
+
+xinit init --template $WORK/tpl --yes out
+# 先 init 再建 git 仓：init 要求空目标；update 随后补写 .git/info/exclude（§5.5）
+exec git init -q $WORK/out
+
+cd $WORK/out
+xinit-code update
+stdout 'exit=0'
+
+# update 按设计常驻 .xinit/lock（flock 解锁不删，state/lock.go）：先移除，
+# check 之后再断言 ! exists——证明 check 不加锁（§18.1）
+exists .xinit/lock
+rm .xinit/lock
+
+# ── 快照（check 前）──
+mkdir $WORK/snap
+cp a.txt $WORK/snap/a.txt
+cp sub/b.txt $WORK/snap/b.txt
+cp .xinit/base/a.txt $WORK/snap/base-a.txt
+cp .xinit/base/sub/b.txt $WORK/snap/base-b.txt
+cp .xinit/state.json $WORK/snap/state.json
+cp .git/info/exclude $WORK/snap/exclude
+! exists .xinit/conflicts
+
+xinit-code check
+stdout '^xinit check: '
+stdout '^A 状态与 base 树（§4\.3 / §5\.1 / §5\.2）:$'
+stdout '^B 冲突残留（§10\.4）:$'
+stdout '^C 配置与 git 契约（§3\.2 / §5\.5）:$'
+stdout '^D 模板面（§5\.2 / §7\.6 / §11\.4）:$'
+stdout '^  skip  dir 源：无版本概念（§11\.4）$'
+stdout '^  skip  dir 源无历史版本：base 一旦丢失只能 adopt（§5\.2）$'
+stdout '^检查汇总: 通过（0 项失败、0 项警告、2 项跳过）$'
+! stdout 'FAIL'
+! stdout 'warn'
+stdout 'exit=0'
+
+# ── 只读复查（§18.1：项目内零写、不加锁）──
+! exists .xinit/lock
+! exists .xinit/conflicts
+cmp a.txt $WORK/snap/a.txt
+cmp sub/b.txt $WORK/snap/b.txt
+cmp .xinit/base/a.txt $WORK/snap/base-a.txt
+cmp .xinit/base/sub/b.txt $WORK/snap/base-b.txt
+cmp .xinit/state.json $WORK/snap/state.json
+cmp .git/info/exclude $WORK/snap/exclude
+
+# ── 前置失败（验收 16）：空目录 → 普通 error 退 1，不进计数器 ──
+mkdir $WORK/empty
+cd $WORK/empty
+xinit-code check
+stdout 'exit=1'
+stderr '^xinit: '
+stderr '这不是 xinit 项目，或 \.xinit/state\.json 缺失；请从模板 init 生成，或用 xinit adopt 重建基线（§5\.3）'
+! stdout 'xinit check: '
+! stdout '检查汇总'
+! exists .xinit
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- tpl/sub/b.txt --
+b1

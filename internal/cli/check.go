@@ -11,10 +11,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/spf13/cobra"
+	"golang.org/x/mod/semver"
+
 	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/state"
 	"github.com/xbcio/xinit/internal/template"
-	"golang.org/x/mod/semver"
 )
 
 // CheckOptions 是 check 的输入（R13：作用于 cwd）。
@@ -22,6 +24,70 @@ import (
 type CheckOptions struct {
 	ProjectDir string
 	Fetch      bool
+}
+
+func newCheckCmd() *cobra.Command {
+	var o CheckOptions
+	cmd := &cobra.Command{
+		Use:   "check",
+		Short: "只读门禁：校验 .xinit/ 内部自洽、git 契约与模板可继续更新（§18）",
+		Long: "分组检查（§18）：A 状态与 base 树、B 冲突残留、C 配置与 git 契约、D 模板面。\n\n" +
+			"只读：项目内零写、不加锁、默认不联网；--fetch 刷新已有镜像。\n" +
+			"有 FAIL 项退出码 6；warn/skip 不影响退出码。",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			o.ProjectDir = "."
+			return Check(o)
+		},
+	}
+	cmd.Flags().BoolVar(&o.Fetch, "fetch", false, "联网刷新模板镜像缓存后再检查模板面")
+	return cmd
+}
+
+// Check 打印报告；有 FAIL 项 → 退出码 6（§18.6）。warn/skip 不影响退出码。
+func Check(o CheckOptions) error {
+	rep, err := runCheck(o)
+	if err != nil {
+		return err
+	}
+	rep.Print(os.Stdout)
+	if rep.Fails > 0 {
+		return &ExitError{
+			Code:   CodeCheck,
+			Silent: true,
+			msg:    fmt.Sprintf("check：%d 项失败", rep.Fails),
+		}
+	}
+	return nil
+}
+
+// runCheck 跑完四组检查（计数器模型：不在首个失败处中止）。返回的错误只来自
+// 前置失败或 IO 意外——普通 error、退 1、不进计数器（§18.7）。
+func runCheck(o CheckOptions) (*checkReport, error) {
+	projectDir, err := filepath.Abs(o.ProjectDir)
+	if err != nil {
+		return nil, err
+	}
+	st, err := state.Load(projectDir)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%w\n这不是 xinit 项目，或 .xinit/state.json 缺失；请从模板 init 生成，或用 xinit adopt 重建基线（§5.3）",
+			err)
+	}
+	rep := newCheckReport(st.Template.Source)
+	if err := checkGroupA(rep, projectDir, st); err != nil {
+		return nil, err
+	}
+	if err := checkGroupB(rep, projectDir, st); err != nil {
+		return nil, err
+	}
+	if err := checkGroupC(rep, projectDir, st); err != nil {
+		return nil, err
+	}
+	if err := checkGroupD(rep, projectDir, st, o.Fetch); err != nil {
+		return nil, err
+	}
+	return rep, nil
 }
 
 // checkKind 是检查行的级别。

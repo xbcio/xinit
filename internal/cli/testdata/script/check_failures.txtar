@@ -1,0 +1,77 @@
+# check 端到端（§18.9 验收 2/3/9/11/17）：注入 base 扰动（A4）、conflicts/ 条目
+# （B1，含孤立条目）、.xinit/ 被 git 跟踪（C2）、exclude 缺行（C3 warn）
+# → 计数器跑完全部组、退 6；只读复查：注入后快照，check 前后 cmp 不变。
+
+xinit init --template $WORK/tpl --yes out
+exec git init -q $WORK/out
+
+cd $WORK/out
+xinit-code update
+stdout 'exit=0'
+
+# update 按设计常驻 .xinit/lock（flock 解锁不删，state/lock.go）：先移除，
+# check 之后再断言 ! exists——证明 check 不加锁（§18.1）
+exists .xinit/lock
+rm .xinit/lock
+
+# ── 注入 ──
+# A4：base/a.txt 改一个字节（记账 hash 不变）
+cp $WORK/a-tampered.txt .xinit/base/a.txt
+# B1：受管条目 + 孤立条目（gone.txt ∉ files）
+mkdir .xinit/conflicts
+cp $WORK/conflict.txt .xinit/conflicts/a.txt
+cp $WORK/conflict.txt .xinit/conflicts/gone.txt
+# C3：exclude 去掉 .xinit/ 行
+cp $WORK/exclude-empty .git/info/exclude
+# C2：.xinit/ 进入 git 索引
+exec git add -f .xinit/state.json
+
+# ── 快照（注入后、check 前）──
+mkdir $WORK/snap
+cp a.txt $WORK/snap/a.txt
+cp .xinit/base/a.txt $WORK/snap/base-a.txt
+cp .xinit/state.json $WORK/snap/state.json
+cp .xinit/conflicts/a.txt $WORK/snap/conflict-a.txt
+cp .xinit/conflicts/gone.txt $WORK/snap/conflict-gone.txt
+cp .git/info/exclude $WORK/snap/exclude
+
+xinit-code check
+stdout '^xinit check: '
+# A4（got/want 双值）
+stdout '^  FAIL  base/a\.txt 与记账 hash 不符（got \S+, want \S+；§5\.1——update 将按 §5\.2 处理）$'
+# B1：节头 + 逐条 + 出路两行
+stdout '^  FAIL  未解决的冲突（\d 条，§10\.4）：$'
+stdout '^  conflict\s+a\.txt$'
+stdout '^  stale\s+gone\.txt（孤立条目，下轮 update 将清理）$'
+stdout '出路一：'
+stdout '出路二：'
+# C2 / C3
+stdout '^  FAIL  \.xinit/ 已被 git 跟踪'
+stdout '^  warn  \.git/info/exclude 缺少 \.xinit/ 行'
+# 汇总与退出码
+stdout '^检查汇总: \d+ 项失败、\d+ 项警告、\d+ 项跳过（退出码 6）$'
+stdout 'exit=6'
+! stdout '通过（0 项失败'
+
+# ── 只读复查 ──
+! exists .xinit/lock
+cmp a.txt $WORK/snap/a.txt
+cmp .xinit/base/a.txt $WORK/snap/base-a.txt
+cmp .xinit/state.json $WORK/snap/state.json
+cmp .xinit/conflicts/a.txt $WORK/snap/conflict-a.txt
+cmp .xinit/conflicts/gone.txt $WORK/snap/conflict-gone.txt
+cmp .git/info/exclude $WORK/snap/exclude
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- a-tampered.txt --
+a2
+-- conflict.txt --
+<<<<<<< 本地
+x
+=======
+y
+>>>>>>> 模板
+-- exclude-empty --
