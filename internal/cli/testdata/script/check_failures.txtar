@@ -34,6 +34,7 @@ cp .xinit/state.json $WORK/snap/state.json
 cp .xinit/conflicts/a.txt $WORK/snap/conflict-a.txt
 cp .xinit/conflicts/gone.txt $WORK/snap/conflict-gone.txt
 cp .git/info/exclude $WORK/snap/exclude
+cp .git/index $WORK/snap/index
 
 xinit-code check
 stdout '^xinit check: '
@@ -51,6 +52,8 @@ stdout '^  warn  \.git/info/exclude 缺少 \.xinit/ 行'
 # 汇总与退出码
 stdout '^检查汇总: \d+ 项失败、\d+ 项警告、\d+ 项跳过（退出码 6）$'
 stdout 'exit=6'
+# Silent（§18.1）：stdout 已说全，stderr 零输出（stderr 只匹配上一条命令）
+! stderr .
 ! stdout '通过（0 项失败'
 
 # ── 只读复查 ──
@@ -61,6 +64,7 @@ cmp .xinit/state.json $WORK/snap/state.json
 cmp .xinit/conflicts/a.txt $WORK/snap/conflict-a.txt
 cmp .xinit/conflicts/gone.txt $WORK/snap/conflict-gone.txt
 cmp .git/info/exclude $WORK/snap/exclude
+cmp .git/index $WORK/snap/index
 
 -- tpl/xinit.yml --
 manifest_version: 1

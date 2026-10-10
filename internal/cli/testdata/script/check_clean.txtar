@@ -37,6 +37,7 @@ stdout '^检查汇总: 通过（0 项失败、0 项警告、2 项跳过）$'
 ! stdout 'FAIL'
 ! stdout 'warn'
 stdout 'exit=0'
+! stderr .
 
 # ── 只读复查（§18.1：项目内零写、不加锁）──
 ! exists .xinit/lock
