@@ -67,7 +67,7 @@ func TestInitGeneratesTree(t *testing.T) {
 	tmpl := setupTemplate(t)
 	dest := t.TempDir()
 
-	err := Init(dest, tmpl, "", "", false, true, false, true)
+	err := Init(dest, tmpl, "", "", false, true, false, true, false)
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestInitWritesStateAndBase(t *testing.T) {
 	tmpl := setupTemplate(t)
 	dest := t.TempDir()
 
-	if err := Init(dest, tmpl, "", "", false, true, false, true); err != nil {
+	if err := Init(dest, tmpl, "", "", false, true, false, true, false); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
@@ -152,7 +152,7 @@ func TestInitRefusesNonEmptyDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Init(dest, tmpl, "", "", false, true, false, true)
+	err := Init(dest, tmpl, "", "", false, true, false, true, false)
 	if err == nil {
 		t.Fatal("非空目录应报错")
 	}
@@ -175,7 +175,7 @@ func TestInitTreatsGitOnlyDirAsEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Init(dest, tmpl, "", "", false, true, false, true); err != nil {
+	if err := Init(dest, tmpl, "", "", false, true, false, true, false); err != nil {
 		t.Fatalf("只含 .git 的目录应视为空目录: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, ".git")); err != nil {
@@ -190,7 +190,7 @@ func TestInitForceSkipsExistingFilesWithoutOverwriting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Init(dest, tmpl, "", "", false, true, true, true); err != nil {
+	if err := Init(dest, tmpl, "", "", false, true, true, true, false); err != nil {
 		t.Fatalf("--force 应继续执行: %v", err)
 	}
 
@@ -213,7 +213,7 @@ func TestInitForceSkipExcludesFromStateAndBase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Init(dest, tmpl, "", "", false, true, true, true); err != nil {
+	if err := Init(dest, tmpl, "", "", false, true, true, true, false); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
@@ -238,7 +238,7 @@ func TestInitConfigOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Init(dest, tmpl, cfg, "", false, true, false, true); err != nil {
+	if err := Init(dest, tmpl, cfg, "", false, true, false, true, false); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "xdesk", "main.go")); err != nil {
@@ -254,7 +254,7 @@ func TestInitRejectsUnknownConfigKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Init(dest, tmpl, cfg, "", false, true, false, true)
+	err := Init(dest, tmpl, cfg, "", false, true, false, true, false)
 	if err == nil {
 		t.Fatal("配置里出现清单未声明的变量应报错，而不是静默忽略")
 	}
@@ -272,7 +272,7 @@ func TestInitFailureLeavesNoPartialTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Init(dest, tmpl, "", "", false, true, true, true); err == nil {
+	if err := Init(dest, tmpl, "", "", false, true, true, true, false); err == nil {
 		t.Fatal("myapp 是普通文件、无法在其下建目录，写入应失败")
 	}
 
@@ -365,7 +365,7 @@ func TestInitFailureKeepsPreexistingXinitFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Init(dest, tmpl, "", "", false, true, true, true); err == nil {
+	if err := Init(dest, tmpl, "", "", false, true, true, true, false); err == nil {
 		t.Fatal(".xinit 是普通文件时写 state 必失败")
 	}
 
@@ -432,7 +432,7 @@ func TestInitTreeMatchesExpectedByte(t *testing.T) {
 	expectedDir := "testdata/init-tree/expected"
 	dest := t.TempDir()
 
-	if err := Init(dest, tmplDir, "", "", false, true, false, true); err != nil {
+	if err := Init(dest, tmplDir, "", "", false, true, false, true, false); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
@@ -599,7 +599,7 @@ func TestInitDirCommitTracksExclude(t *testing.T) {
 
 	// out1：基线
 	out1 := t.TempDir()
-	if err := Init(out1, tmplCopy, "", "", false, true, false, true); err != nil {
+	if err := Init(out1, tmplCopy, "", "", false, true, false, true, false); err != nil {
 		t.Fatalf("Init(out1): %v", err)
 	}
 	commit1 := readCommit(out1)
@@ -614,7 +614,7 @@ func TestInitDirCommitTracksExclude(t *testing.T) {
 		t.Fatal(err)
 	}
 	out2 := t.TempDir()
-	if err := Init(out2, tmplCopy, "", "", false, true, false, true); err != nil {
+	if err := Init(out2, tmplCopy, "", "", false, true, false, true, false); err != nil {
 		t.Fatalf("Init(out2): %v", err)
 	}
 	commit2 := readCommit(out2)
@@ -632,7 +632,7 @@ func TestInitDirCommitTracksExclude(t *testing.T) {
 		t.Fatal(err)
 	}
 	out3 := t.TempDir()
-	if err := Init(out3, tmplCopy, "", "", false, true, false, true); err != nil {
+	if err := Init(out3, tmplCopy, "", "", false, true, false, true, false); err != nil {
 		t.Fatalf("Init(out3): %v", err)
 	}
 	commit3 := readCommit(out3)
@@ -655,7 +655,7 @@ func TestInitRecordsMixedEOL(t *testing.T) {
 		}
 	}
 	dest := t.TempDir()
-	if err := Init(dest, tmpl, "", "", false, true, false, true); err != nil {
+	if err := Init(dest, tmpl, "", "", false, true, false, true, false); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	st, err := state.Load(dest)

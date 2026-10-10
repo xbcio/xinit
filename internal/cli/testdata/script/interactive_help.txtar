@@ -1,0 +1,14 @@
+# 验收 #22（§19.7）：--interactive 的帮助原文两个命令逐字相同，
+# 只读预览 diff **不注册**该旗标。cmd_smoke_test.go 的 TestHelpMentionsCommands
+# 只查 root --help 的子命令名、不查旗标，不能替本条背书。
+
+xinit init --help
+stdout '--interactive'
+stdout '即使 stdin 不是终端也按可交互处理：交互提问（含信任确认）从 stdin 逐行读取（供脚本与 CI 驱动，§19.2）'
+
+xinit update --help
+stdout '--interactive'
+stdout '即使 stdin 不是终端也按可交互处理：交互提问（含信任确认）从 stdin 逐行读取（供脚本与 CI 驱动，§19.2）'
+
+xinit diff --help
+! stdout '--interactive'

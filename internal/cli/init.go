@@ -35,6 +35,7 @@ func newInitCmd() *cobra.Command {
 		noHooks     bool
 		force       bool
 		yes         bool
+		interactive bool
 	)
 	cmd := &cobra.Command{
 		Use:   "init [目标目录]",
@@ -49,7 +50,7 @@ func newInitCmd() *cobra.Command {
 			if len(args) > 0 {
 				dest = args[0]
 			}
-			return Init(dest, templateSrc, configPath, "", offline, noHooks, force, yes)
+			return Init(dest, templateSrc, configPath, "", offline, noHooks, force, yes, interactive)
 		},
 	}
 	cmd.Flags().StringVar(&templateSrc, "template", "", "模板来源（本地路径或 git URL，必填）")
@@ -58,6 +59,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noHooks, "no-hooks", false, "跳过 post_init 执行（仍记录本次内容，下次带钩子运行仍需确认）")
 	cmd.Flags().BoolVar(&force, "force", false, "允许在非空目录执行（仍不覆盖同名文件）")
 	cmd.Flags().BoolVar(&yes, "yes", false, "跳过钩子信任确认（等同于在交互终端回答 y）")
+	cmd.Flags().BoolVar(&interactive, "interactive", false, "即使 stdin 不是终端也按可交互处理：交互提问（含信任确认）从 stdin 逐行读取（供脚本与 CI 驱动，§19.2）")
 	_ = cmd.MarkFlagRequired("template")
 	return cmd
 }
@@ -81,11 +83,14 @@ func newInitCmd() *cobra.Command {
 // 的任何内容。第 10 步（钩子）失败不回删 —— 渲染产物是正确的。
 func Init(
 	projectDir, templateSrc, configPath, revision string,
-	offlineReady, noHooks, force, yes bool,
+	offlineReady, noHooks, force, yes, interactive bool,
 ) error {
 	if templateSrc == "" {
 		return errors.New("必须指定 --template")
 	}
+
+	// 交互会话（§19.2.2/§19.2.3）：入口创建一次；创建只做一次 ioctl 判定。
+	ps := interactiveSession(interactive)
 
 	dest, err := filepath.Abs(projectDir)
 	if err != nil {
@@ -165,10 +170,13 @@ func Init(
 			if !yes {
 				printHookAsk(os.Stdout) // T4-R2：--yes 预先确认时不打指引
 			}
+			// 守卫是 ps != nil（而非 hooks.Interactive）：非 --interactive
+			// 时二者等价，--interactive 时信任门才第一次能在管道下被驱动
+			//（§19.2.3；信任判据本身不变——仍须显式 y/yes）。
 			ok := yes
-			if !ok && hooks.Interactive(os.Stdin) {
+			if !ok && ps != nil {
 				var cerr error
-				if ok, cerr = hooks.Confirm(os.Stdin, os.Stdout); cerr != nil {
+				if ok, cerr = hooks.Confirm(ps.r, os.Stdout); cerr != nil {
 					return cerr
 				}
 			}

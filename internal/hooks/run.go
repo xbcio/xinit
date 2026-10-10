@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -35,18 +34,14 @@ func Run(projectDir, block string) (Result, error) {
 	return Result{Output: out, ExitCode: 0}, nil
 }
 
-// Interactive 报告 f 是否连着一个字符设备（TTY）。非 TTY（管道、CI）下
-// 不提示交互，直接走 --yes / 退出码 4 的路径。
-func Interactive(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
-}
-
-// Confirm 向 out 打印提示并从 in 读一行；y/Y/yes（不区分大小写）为真。
+// Confirm 向 out 打印提示并从 r 读一行；y/Y/yes（不区分大小写）为真。
 // EOF 与其他输入一律为假（不出错）。
-func Confirm(in io.Reader, out io.Writer) (bool, error) {
+//
+// r 必须是本次运行**唯一**的 reader（§19.2.3）：多问题各建 reader 会因预读
+// 吞掉后续回答。签名收窄成 *bufio.Reader 让这条约束成为编译期事实。
+func Confirm(r *bufio.Reader, out io.Writer) (bool, error) {
 	fmt.Fprint(out, "信任并执行？[y/N] ")
-	line, err := bufio.NewReader(in).ReadString('\n')
+	line, err := r.ReadString('\n')
 	if err != nil && err != io.EOF {
 		return false, err
 	}

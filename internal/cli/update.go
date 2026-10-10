@@ -28,15 +28,16 @@ import (
 
 // UpdateOptions 是 update 的全部输入。R13：作用于 cwd（无位置参数）。
 type UpdateOptions struct {
-	ProjectDir string
-	Revision   string
-	ConfigPath string
-	Fetch      bool
-	Force      bool
-	DryRun     bool
-	NoHooks    bool
-	Yes        bool
-	Accept     []string // --accept <路径>...：声明这些冲突已解决（§10.3）
+	ProjectDir  string
+	Revision    string
+	ConfigPath  string
+	Fetch       bool
+	Force       bool
+	DryRun      bool
+	NoHooks     bool
+	Yes         bool
+	Interactive bool     // --interactive：即使 stdin 不是终端也按可交互处理（§19.2.2）
+	Accept      []string // --accept <路径>...：声明这些冲突已解决（§10.3）
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -59,6 +60,7 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&o.Force, "force", false, "跳过脏工作树检查")
 	cmd.Flags().BoolVar(&o.NoHooks, "no-hooks", false, "跳过 post_update 执行（仍记录本次内容，下次带钩子运行仍需确认）")
 	cmd.Flags().BoolVar(&o.Yes, "yes", false, "跳过钩子信任确认（等同于在交互终端回答 y）")
+	cmd.Flags().BoolVar(&o.Interactive, "interactive", false, "即使 stdin 不是终端也按可交互处理：交互提问（含信任确认）从 stdin 逐行读取（供脚本与 CI 驱动，§19.2）")
 	cmd.Flags().BoolVar(&o.DryRun, "dry-run", false, "只输出动作列表，不落盘、不改状态")
 	cmd.Flags().StringArrayVar(&o.Accept, "accept", nil,
 		"声明这些冲突路径已手工解决：把 .xinit/conflicts/<路径> 的内容记为 base（工具无法验证，§10.3）")
@@ -96,6 +98,10 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// 交互会话（§19.2.2/§19.2.3）：入口创建一次；创建只做一次 ioctl 判定
+	//（不读 stdin、不打印）。--dry-run 下调用点不提问，故不会碰 stdin。
+	ps := interactiveSession(o.Interactive)
 	rep := &UpdateReport{Header: "xinit update"}
 	if o.DryRun {
 		rep.Header = "xinit update --dry-run"
@@ -377,10 +383,13 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 			if !o.Yes {
 				printHookAsk(os.Stdout) // T4-R2：--yes 预先确认时不打指引
 			}
+			// 守卫是 ps != nil（而非 hooks.Interactive）：非 --interactive
+			// 时二者等价，--interactive 时信任门才第一次能在管道下被驱动
+			//（§19.2.3；信任判据本身不变——仍须显式 y/yes）。
 			ok := o.Yes
-			if !ok && hooks.Interactive(os.Stdin) {
+			if !ok && ps != nil {
 				var cerr error
-				if ok, cerr = hooks.Confirm(os.Stdin, os.Stdout); cerr != nil {
+				if ok, cerr = hooks.Confirm(ps.r, os.Stdout); cerr != nil {
 					return nil, cerr
 				}
 			}

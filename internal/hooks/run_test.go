@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,7 +82,8 @@ func TestRunNotShE(t *testing.T) {
 func TestConfirmAcceptsYAndYes(t *testing.T) {
 	for _, in := range []string{"y\n", "Y\n", "yes\n", "YES\n"} {
 		var out strings.Builder
-		ok, err := Confirm(strings.NewReader(in), &out)
+		r := bufio.NewReader(strings.NewReader(in))
+		ok, err := Confirm(r, &out)
 		if err != nil || !ok {
 			t.Fatalf("输入 %q 应接受: ok=%v err=%v", in, ok, err)
 		}
@@ -94,7 +96,8 @@ func TestConfirmAcceptsYAndYes(t *testing.T) {
 func TestConfirmRejectsOtherAndEOF(t *testing.T) {
 	for _, in := range []string{"n\n", "\n", "foo\n", ""} {
 		var out strings.Builder
-		ok, err := Confirm(strings.NewReader(in), &out)
+		r := bufio.NewReader(strings.NewReader(in))
+		ok, err := Confirm(r, &out)
 		if err != nil || ok {
 			t.Fatalf("输入 %q 应拒绝: ok=%v err=%v", in, ok, err)
 		}

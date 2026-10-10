@@ -38,7 +38,7 @@ func initProjectT(t *testing.T, files map[string]string) (string, string) {
 	repo, _ := mkTemplateRepoT(t, files)
 	runGitT(t, repo, "tag", "v1.0.0")
 	proj := t.TempDir()
-	if err := Init(proj, repo, "", "v1.0.0", true, false, false, false); err != nil {
+	if err := Init(proj, repo, "", "v1.0.0", true, false, false, false, false); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	return repo, proj
