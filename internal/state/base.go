@@ -49,6 +49,12 @@ func SyncBase(projectDir string, entries []render.Entry, rendered map[string][]b
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		return fmt.Errorf("创建 %s: %w", base, err)
 	}
+	// 先清残片再写：大小写不敏感文件系统上，仅大小写改名（readme.md →
+	// README.md）的原子写会落在旧目录项上，后清会把刚写的新 base 一并删掉
+	// （§17.8 验收 15）。base 可重建，先删后写的中断窗口无数据风险。
+	if err := removeStale(base, want); err != nil {
+		return err
+	}
 
 	for _, e := range entries {
 		mode := fs.FileMode(0o644)
@@ -60,8 +66,7 @@ func SyncBase(projectDir string, entries []render.Entry, rendered map[string][]b
 			return fmt.Errorf("写 base/%s: %w", e.Dst, err)
 		}
 	}
-
-	return removeStale(base, want)
+	return nil
 }
 
 // removeStale 删掉 base/ 里不在 want 中的文件，并清理变空的目录。

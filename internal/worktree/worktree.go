@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -39,6 +40,16 @@ func ListNames(dir string) ([]string, error) {
 	return names, nil
 }
 
+// hasExactName 报告 dir 下是否有字节完全相同的条目名 name。
+func hasExactName(dir, name string) (bool, error) {
+	names, err := ListNames(dir)
+	if err != nil {
+		return false, err
+	}
+	i := sort.SearchStrings(names, name)
+	return i < len(names) && names[i] == name, nil
+}
+
 // lstatExact 逐段 Lstat 相对路径 rel：任何一段缺失、中间段不是目录
 // （含中间段是符号链接——不穿透）、或遇到 ENOTDIR，都归为 errNotExist。
 // 传来的 rel 必须已是 §9.5 校验过的 Dst（slash 分隔、无 . / .. 段）。
@@ -60,6 +71,13 @@ func lstatExact(root, rel string) (fs.FileInfo, error) {
 				return nil, errNotExist
 			}
 			return nil, fmt.Errorf("lstat %s: %w", full, err)
+		}
+		// §9.3 路径一：大小写不敏感文件系统上 Lstat 会命中折叠等价名——
+		// 存在性必须以父目录精确列举为准（README.md ≠ readme.md）。
+		if exact, err := hasExactName(cur, p); err != nil {
+			return nil, err
+		} else if !exact {
+			return nil, errNotExist
 		}
 		if i == len(parts)-1 {
 			return fi, nil

@@ -86,6 +86,11 @@ func Execute(projectDir string, c Changes) (Result, error) {
 		}
 		res.Deleted = append(res.Deleted, rel)
 	}
+	// 删除后自底向上清理变空的父目录（§17.5：迁移 / 位移后旧目录不残留）；
+	// 只沿已删路径的祖先走、止于项目根，不碰其它空目录。
+	for _, rel := range liveDeletes {
+		removeEmptyParents(projectDir, rel)
+	}
 
 	// 4. 写内容；被拒路径跳过、保持旧 base（§8.5）
 	for _, rel := range writes {
@@ -243,6 +248,16 @@ func rebuildConflicts(projectDir string, conflicts map[string][]byte) (written, 
 
 	pruneEmptyDirs(root)
 	return written, resolved, nil
+}
+
+// removeEmptyParents 从 rel 的父目录起逐级向上删除空目录，止于 root（不含）；
+// 遇非空目录（Remove 失败）即停。
+func removeEmptyParents(root, rel string) {
+	for d := filepath.Dir(filepath.FromSlash(rel)); d != "." && d != string(filepath.Separator); d = filepath.Dir(d) {
+		if os.Remove(filepath.Join(root, d)) != nil {
+			return
+		}
+	}
 }
 
 // pruneEmptyDirs 自底向上删除空目录（含 root 本身）；非空目录删除失败是预期行为。
