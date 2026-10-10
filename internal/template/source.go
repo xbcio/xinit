@@ -116,6 +116,12 @@ func repoDirFor(src, cacheRoot string, fetch, allowClone bool) (string, error) {
 	return ensureMirror(src, cacheRoot, fetch, allowClone)
 }
 
+// RepoDir 返回可执行 git 命令的仓库目录（本地 git 仓直用，其余走镜像）。
+// 只读定位：不允许首次 clone、不创建缓存根（§18.5，与 status 同口径）。
+func RepoDir(src, cacheRoot string, fetch bool) (string, error) {
+	return repoDirFor(src, cacheRoot, fetch, false)
+}
+
 func openGit(src, revision, cacheRoot string, fetch bool) (*Source, error) {
 	// init/update/adopt 的路径：镜像缺失允许首次 clone（现状不变）。
 	repoDir, err := repoDirFor(src, cacheRoot, fetch, true)

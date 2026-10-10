@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/state"
 	"github.com/xbcio/xinit/internal/template"
+	"golang.org/x/mod/semver"
 )
 
 // CheckOptions 是 check 的输入（R13：作用于 cwd）。
@@ -400,4 +402,81 @@ func checkGroupC(r *checkReport, projectDir string, st *state.State) error {
 	}
 	r.warn(secC, ".git/info/exclude 缺少 .xinit/ 行（init/update 会自动补写；补上可避免 git add -A 误纳状态目录，§5.5）")
 	return nil
+}
+
+// checkGroupD 执行 D1–D3（§18.5）：全部无 FAIL——模板面只提示不阻塞。
+// 输出顺序 D1→D2→D3；D2 只依赖 state，恒执行（§18.7）。
+func checkGroupD(r *checkReport, projectDir string, st *state.State, fetch bool) error {
+	d3, err := checkTemplateSide(r, st, fetch)
+	if err != nil {
+		return err
+	}
+	// D2
+	if st.EngineVersion != EngineVersion {
+		r.warn(secD, "engine_version 记录 %s，当前 %s——渲染结果可能有漂移（§7.6）", st.EngineVersion, EngineVersion)
+	}
+	if d3 != nil {
+		d3()
+	}
+	return nil
+}
+
+// checkTemplateSide 判 D1 并就地出行，D3 的结果以闭包返回（由调用方排在 D2
+// 之后输出；nil = 无 D3 行）。D1/D3 共同降级时只出一条合并 skip。git 源先经
+// RepoDir 一次定位——fetch 只在这里发生，不 clone、不建缓存根（§18.5）。
+func checkTemplateSide(r *checkReport, st *state.State, fetch bool) (func(), error) {
+	tpl := st.Template
+	// 分支一：A10 判据（与 checkGroupA 同口径）命中——模板面判定无意义。
+	if (tpl.Kind != template.KindGit.String() && tpl.Kind != template.KindDir.String()) ||
+		tpl.Source == "" || tpl.Commit == "" {
+		r.skip(secD, "template 字段非法（见 A10）：跳过模板面检查")
+		return nil, nil
+	}
+	// 分支二：dir 源。
+	if tpl.Kind == template.KindDir.String() {
+		r.skip(secD, "dir 源：无版本概念（§11.4）")
+		return func() { r.skip(secD, "dir 源无历史版本：base 一旦丢失只能 adopt（§5.2）") }, nil
+	}
+
+	// 分支三：git 源。
+	cacheRoot, err := template.DefaultCacheRoot()
+	if err != nil {
+		return nil, err
+	}
+	repoDir, err := template.RepoDir(tpl.Source, cacheRoot, fetch)
+	if errors.Is(err, template.ErrMirrorMissing) {
+		r.skip(secD, "模板面检查需要本地镜像缓存（先运行 xinit update 建立缓存，§11.4）")
+		return nil, nil
+	} else if err != nil {
+		r.skip(secD, "无法读取模板仓（%s）", checkEscapePath(err.Error()))
+		return nil, nil
+	}
+
+	// D1：镜像已定位（含可选 fetch），ListTags 传 fetch=false 避免双 fetch。
+	if !semver.IsValid(tpl.Revision) {
+		r.skip(secD, "记录的 revision %q 不是 vX.Y.Z 格式，无法做版本比较（§11.4）", tpl.Revision)
+	} else if tags, err := template.ListTags(tpl.Source, cacheRoot, false, false); err != nil {
+		r.skip(secD, "无法读取模板 tag（%s；先运行 xinit update 建立缓存，§11.4）", checkEscapePath(err.Error()))
+	} else {
+		var newer []string
+		for _, t := range template.SemverTags(tags) {
+			if semver.Compare(t, tpl.Revision) > 0 {
+				newer = append(newer, t)
+			}
+		}
+		if n := len(newer); n > 0 {
+			latest := newer[n-1]
+			r.warn(secD, "本地镜像中有 %d 个更高的 semver tag：%s（最新 %s；xinit update --revision %s 升级）",
+				n, strings.Join(newer, ", "), latest, latest)
+		}
+	}
+
+	// D3：只读 ls-tree 判可取（不用 NewGitFS——其 loadBlobs 全量读内容）。
+	if _, err := template.ListTree(repoDir, tpl.Commit); err != nil {
+		return func() {
+			r.warn(secD, "记录的 commit %s 在模板源中取不到：base 一旦损坏将无法自动重建（§5.2）",
+				checkEscapePath(tpl.Commit))
+		}, nil
+	}
+	return nil, nil
 }

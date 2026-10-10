@@ -323,6 +323,57 @@ func TestMirrorNoCloneMissingDoesNotCreateCacheRoot(t *testing.T) {
 	}
 }
 
+// RepoDir 是 check 的只读定位（§18.5）：本地 git 仓（工作副本）直返源路径，
+// 不经镜像、不碰缓存根。
+func TestRepoDirLocalRepo(t *testing.T) {
+	src, _ := newRepo(t, map[string]struct {
+		data string
+		mode os.FileMode
+	}{"a.go": {"x", 0o644}})
+	parent := t.TempDir()
+	cache := filepath.Join(parent, "cache-root") // 尚不存在
+
+	got, err := RepoDir(src, cache, false)
+	if err != nil {
+		t.Fatalf("RepoDir: %v", err)
+	}
+	if got != src {
+		t.Errorf("RepoDir = %q, want 源路径 %q", got, src)
+	}
+	if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Errorf("本地仓源不得创建缓存根（stat err=%v）", err)
+	}
+}
+
+// RepoDir 不允许首次 clone（allowClone=false，与 status 同口径）：远程式源
+// （裸仓走镜像）+ 空缓存 → ErrMirrorMissing，缓存根不被创建；fetch=true 亦然
+// （--fetch 只刷新已有镜像）。
+func TestRepoDirMissingMirrorNoClone(t *testing.T) {
+	work, _ := newRepo(t, map[string]struct {
+		data string
+		mode os.FileMode
+	}{"a.go": {"x", 0o644}})
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	if out, err := exec.Command("git", "clone", "-q", "--bare", work, bare).CombinedOutput(); err != nil {
+		t.Fatalf("clone --bare: %v\n%s", err, out)
+	}
+
+	for _, fetch := range []bool{false, true} {
+		parent := t.TempDir()
+		cache := filepath.Join(parent, "cache-root") // 尚不存在
+		if _, err := RepoDir(bare, cache, fetch); !errors.Is(err, ErrMirrorMissing) {
+			t.Fatalf("fetch=%v：镜像缺失应报 ErrMirrorMissing: %v", fetch, err)
+		}
+		ents, err := os.ReadDir(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ents) != 0 {
+			t.Errorf("fetch=%v：RepoDir 不得创建缓存根或任何条目: %v", fetch, ents)
+		}
+	}
+}
+
 // TestMirrorLockContentionFailsFast 覆盖锁被占用且未陈旧时的报错分支
 // （以确定性锁原语覆盖代替真并发 goroutine 测试：第二个调用者到达锁的
 // 时刻不确定，真并发测试可能偶发全绿，是 flake 而非判别力）。

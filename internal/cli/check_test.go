@@ -13,6 +13,7 @@ import (
 
 	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/state"
+	"github.com/xbcio/xinit/internal/template"
 )
 
 func TestCheckKindStrings(t *testing.T) {
@@ -590,5 +591,231 @@ func TestGroupCNotGit(t *testing.T) {
 	}
 	if r.Skips != 1 || r.Fails != 0 {
 		t.Errorf("Skips/Fails = %d/%d", r.Skips, r.Fails)
+	}
+}
+
+// runGroupD 跑 D 组并返回该组的行。
+func runGroupD(t *testing.T, dir string, st *state.State, fetch bool) (*checkReport, []*checkLine) {
+	t.Helper()
+	r := newCheckReport(st.Template.Source)
+	if err := checkGroupD(r, dir, st, fetch); err != nil {
+		t.Fatal(err)
+	}
+	return r, r.Sections[secD].Lines
+}
+
+// isolateCacheT 把用户缓存目录指向空临时目录（darwin 走 HOME、Linux 走
+// XDG_CACHE_HOME），返回此时的 DefaultCacheRoot（尚不存在）。
+func isolateCacheT(t *testing.T) string {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(t.TempDir(), "xdg"))
+	root, err := template.DefaultCacheRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("缓存根应尚不存在: %v", err)
+	}
+	return root
+}
+
+// mkMirroredBareT 建「远程式」模板源（裸仓，repoDirFor 走镜像路径）并按
+// tags 逐个打 tag（每个 tag 一个新提交），再经真实镜像路径（allowClone=true，
+// 即 update 建缓存的口径）在 cacheRoot 下建好镜像。返回 (裸仓路径, 各 tag 的 commit)。
+func mkMirroredBareT(t *testing.T, cacheRoot string, tags ...string) (string, map[string]string) {
+	t.Helper()
+	work := t.TempDir()
+	runGitT(t, work, "init", "-q", "-b", "main")
+	commits := map[string]string{}
+	for _, tag := range tags {
+		writeFilesT(t, work, map[string]string{"a.txt": tag + "\n"})
+		runGitT(t, work, "add", "-A")
+		runGitT(t, work, "commit", "-q", "-m", tag)
+		runGitT(t, work, "tag", tag)
+		commits[tag] = runGitT(t, work, "rev-parse", "HEAD")
+	}
+	bare := filepath.Join(t.TempDir(), "tpl.git")
+	runGitT(t, work, "clone", "-q", "--bare", work, bare)
+	if _, err := template.ListTags(bare, cacheRoot, false, true); err != nil {
+		t.Fatalf("建镜像: %v", err)
+	}
+	return bare, commits
+}
+
+func TestGroupDEngineMismatch(t *testing.T) {
+	dir, st := writeStateAndBase(t, nil, func(s *state.State) {
+		s.Template.Kind = "dir"
+		s.EngineVersion = "v0"
+	})
+	r, lines := runGroupD(t, dir, st, false)
+	texts := lineTexts(lines)
+	want := fmt.Sprintf("warn engine_version 记录 v0，当前 %s——渲染结果可能有漂移（§7.6）", EngineVersion)
+	if !slices.Contains(texts, want) {
+		t.Errorf("缺 D2 warn 行 %q: %v", want, texts)
+	}
+	if r.Warns != 1 || r.Fails != 0 {
+		t.Errorf("Warns/Fails = %d/%d, want 1/0", r.Warns, r.Fails)
+	}
+}
+
+func TestGroupDDirSource(t *testing.T) {
+	dir, st := writeStateAndBase(t, nil, func(s *state.State) { s.Template.Kind = "dir" })
+	r, lines := runGroupD(t, dir, st, false)
+	texts := lineTexts(lines)
+	want := []string{
+		"skip dir 源：无版本概念（§11.4）",
+		"skip dir 源无历史版本：base 一旦丢失只能 adopt（§5.2）",
+	}
+	if !slices.Equal(texts, want) {
+		t.Errorf("D 组 = %v, want %v", texts, want)
+	}
+	if r.Skips != 2 || r.Warns != 0 || r.Fails != 0 {
+		t.Errorf("Skips/Warns/Fails = %d/%d/%d, want 2/0/0", r.Skips, r.Warns, r.Fails)
+	}
+}
+
+func TestGroupDBadTemplateFields(t *testing.T) {
+	// A10 命中的三种形态：D1/D3 合并为一条 skip 指向 A10，不碰缓存；D2 照跑。
+	cases := []struct {
+		name   string
+		mutate func(*state.State)
+	}{
+		{"kind", func(s *state.State) { s.Template.Kind = "foo" }},
+		{"source", func(s *state.State) { s.Template.Source = "" }},
+		{"commit", func(s *state.State) { s.Template.Commit = "" }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cacheRoot := isolateCacheT(t)
+			dir, st := writeStateAndBase(t, nil, func(s *state.State) {
+				c.mutate(s)
+				s.EngineVersion = "v0"
+			})
+			r, lines := runGroupD(t, dir, st, false)
+			texts := lineTexts(lines)
+			want := []string{
+				"skip template 字段非法（见 A10）：跳过模板面检查",
+				fmt.Sprintf("warn engine_version 记录 v0，当前 %s——渲染结果可能有漂移（§7.6）", EngineVersion),
+			}
+			if !slices.Equal(texts, want) {
+				t.Errorf("D 组 = %v, want %v", texts, want)
+			}
+			if r.Skips != 1 || r.Warns != 1 || r.Fails != 0 {
+				t.Errorf("Skips/Warns/Fails = %d/%d/%d, want 1/1/0", r.Skips, r.Warns, r.Fails)
+			}
+			if _, err := os.Stat(cacheRoot); !os.IsNotExist(err) {
+				t.Errorf("字段非法时不得触碰缓存根: %v", err)
+			}
+		})
+	}
+}
+
+func TestGroupDMirrorMissing(t *testing.T) {
+	// 远程式源 + 空缓存：一条 skip（D1/D3 合并），退 0 语义，缓存根不被创建；
+	// --fetch 也不 clone（只刷新已有镜像）。
+	for _, fetch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fetch=%v", fetch), func(t *testing.T) {
+			cacheRoot := isolateCacheT(t)
+			dir, st := writeStateAndBase(t, nil, nil) // source=https://example.com/t.git
+			r, lines := runGroupD(t, dir, st, fetch)
+			texts := lineTexts(lines)
+			want := []string{"skip 模板面检查需要本地镜像缓存（先运行 xinit update 建立缓存，§11.4）"}
+			if !slices.Equal(texts, want) {
+				t.Errorf("D 组 = %v, want %v", texts, want)
+			}
+			if r.Fails != 0 || r.Warns != 0 || r.Skips != 1 {
+				t.Errorf("Fails/Warns/Skips = %d/%d/%d, want 0/0/1", r.Fails, r.Warns, r.Skips)
+			}
+			if _, err := os.Stat(cacheRoot); !os.IsNotExist(err) {
+				t.Errorf("check 不得创建缓存根（§18.5）: %v", err)
+			}
+		})
+	}
+}
+
+func TestGroupDUpdateAvailable(t *testing.T) {
+	cacheRoot := isolateCacheT(t)
+	bare, commits := mkMirroredBareT(t, cacheRoot, "v0.9.0", "v1.0.0", "v1.0.1", "v1.1.0")
+	dir, st := writeStateAndBase(t, nil, func(s *state.State) {
+		s.Template.Source = bare
+		s.Template.Revision = "v1.0.0"
+		s.Template.Commit = commits["v1.0.0"]
+	})
+	r, lines := runGroupD(t, dir, st, false)
+	texts := lineTexts(lines)
+	// 只有更高者入列、升序 join；commit 可取 → 无 D3 行。
+	want := []string{"warn 本地镜像中有 2 个更高的 semver tag：v1.0.1, v1.1.0（最新 v1.1.0；xinit update --revision v1.1.0 升级）"}
+	if !slices.Equal(texts, want) {
+		t.Errorf("D 组 = %v, want %v", texts, want)
+	}
+	if r.Fails != 0 || r.Warns != 1 || r.Skips != 0 {
+		t.Errorf("Fails/Warns/Skips = %d/%d/%d, want 0/1/0", r.Fails, r.Warns, r.Skips)
+	}
+
+	// 已是最高版本：D 组无行。
+	st.Template.Revision, st.Template.Commit = "v1.1.0", commits["v1.1.0"]
+	if _, lines := runGroupD(t, dir, st, false); len(lines) != 0 {
+		t.Errorf("最高版本时 D 组应无行: %v", lineTexts(lines))
+	}
+}
+
+func TestGroupDRevisionNotSemver(t *testing.T) {
+	cacheRoot := isolateCacheT(t)
+	bare, commits := mkMirroredBareT(t, cacheRoot, "v1.0.0", "v1.1.0")
+	dir, st := writeStateAndBase(t, nil, func(s *state.State) {
+		s.Template.Source = bare
+		s.Template.Revision = "main"
+		s.Template.Commit = commits["v1.0.0"]
+	})
+	r, lines := runGroupD(t, dir, st, false)
+	texts := lineTexts(lines)
+	want := []string{`skip 记录的 revision "main" 不是 vX.Y.Z 格式，无法做版本比较（§11.4）`}
+	if !slices.Equal(texts, want) {
+		t.Errorf("D 组 = %v, want %v", texts, want)
+	}
+	if r.Skips != 1 || r.Warns != 0 {
+		t.Errorf("Skips/Warns = %d/%d, want 1/0", r.Skips, r.Warns)
+	}
+}
+
+func TestGroupDCommitMissing(t *testing.T) {
+	cacheRoot := isolateCacheT(t)
+	bare, _ := mkMirroredBareT(t, cacheRoot, "v1.0.0")
+	missing := "0123456789abcdef0123456789abcdef01234567"
+	dir, st := writeStateAndBase(t, nil, func(s *state.State) {
+		s.Template.Source = bare
+		s.Template.Revision = "v1.0.0"
+		s.Template.Commit = missing
+	})
+	r, lines := runGroupD(t, dir, st, false)
+	texts := lineTexts(lines)
+	want := []string{"warn 记录的 commit " + missing + " 在模板源中取不到：base 一旦损坏将无法自动重建（§5.2）"}
+	if !slices.Equal(texts, want) {
+		t.Errorf("D 组 = %v, want %v", texts, want)
+	}
+	if r.Fails != 0 || r.Warns != 1 {
+		t.Errorf("Fails/Warns = %d/%d, want 0/1", r.Fails, r.Warns)
+	}
+}
+
+func TestGroupDFetchRefreshesMirror(t *testing.T) {
+	// fetch 经 RepoDir 一次定位透传：镜像建好后源上新打的 tag，fetch=false
+	// 看不到、fetch=true 刷新后可见（§18.7）。
+	cacheRoot := isolateCacheT(t)
+	bare, commits := mkMirroredBareT(t, cacheRoot, "v1.0.0")
+	runGitT(t, bare, "tag", "v1.1.0", commits["v1.0.0"])
+	dir, st := writeStateAndBase(t, nil, func(s *state.State) {
+		s.Template.Source = bare
+		s.Template.Revision = "v1.0.0"
+		s.Template.Commit = commits["v1.0.0"]
+	})
+	if _, lines := runGroupD(t, dir, st, false); len(lines) != 0 {
+		t.Errorf("fetch=false 不应看到新 tag: %v", lineTexts(lines))
+	}
+	_, lines := runGroupD(t, dir, st, true)
+	want := []string{"warn 本地镜像中有 1 个更高的 semver tag：v1.1.0（最新 v1.1.0；xinit update --revision v1.1.0 升级）"}
+	if texts := lineTexts(lines); !slices.Equal(texts, want) {
+		t.Errorf("fetch=true D 组 = %v, want %v", texts, want)
 	}
 }
