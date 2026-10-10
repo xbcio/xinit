@@ -94,13 +94,16 @@ stdout 'exit=0'
 cmp gen.txt $WORK/local-gen.txt
 cd ..
 
-# ════ ④ theirs 缺失的冲突不被提问（§19.7 #16 前半）═════════════════════
+# ════ ④ theirs 键缺失的冲突不被提问（§19.7 #16 前半）═══════════════════
 # 可问闭集 =「kind ∈ {Merge(判冲突), ConflictBinary, ConflictBothAdded} ∧
-# theirsRendered[P] != nil」（§19.4.1）。夹具：模板删除 b.bin（P ∉ theirs），本地把
+# theirsRendered[P] **键存在**」（§19.4.1；键在、值为 nil 的空渲染同样算存在）。
+# 夹具：模板删除 b.bin（P ∉ theirs ⇒ 键缺失），本地把
 # b.bin 换成符号链接（base 侧是 regular）⇒ §8.1 第一步的类型冲突：该冲突**同时**
-# 落在闭集的两个合取项之外（ConflictKind + theirs 缺失）——脚本侧只能钉住「报告
+# 落在闭集的两个合取项之外（ConflictKind + theirs 键缺失）——脚本侧只能钉住「报告
 # 照旧、无 C1/C2」（§19.7 #16 落点），两个合取项各自的真值表由 promptconflicts_test.go
-# 的 TestAskableConflict 承担（含 theirs 表为空/nil 时三种 Kind 一律 false 的直判）。
+# 的 TestAskableConflict 承担（键缺失 ⇒ 三种 Kind 一律 false；键在、值为 nil 的空
+# 渲染 ⇒ Merge(判冲突)/ConflictBinary/ConflictBothAdded 为 true。正负例分离，
+# 勿写成「nil 一律 false」）。
 # 报告照旧 = 冲突行 + 类型冲突的既有出口文案（prune / 移走障碍物）；而 ConflictKind
 # 也不在 `--accept` 可用集里（§10.3「accept 改变不了类型」）⇒ 连 `accept?` 行都没有。
 # b.bin 是二进制（含 NUL）：txtar 放不下 NUL，按先例用 printf 构造（update_migrate_vars.txtar:9）。
@@ -119,7 +122,7 @@ stdout 'exit=2'
 ! stdout '交互式冲突解决'
 ! stdout '改用模板版？'
 ! stdout 'accept\?'
-# theirs 缺失 ⇒ 无 conflicts/ 内容条目（§10.3/§19.4.1 ：「它可能根本没有 theirs 内容」）
+# theirs 键缺失 ⇒ 无 conflicts/ 内容条目（§10.3/§19.4.1 ：「它可能根本没有 theirs 内容」）
 ! exists .xinit/conflicts/b.bin
 cd ..
 
