@@ -83,7 +83,35 @@ render:
     strip_suffix: ".tmpl"
 ```
 
-配上一个 `go.mod`、一个 `main.go`（内容里含字面量 `xkitora`）和一个 `README.md.tmpl`（内容含 `{{ .app_slug }}`），提交并**打 tag**：
+配上一个 `go.mod`、一个 `main.go`（内容里含字面量 `xkitora`）和一个 `README.md.tmpl`（内容含 `{{ .app_slug }}`）：
+
+```
+# go.mod
+module example.com/xkitora
+
+go 1.25
+```
+
+```
+# main.go
+// Package main 是 xkitora 服务的入口。
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("xkitora 服务启动")
+}
+```
+
+```
+# README.md.tmpl
+# {{ .app_slug }}
+
+由最小模板生成。
+```
+
+提交并**打 tag**：
 
 ```bash
 git init -q -b main
@@ -157,6 +185,10 @@ xinit update: /path/to/minimal-template
 
 这一轮不需要模板有任何改动（全 `Noop`），作用是把状态里的版本从 `"HEAD"` 换成 `v1.0.0`。**此后默认模式（不带 `--revision`）即可正常工作。**
 
+> 如果你按 3.2 建了 git 仓、但**还没提交** `init` 生成的那几个文件，这一轮还会多一条警告：
+> `工作树有 3 处未提交改动；update 会直接改写工作树，建议先提交（或用 --force 跳过检查）`
+> —— 3 就是未跟踪的那三个新文件（`.xinit/` 已在 `.git/info/exclude` 里，不计入）。先 `git add -A && git commit` 再跑 `update`，这条警告就没有了。
+
 接着就是常规循环。模板侧改一处并打新 tag：
 
 ```bash
@@ -202,11 +234,11 @@ xinit update: /path/to/minimal-template
 如果项目已经存在、只是没有 `.xinit/`（例如手工拷贝了一份，或状态目录丢了），用 `adopt` 重建基线：
 
 ```bash
-xinit adopt --template $WORK/minimal-template --revision v1.0.0 --config $WORK/order-api.vars.yml
+xinit adopt --template $WORK/minimal-template --config $WORK/order-api.vars.yml
 ```
 
 ```
-xinit adopt: /path/to/minimal-template@v1.0.0
+xinit adopt: /path/to/minimal-template@v1.1.0
 基线已重建：3 个文件（.xinit/base/ 与 .xinit/state.json）
 本地改动 1 个文件（磁盘与模板渲染结果不同；update 起按行 9 保留，模板对它们的更新不会应用）
   local-diff           main.go
@@ -214,7 +246,11 @@ xinit adopt: /path/to/minimal-template@v1.0.0
 「本地把模板改回去了」而永久保留——那些模板更新从此不会再被应用（§5.3）。
 ```
 
-`--config` 与 `--revision` 都必填：`vars` 是重建基线的三要素之一（模板 + vars + 版本），缺了就无法渲染出可比对的基线。如果模板声明了钩子，`adopt` 不执行钩子、也不写信任记录——下一次 `update` 会照常要求确认。
+`--template` 与 `--config` 必填：`vars` 是重建基线的三要素之一（模板 + vars + 版本），缺了就无法渲染出可比对的基线。
+
+**`--revision` 不必填**——省略时取模板最新的 semver tag（上面那次实操就没写它，直接 rc=0，基线落在 `v1.1.0`）。一般也**不建议**填：省略时拿到的就是「最新发布版本」，而显式指定一旦选错版本，两版之间模板的改动在磁盘上并不存在，会被当成「本地把模板改回去了」而永久保留（就是上面那条警告的后果）。只有确实要把基线建在某个特定版本上时才显式写。
+
+如果模板声明了钩子，`adopt` 不执行钩子、也不写信任记录——下一次 `update` 会照常要求确认。
 
 ## 4. 命令面
 
@@ -234,6 +270,11 @@ xinit adopt: /path/to/minimal-template@v1.0.0
 | `--yes` | 跳过钩子信任确认（等同于在交互终端回答 y） |
 
 目标目录不存在时会创建；已存在且非空时需 `--force`；**只含 `.git` 的目录视为空目录**。`init` 不会在已初始化的项目上重跑（要同步更新请用 `update`）。
+
+**`--template` 指向什么，决定了模板源的类型**（自动判定，不需要额外旗标）：
+
+- **git 源**：本地 git 仓库，或一个 git URL。有版本概念（tag / commit），`update` 的选版、钉版本都靠它。
+- **dir 源**：本地目录**且不是** git 仓库。**没有版本概念**——状态里 `kind` 记为 `dir`、`revision` 是空串，版本锚点用目录内容的**树 hash**（改一个文件就是「新版本」）。因此 dir 源不需要 `--revision`（写了也无意义），也不需要 3.3 那一步版本对齐：实测 dir 源 `xinit init` 之后直接 `xinit update` 即 rc=0 全 `Noop`。想干净地跟踪版本，把模板放进 git 仓并打 tag。
 
 ### `xinit update` — 把派生项目同步到模板的新版本
 
@@ -439,7 +480,7 @@ xinit update: /path/to/my-service-template
   conflict             docs/notes.md
   accept?              xinit update --accept "docs/notes.md"
 出路一：手工解决冲突，使内容与模板一致（或等模板回退），重跑 update 即收敛；
-        若解决结果与模板不同，用上面的 xinit update --accept <路径> 声明已解决（把你看到并认可的版本记为 base）。
+        若解决结果与模板不同，用上面的 xinit update --accept <路径> 声明已解决（把你看到并认可的版本记为 base，§10.3）。
 出路二：把路径写进 .xinit/prune.txt，使其脱离管理（模板对它的改动不再同步）。
 参考：模板新内容已写到 .xinit/conflicts/<路径>。
 ```
@@ -518,7 +559,7 @@ $ xinit update
 ## 10. 已知限制
 
 1. **平台**：v1 面向 unix（macOS / Linux）。钩子以 `sh -c` 执行，没有 `sh` 的平台不支持钩子；Windows 原生支持不在 v1 范围内。
-2. **git 模板的选版（重要）**：`init` **没有** `--revision` 旗标，永远取模板默认分支的 **HEAD**，并在状态里记为 `"HEAD"`——而 `"HEAD"` 无法参与 semver 比较，所以 **`init` 之后第一次 `update` 必须显式写 `--revision <tag>`**（否则退出码 1，报错信息里会提示）。一次对齐之后默认模式即可继续工作。
+2. **git 模板的选版（重要）**：`init` **没有** `--revision` 旗标，永远取模板默认分支的 **HEAD**，并在状态里记为 `"HEAD"`——而 `"HEAD"` 无法参与 semver 比较，所以 **`init` 之后第一次 `update` 必须显式写 `--revision <tag>`**（否则退出码 1，报错信息里会提示）。一次对齐之后默认模式即可继续工作。（dir 源没有这个问题：它没有版本概念，首个 `update` 直接跑即可——见第 4 节。）
    建议：模板仓库要发版本就**先打 tag 再让新项目 init**。如果模板的 HEAD 领先于最新 tag，`init` 会把未发布的改动一起带进新项目；随后若按上面的办法对齐到最新 tag，这些改动会被**回退**（工具会打印「目标版本不是当前版本的后代（降级/回退）」的警告，但不会阻止你）。
 3. **不承诺回滚**：见上一节的「不承诺回滚」。
 4. **重命名不自动识别**：模板把 `a.go` 改成 `b.go` 时，工具按「删除 + 新增」处理，v1 只在 `diff` 里提示疑似改名，本地改动需要你手工迁移。
