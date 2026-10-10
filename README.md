@@ -240,7 +240,7 @@ xinit adopt --template $WORK/minimal-template --config $WORK/order-api.vars.yml
 ```
 xinit adopt: /path/to/minimal-template@v1.1.0
 基线已重建：3 个文件（.xinit/base/ 与 .xinit/state.json）
-本地改动 1 个文件（磁盘与模板渲染结果不同）：update 起按「本地改过」保留，模板之后也改到它时走合并/冲突（行 6/7）
+本地改动 1 个文件（磁盘与模板渲染结果不同）：update 起按「本地改过」保留——内容改动的，模板之后也改到它时走合并/冲突（行 6/7）；删除的，保留删除并告警（行 10）
   local-diff           main.go
 警告：--revision 选错版本时，两版之间模板的改动在磁盘上不存在，会被当成
 「本地把模板改回去了」而永久保留——那些模板更新从此不会再被应用（§5.3）。

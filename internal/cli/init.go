@@ -337,12 +337,13 @@ func Init(
 	// 给出警告）——这里补上，否则用户随后 `git add -A` 会把 `.xinit/` 收进
 	// 版本控制，第一次 update/diff 才被 §5.5 守卫拒绝（发布批次 O3/场景 2.0）。
 	// 三条出路均经实测：先 `git init` 再 `git add`；已被跟踪时按既有的 §5.5
-	// 文案 `git rm -r --cached .xinit`；建仓后首次 update 会自动补写 exclude
-	//（update 第 10 步）。
+	// 文案 `git rm -r --cached .xinit`；建仓后 update 会自动补写 exclude
+	//（update 第 10 步；钩子模板下首轮 update 先被信任门拦下 rc=4、零写，
+	// 补写发生在 `--yes` 那轮——v1.0.1 评审 Minor-3，故不写「首次」）。
 	if !gitExcludeReady(dest) {
 		fmt.Fprint(os.Stderr, "xinit: 提示: 当前目录不在 git 仓库内，无法把 `.xinit/` 写进 .git/info/exclude："+
 			"请在 `git add` 之前先 `git init`（否则 `.xinit/` 会被收进版本控制，首次 update/diff 会被 §5.5 守卫拒绝）；"+
-			"若已被 git 跟踪，用 `git rm -r --cached .xinit` 移除；建仓后首次 update 会自动补写该 exclude\n")
+			"若已被 git 跟踪，用 `git rm -r --cached .xinit` 移除；建仓后 update 会自动补写该 exclude\n")
 	}
 	return nil
 }
@@ -404,8 +405,12 @@ func checkDestUsable(dest string, force bool) error {
 // gitExcludeReady 报告 dest 位于 git 仓内（含 enclosing repo）——即
 // state.EnsureGitExcluded 能真正落地 .git/info/exclude 的情形。判据与
 // state 包内 gitExcludePath 是同一条查询（git rev-parse --git-path，
-// worktree/submodule 下 .git 是文件，直接拼路径会写错地方）；git 命令
-// 不可用与「不是 git 仓」同一处理：两种情形都写不了 exclude。
+// worktree/submodule 下 .git 是文件，直接拼路径会写错地方）。返回 false
+// 时调用点按「不在 git 仓库内」提示：这是唯一可达的失败原因——git 可执行
+// 文件缺失/不可用会先被 Execute 的 RequireGit 拦下（rc=1，到不了这里）。
+// v1.0.1 评审 Nit-2 的「git 缺失时 init 本可成功、提示原因略失真」前提经
+// 实测不成立（PATH 去掉 git：rc=1、报「未找到 git」），故不增设「未找到 git」
+// 分支。
 func gitExcludeReady(dir string) bool {
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--git-path", "info/exclude").Output()
 	return err == nil && strings.TrimSpace(string(out)) != ""

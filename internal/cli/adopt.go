@@ -32,9 +32,11 @@ func newAdoptCmd() *cobra.Command {
 		Use:   "adopt",
 		Short: "把已有项目按模板渲染结果重建为受管状态（重建基线）",
 		Long: "把模板在指定版本的渲染结果记为 base（不是磁盘内容），并重建 .xinit/state.json。\n" +
-			"磁盘与渲染结果的全部差异都视为「本地改动」：update 起普通路径按「本地改过」保留，\n" +
-			"模板之后也改到它时走合并/冲突（行 6/7）；generated 路径的模板改动按行 5 覆盖\n" +
-			"（本地版本另存 .xinit/overwritten/）。\n" +
+			"磁盘与渲染结果的全部差异都视为「本地改动」：update 起普通路径按「本地改过」保留——\n" +
+			"内容改动的，模板之后也改到它时走合并/冲突（行 6/7）；删除的，保留删除并告警（行 10）。\n" +
+			"generated 路径（内容改动的、磁盘侧为常规文件）的模板改动在钩子会运行时按行 5 覆盖\n" +
+			"（本地版本另存 .xinit/overwritten/）；钩子不会运行时（模板未声明 post_update，或\n" +
+			"update --no-hooks）跳过、保留本地内容。\n" +
 			"注意：--revision 选错版本时，两版之间模板的改动在磁盘上并不存在，会被当成\n" +
 			"「本地把模板改回去了」而永久保留——那些模板更新从此不会再被应用（§5.3）。",
 		Args: cobra.NoArgs,
@@ -228,11 +230,18 @@ func Adopt(o AdoptOptions) error {
 		fmt.Printf("（dir 源：commit 为树 hash %s）\n", src.Commit)
 	}
 	fmt.Printf("基线已重建：%d 个文件（.xinit/base/ 与 .xinit/state.json）\n", len(entries))
-	// 本地改动的后续走向分两类（发布批次 O7/场景 6.2-6.3）：普通路径按行 3
-	// 「本地改过」保留，模板之后也改到它时走三方合并/冲突（行 6/7）；generated
-	// 路径不同——模板改动按行 5 覆盖本地内容（原版本另存 overwritten/）。
-	// 旧文案「update 起按行 9 保留，模板对它们的更新不会应用」对两类都不准
-	// （行 9 只在模板删除该路径时适用；generated 恰是被覆盖）。
+	// 本地改动的后续走向分两类（发布批次 O7/场景 6.2-6.3；v1.0.2 G1/G2 按实
+	// 测收窄）：普通路径按行 3「本地改过」保留——内容改动的在模板之后也改到它
+	// 时走三方合并/冲突（行 6/7），本地删除的走行 10（保留删除并告警，generated
+	// 路径被删同理）；generated 路径不同——内容改动的、磁盘侧为常规文件时，模板
+	// 改动在钩子会运行时按行 5 覆盖本地内容（原版本另存 overwritten/），钩子不会
+	// 运行时（模板未声明 post_update 或 --no-hooks）整体跳过（§8.2 L7）。旧文案
+	// 「update 起按行 9 保留，模板对它们的更新不会应用」对两类都不准（行 9 只在
+	// 模板删除该路径时适用；generated 恰是被覆盖）。
+	// 两个限定语都按实测收敛：仅 exec 位差异也在 localDiff 里（:221 的
+	// o.Exec != t.Exec），但那种路径模板再改内容时走行 2 覆盖内容、权限位保留
+	// （§8.3 警告）；磁盘侧是 symlink/目录（Kind != Regular）的路径被 §8.1 类型
+	// 检查短路——symlink 报类型冲突、目录等同缺失走行 10（v1.0.2 两种形态实测）。
 	genCount := 0
 	for _, p := range localDiff {
 		if theirs[p].Generated {
@@ -240,9 +249,9 @@ func Adopt(o AdoptOptions) error {
 		}
 	}
 	if genCount == 0 {
-		fmt.Printf("本地改动 %d 个文件（磁盘与模板渲染结果不同）：update 起按「本地改过」保留，模板之后也改到它时走合并/冲突（行 6/7）\n", len(localDiff))
+		fmt.Printf("本地改动 %d 个文件（磁盘与模板渲染结果不同）：update 起按「本地改过」保留——内容改动的，模板之后也改到它时走合并/冲突（行 6/7）；删除的，保留删除并告警（行 10）\n", len(localDiff))
 	} else {
-		fmt.Printf("本地改动 %d 个文件（磁盘与模板渲染结果不同；其中 generated 路径 %d 个）：普通路径 update 起按「本地改过」保留、模板之后也改到它时走合并/冲突（行 6/7）；generated 路径的模板改动按行 5 覆盖本地内容（本地版本另存 .xinit/overwritten/）\n",
+		fmt.Printf("本地改动 %d 个文件（磁盘与模板渲染结果不同；其中 generated 路径 %d 个）：普通路径 update 起按「本地改过」保留——内容改动的，模板之后也改到它时走合并/冲突（行 6/7）；删除的，保留删除并告警（行 10）；generated 路径（内容改动的、磁盘侧为常规文件）的模板改动在钩子会运行时按行 5 覆盖本地内容（本地版本另存 .xinit/overwritten/），钩子不会运行时（模板未声明 post_update，或 update --no-hooks）跳过、保留本地内容\n",
 			len(localDiff), genCount)
 	}
 	for _, p := range localDiff {

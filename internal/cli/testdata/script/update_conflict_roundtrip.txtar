@@ -15,6 +15,10 @@ stdout 'merge-conflict\s+a\.txt'
 stdout '汇总: 写入 0、删除 0、chmod 0、冲突 1'
 stdout '出路一'
 stdout '出路二'
+# F2/O6 回归锚（v1.0.2 G4）：冲突报告末行「参考：」必须以「。」收尾——
+# conflictFilesRef 的尾 \n 若缺，会与下一行（xinit-code 的 exit 行）黏行，
+# 「。$」不再匹配本行而行尾，此处 FAIL。
+stdout '参考：模板新内容已写到 \.xinit/conflicts/<路径>。$'
 stdout 'exit=2'
 cmp a.txt $WORK/local-a.txt
 cmp .xinit/conflicts/a.txt $WORK/new-a.txt
