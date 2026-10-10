@@ -194,7 +194,7 @@ func TestDiffReportsSuspectedRename(t *testing.T) {
 
 // §17.1 的配对歧义（两个同 hash 旧候选 ← 一个新增路径）不配、不报迁移行
 // （旧 §7.5「疑似改名」判据由 Part B 接管后的同形断言）。
-func TestDiffRenameAmbiguityNotReported(t *testing.T) {
+func TestDiffMigrationPairingAmbiguityNotReported(t *testing.T) {
 	repo, proj := initProjectT(t, map[string]string{
 		"xinit.yml": tmplYAML,
 		"a.txt":     "same\n",

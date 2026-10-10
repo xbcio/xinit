@@ -10,6 +10,8 @@ import (
 
 // §17.6 的四态行逐字断言（纯文本，不经 shellQuote）。节标题与行格式是
 // 稳定报告面，e2e 与用户脚本按它断言——列宽与文案即契约。
+// 第 5 行是 migrationText 的防御分支（四态之外的值原文照打、不静默），
+// 不属于 §17.6 契约，随本节一并锁定列宽与「不吞掉缺陷」的行为。
 func TestReportMigrationsSection(t *testing.T) {
 	rep := &UpdateReport{
 		Header: "xinit diff",
@@ -20,16 +22,18 @@ func TestReportMigrationsSection(t *testing.T) {
 			{Old: "old/b.txt", New: "new/b.txt", Status: "fallback", Reason: "模板与本地都在改且相冲突"},
 			{Old: "old/c.txt", New: "new/c.txt", Status: "rename"},
 			{Old: "old/d.txt", New: "new/d.txt", Status: "skip", Reason: "生成物路径不参与迁移"},
+			{Old: "old/e.txt", New: "new/e.txt", Status: "unknown", Reason: "x"},
 		},
 	}
 	var buf strings.Builder
 	rep.Print(&buf)
 	got := buf.String()
-	want := "路径迁移（§17）：4 条\n" +
+	want := "路径迁移（§17）：5 条\n" +
 		"  migrated             old/a.txt → new/a.txt（本地改动已随迁移保留；旧路径按删除处理）\n" +
 		"  fallback             old/b.txt → new/b.txt（迁移未完成：模板与本地都在改且相冲突——已按行 9 保留本地、行 13 写入模板版；本地改动需手工合并到新路径，或把旧路径写进 .xinit/prune.txt）\n" +
 		"  rename               old/c.txt → new/c.txt（本地无改动，按行 8/13 完成改名）\n" +
-		"  skip                 old/d.txt → new/d.txt（跳过：生成物路径不参与迁移）\n"
+		"  skip                 old/d.txt → new/d.txt（跳过：生成物路径不参与迁移）\n" +
+		"  unknown              old/e.txt → new/e.txt（unknown：x）\n"
 	if !strings.Contains(got, want) {
 		t.Errorf("路径迁移节与 §17.6 文案不符：\n--- got ---\n%s\n--- want 含 ---\n%s", got, want)
 	}
