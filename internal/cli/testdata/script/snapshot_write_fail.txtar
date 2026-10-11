@@ -1,10 +1,13 @@
-# 快照写失败注入（§21.10「写失败注入」/ 判据 7）：init（快照正常落盘）→ 删平台
-# 缓存父目录（darwin: $WORK/home/Library、Linux: $WORK/home/.cache）→ chmod 0500
-# $WORK/home（不可写注入，0500 仍可遍历/读取）→ update：rc=0、stderr 恰一行写
-# 失败警告、项目树与 state 逐字节不变。
+# 快照写失败注入（§21.10「写失败注入」/ 判据 7）：init（快照正常落盘）→ 把两个
+# 平台的缓存父目录替换为普通文件（darwin: $WORK/home/Library/Caches、Linux:
+# $WORK/home/.cache）→ update：rc=0、stderr 恰一行写失败警告、项目树与 state
+# 逐字节不变。
+# 手法（G-1 门禁修复）：ENOTDIR 注入——组成链上「已存在但非目录」使
+# MkdirAll(<cacheRoot>/xinit/render) 失败；root（CAP_DAC_OVERRIDE）无法绕过类
+# 型错误，故容器 root 门禁同样生效（先前 chmod 0500 权限位注入对 root 无效）。
 # T6-2 实证（darwin 实测）：仅删 <cacheRoot>/xinit 时 MkdirAll 会在仍可写的
 # Caches 父目录内重建成功（注入不生效）；故按行为契约把夹具收窄到「平台缓存
-# 父目录 + HOME 去写位」——写侧 MkdirAll 必被 EACCES 拦下。
+# 父目录替换为普通文件」。
 
 xinit init --template $WORK/tpl --yes out
 
@@ -12,9 +15,10 @@ xinit init --template $WORK/tpl --yes out
 cp $WORK/out/.xinit/state.json $WORK/state-before.json
 cp $WORK/out/a.txt $WORK/a-before.txt
 
-# 不可写注入
+# ENOTDIR 注入：清缓存后，两平台缓存父目录各替换为普通文件
 rm -rf $WORK/home/Library $WORK/home/.cache
-chmod 0500 $WORK/home
+exec sh -c 'mkdir -p $WORK/home/Library && : > $WORK/home/Library/Caches'
+exec sh -c ': > $WORK/home/.cache'
 
 cd $WORK/out
 xinit-code update
@@ -23,9 +27,6 @@ stderr -count=1 '渲染快照写入失败'
 stderr '^xinit: 渲染快照写入失败（不影响本轮）：'
 cmp .xinit/state.json $WORK/state-before.json
 cmp a.txt $WORK/a-before.txt
-
-# 清理卫生：复原权限
-chmod 0755 $WORK/home
 
 -- tpl/xinit.yml --
 manifest_version: 1
