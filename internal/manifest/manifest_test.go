@@ -115,6 +115,72 @@ substitute:
 	}
 }
 
+func TestParseUpstreamPaths(t *testing.T) {
+	src := `
+manifest_version: 1
+upstream:
+  paths: ["internal/util/**", "docs/adr/**"]
+`
+	m, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(m.Upstream.Paths) != 2 ||
+		m.Upstream.Paths[0] != "internal/util/**" || m.Upstream.Paths[1] != "docs/adr/**" {
+		t.Errorf("Upstream.Paths = %#v, want [internal/util/** docs/adr/**]", m.Upstream.Paths)
+	}
+	// Parse 末端已经跑过 Compile（含结构校验），这里显式再调一次钉住可编译。
+	if _, err := m.Compile(); err != nil {
+		t.Errorf("Compile: %v", err)
+	}
+}
+
+func TestParseRejectsEmptyUpstreamPaths(t *testing.T) {
+	// 显式空序列（键在场、paths 为空）是结构错误：声明了 upstream 却给空域，
+	// 域判定会恒为空集、把全部改动判成域外。
+	_, err := Parse([]byte("manifest_version: 1\nupstream:\n  paths: []\n"))
+	if err == nil {
+		t.Fatal("upstream.paths 显式空序列应报错（结构校验），实际通过")
+	}
+	if !strings.Contains(err.Error(), "upstream.paths") {
+		t.Errorf("错误信息应包含 upstream.paths，实际: %v", err)
+	}
+}
+
+func TestParseRejectsUnknownUpstreamKey(t *testing.T) {
+	_, err := Parse([]byte("manifest_version: 1\nupstream:\n  pathz: [\"a/**\"]\n"))
+	if err == nil {
+		t.Fatal("upstream 下的未知键应被 Strict 模式拒绝")
+	}
+	if !strings.Contains(err.Error(), "pathz") {
+		t.Errorf("错误信息应包含键名，实际: %v", err)
+	}
+}
+
+func TestParseWithoutUpstreamKeyIsNotAnError(t *testing.T) {
+	// 缺键是**运行期**判定（回流时 rc=1「模板未声明 upstream.paths」），
+	// 不是 Parse 错误 —— 既有清单（49 脚本夹具）零波及的前提。
+	m, err := Parse([]byte(minimal))
+	if err != nil {
+		t.Fatalf("无 upstream 键的清单应照样解析: %v", err)
+	}
+	if len(m.Upstream.Paths) != 0 {
+		t.Errorf("缺键应为空模式列表，实际 %#v", m.Upstream.Paths)
+	}
+}
+
+func TestParseUpstreamEmptyMappingIsAbsent(t *testing.T) {
+	// `upstream: {}` 没有 upstream.paths 键 ⇒ 与缺键同列（运行期判定缺键）。
+	// 只有显式空序列 `paths: []` 才触发结构校验。
+	m, err := Parse([]byte("manifest_version: 1\nupstream: {}\n"))
+	if err != nil {
+		t.Fatalf("upstream: {} 应被当作缺键放行: %v", err)
+	}
+	if len(m.Upstream.Paths) != 0 {
+		t.Errorf("空映射应为空模式列表，实际 %#v", m.Upstream.Paths)
+	}
+}
+
 func TestParseRejectsMissingVersion(t *testing.T) {
 	if _, err := Parse([]byte("vars: []\n")); err == nil {
 		t.Fatal("缺少 manifest_version 应报错")

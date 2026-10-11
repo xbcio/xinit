@@ -25,6 +25,11 @@ type Manifest struct {
 	Exclude           PathSpec       `yaml:"exclude"`
 	Generated         PathSpec       `yaml:"generated"`
 	Hooks             HooksSpec      `yaml:"hooks"`
+	// Upstream 声明回流（backflow）的共享面模式列表（spec §20.5）。匹配对象是
+	// **映射后的 Src**（模板原路径，与 exclude 同口径），不是派生侧 Dst。
+	// 键缺席 = 未声明域：那是运行期判定（回流 rc=1「模板未声明 upstream.paths」），
+	// 不是 Parse 错误 —— 无此键的既有清单一律照常解析（零行为变化）。
+	Upstream PathSpec `yaml:"upstream"`
 
 	compiled *Compiled // Compile 的结果缓存；见 compile.go
 }

@@ -222,6 +222,18 @@ func (m *Manifest) validateStructure() error {
 		}
 	}
 
+	// upstream.paths 非空校验（spec §20.5 清单点位）。
+	//
+	// 判据落在「键在场」上，而不是「列表为空」：未声明 upstream 键与
+	// `upstream: {}` 都解出 nil 切片（合法缺省 —— 缺键是运行期判定，§20.5
+	// 句 4 的 rc=1），只有显式 `paths: []` 解出**非 nil 空切片**（goccy
+	// 实测）。声明了 upstream 却给空域会让域判定恒为空集、把全部改动判成
+	// 域外，属结构错误。
+	if m.Upstream.Paths != nil && len(m.Upstream.Paths) == 0 {
+		return fmt.Errorf(
+			"upstream.paths: 不能为空 —— 声明了 upstream 却没有路径模式，域判定会恒为空集（请列出共享面模式，或整个删掉 upstream 键）")
+	}
+
 	for i, r := range m.Rename {
 		where := fmt.Sprintf("rename[%d]", i)
 		if r.From == "" {
