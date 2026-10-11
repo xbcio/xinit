@@ -1,0 +1,35 @@
+# 快照篡改 · CRLF 孪生（§21.10「篡改 tree → 按未命中」「CRLF 孪生负例」/ 判据 8、
+# 10、11）：dir 源 2 文件 → init → 删 base → 把 tree/b.txt 换成 CRLF 孪生
+# （编码变、raw sha256 变；归一化 hash 不变 → 只有 raw 门拦得住）→ update：
+# a.txt 快照命中恢复、b.txt 按未命中降级；报告两行逐字 + degraded 行。
+# 缓存路径归一 preamble：先 mkdir $WORK/cache 再建符号链接（悬挂链接 ⇒ MkdirAll
+# 得 EEXIST）。
+
+env XDG_CACHE_HOME=$WORK/cache
+mkdir $WORK/home
+mkdir $WORK/home/Library
+mkdir $WORK/cache
+symlink $WORK/home/Library/Caches -> ../../cache
+
+xinit init --template $WORK/tpl --yes out
+
+# 篡改：b.txt 的 tree 文件换成 CRLF 孪生（raw 门正面防线）。
+# 路径经 for 列表展开后再重定向——darwin /bin/sh（POSIX 模式 bash）不展开重定向
+# 目标里的 glob（实测 `> …/*/tree/b.txt` 得 ENOENT），for 列表两平台一致。
+exec sh -c 'for f in $WORK/cache/xinit/render/*/tree/b.txt; do printf "bee\r\n" > "$f"; done'
+
+cd $WORK/out
+rm -rf .xinit/base
+xinit-code update
+stdout '^base 恢复（来自渲染快照，不依赖模板源，§5\.2、§21）：1 条$'
+stdout '^base 降级（无法重建，本轮按「没有 base」处理，§5\.2）：1 条$'
+stdout 'degraded\s+b\.txt'
+! stdout '：2 条'
+cmp .xinit/base/a.txt $WORK/tpl/a.txt
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+one
+-- tpl/b.txt --
+bee

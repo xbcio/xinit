@@ -1,0 +1,54 @@
+# 复仇测试（§21.7 常备 golden / §21.11 项 9）：同一项目两分支——「删 base + 留
+# 快照」（快照恢复）vs「删 base + 删快照」（git 源重渲染）——base/ 树与 state.json
+# 逐字节相等（同二进制下 §5.1 不变量的推论）。
+# 模板用本地 git 仓（可重渲染；非裸仓 ⇒ 直用、不走镜像，删 $WORK/cache/xinit 只
+# 摘快照）。
+# preamble 置顶（先 mkdir $WORK/cache 再建符号链接——悬挂链接会让 MkdirAll 得
+# EEXIST）。
+
+env XDG_CACHE_HOME=$WORK/cache
+mkdir $WORK/home
+mkdir $WORK/home/Library
+mkdir $WORK/cache
+symlink $WORK/home/Library/Caches -> ../../cache
+
+env GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=x@x GIT_COMMITTER_NAME=x GIT_COMMITTER_EMAIL=x@x
+env GIT_CEILING_DIRECTORIES=$WORK
+
+# 本地 git 仓模板
+exec git -c init.defaultBranch=main init -q $WORK/tpl
+[unix] exec chmod 0755 $WORK/tpl/sub/run.sh
+exec git -C $WORK/tpl add -A
+exec git -C $WORK/tpl commit -qm v1
+exec git -C $WORK/tpl tag v1.0.0
+
+xinit init --template $WORK/tpl --yes out
+cd $WORK/out
+# 钉版：state.revision=v1.0.0（此后两阶段都用无参 update：取最高 tag = v1.0.0）
+xinit-code update --revision v1.0.0
+stdout 'exit=0'
+
+# ── 阶段一：删 base + 留快照 → 快照恢复 ──
+rm -rf .xinit/base
+xinit-code update
+stdout '^base 恢复（来自渲染快照，不依赖模板源，§5\.2、§21）：2 条$'
+stdout 'exit=0'
+exec sh -c 'cp -R .xinit/base $WORK/base-a'
+cp .xinit/state.json $WORK/state-a.json
+
+# ── 阶段二：删 base + 删快照 → 重渲染（无恢复行）──
+rm -rf .xinit/base $WORK/cache/xinit
+xinit-code update
+stdout 'exit=0'
+! stdout 'base 恢复'
+cmp $WORK/base-a/a.txt .xinit/base/a.txt
+cmp $WORK/base-a/sub/run.sh .xinit/base/sub/run.sh
+cmp $WORK/state-a.json .xinit/state.json
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+one
+-- tpl/sub/run.sh --
+#!/bin/sh
+echo hi

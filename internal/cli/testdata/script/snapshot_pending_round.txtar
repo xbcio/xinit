@@ -1,0 +1,43 @@
+# 快照跳过 · pending 轮零写（§21.10 必测「pending 轮零写 + 收敛轮写入」/ O2 行为锚、
+# 判据 6、12）：dir 源冲突轮（退 2，pending）——写了会覆写掉当下唯一 anchor 相符的
+# 有效条目 → 深比对前像零差异；收敛轮（退 0）快照覆写轮转 → 深比对必报差异。
+# T6-1：「必报差异」轮必须 `! exec`（diff 退出码 1）。
+# 缓存路径归一 preamble：先 mkdir $WORK/cache 再建符号链接（悬挂链接 ⇒ MkdirAll
+# 得 EEXIST）。
+
+env XDG_CACHE_HOME=$WORK/cache
+mkdir $WORK/home
+mkdir $WORK/home/Library
+mkdir $WORK/cache
+symlink $WORK/home/Library/Caches -> ../../cache
+
+xinit init --template $WORK/tpl --yes out
+# 双方都改 a.txt（本地 one → local；模板 one → two）
+cp $WORK/local-a.txt $WORK/out/a.txt
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+
+# 前像：init 写下的快照整树深拷贝
+exec sh -c 'rm -rf $WORK/render-before && cp -R $WORK/cache/xinit/render $WORK/render-before'
+
+cd $WORK/out
+xinit-code update
+stdout 'merge-conflict\s+a\.txt'
+stdout 'exit=2'
+# pending 轮完全不写（防覆写唯一有效条目）：零差异（diff 退出 0 → 直接 exec）
+exec sh -c 'diff -r $WORK/render-before $WORK/cache/xinit/render'
+
+# 收敛输入：本地对齐成模板内容
+cp $WORK/new-a.txt a.txt
+xinit-code update
+stdout 'exit=0'
+# 收敛轮已写入（覆写轮转 → diff 退出 1 → ! exec）
+! exec sh -c 'diff -r $WORK/render-before $WORK/cache/xinit/render'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+one
+-- new-a.txt --
+two
+-- local-a.txt --
+local

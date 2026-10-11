@@ -1,0 +1,25 @@
+# 快照零命中回退 · dir 源硬错逐字 + 读侧零建根（§21.10「读侧零建根」「零命中
+# 行为与现状逐字节同」/ 判据 5、8）：init → 删缓存（darwin/Linux 双路径）→ 删
+# base → update：现行硬错文案逐字、退 1、无恢复行；读路径不得建缓存根 → 两处
+# `! exists` 双覆盖（循 check_template.txtar:46-47 先例）。
+# 不加 preamble：这里要的正是「$WORK/home 下默认双路径」都不得被创建
+# （darwin 走 HOME/Library/Caches、Linux 走 XDG_CACHE_HOME）。
+
+xinit init --template $WORK/tpl --yes out
+
+# 删缓存：rm 内置先 chmod 再删，权限正常；双路径覆盖两平台
+rm -rf $WORK/home/Library/Caches/xinit $WORK/home/.cache/xinit
+
+cd $WORK/out
+rm -rf .xinit/base
+xinit-code update
+stderr 'base 缺失或损坏，而模板源是 dir 类型——没有历史版本可供重渲染；请运行 xinit adopt --template <source> --revision <ref> --config <vars\.yml> 重建基线（§5\.2）'
+stdout 'exit=1'
+! stdout 'base 恢复'
+! exists $WORK/home/Library/Caches/xinit
+! exists $WORK/home/.cache/xinit
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+one

@@ -1,0 +1,44 @@
+# 快照跳过 · dry-run/diff 零写（§21.10「dry-run 零写」/ 判据 6）：
+# init → 改模板（真实 update 会写 a.txt 且快照覆写轮转）→ 深拷贝 render/ 前像 →
+# diff 与 update --dry-run 各跑一次，`diff -r` 前像零差异（缓存侧零写）；随后真实
+# update 作对照：`diff -r` 必报差异（证明前面不是「全都没写」的假绿）。
+# T6-1：diff 退出码 1 → 「必报差异」轮必须 `! exec`。
+# 缓存路径归一 preamble：先 mkdir $WORK/cache 再建符号链接（悬挂链接 ⇒ MkdirAll
+# 得 EEXIST）。
+
+env XDG_CACHE_HOME=$WORK/cache
+mkdir $WORK/home
+mkdir $WORK/home/Library
+mkdir $WORK/cache
+symlink $WORK/home/Library/Caches -> ../../cache
+
+xinit init --template $WORK/tpl --yes out
+# 模板推进：真实 update 会写 a.txt 且快照 anchor 变（覆写轮转）
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+
+# 前像：init 写下的快照整树深拷贝
+exec sh -c 'rm -rf $WORK/render-before && cp -R $WORK/cache/xinit/render $WORK/render-before'
+
+cd $WORK/out
+xinit-code diff
+stdout 'write\s+a\.txt'
+stdout 'exit=5'
+# 零差异（diff 退出 0 → 直接 exec）
+exec sh -c 'diff -r $WORK/render-before $WORK/cache/xinit/render'
+
+xinit-code update --dry-run
+stdout 'write\s+a\.txt'
+stdout 'exit=5'
+exec sh -c 'diff -r $WORK/render-before $WORK/cache/xinit/render'
+
+# 对照：真实 update 必须写（缓存侧覆写轮转 → diff 退出 1 → ! exec）
+xinit-code update
+stdout 'exit=0'
+! exec sh -c 'diff -r $WORK/render-before $WORK/cache/xinit/render'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+one
+-- new-a.txt --
+two

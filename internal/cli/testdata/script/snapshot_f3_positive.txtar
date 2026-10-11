@@ -1,0 +1,61 @@
+# F3 正面锚（§21.11 项 19 / §21.9-F3「可丢弃」）：健康项目删 render/ → 全量
+# update 结果与未删时逐字节同。同一 init 产物的两份拷贝：out（带快照）与 out-b
+# （先删 render/）各跑一次全量 update（模板已推进，两轮都是真实写入）：
+#   受管面 / base 逐文件 cmp + state.json 逐字节 cmp（无时间戳字段，全等保留——
+#   T6-0 实证：state.go:20-28 序列化字段全为确定值，marshal 键排序确定）
+#   + 两轮 stdout 动作行同形。
+# preamble 置顶：符号链接须建在默认缓存路径被真实占用之前（否则 symlink EEXIST
+# 挂脚本）——out/out-b 共用 $WORK/cache/xinit，删 render/ 只影响 out-b。
+# .xinit/backup 时间戳目录与常驻 lock 不入对照（时间戳不可比）。
+
+env XDG_CACHE_HOME=$WORK/cache
+mkdir $WORK/home
+mkdir $WORK/home/Library
+mkdir $WORK/cache
+symlink $WORK/home/Library/Caches -> ../../cache
+
+xinit init --template $WORK/tpl --yes out
+exec sh -c 'cp -R $WORK/out $WORK/out-b'
+# 模板推进：下一轮为真实变更（两分支都要写 a.txt）
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+
+# ── out：带快照跑全量 update ──
+cd $WORK/out
+exec sh -c 'xinit-code update > $WORK/rep-out.txt 2> $WORK/err-out.txt'
+grep 'write\s+a\.txt' $WORK/rep-out.txt
+grep '汇总: 写入 1、删除 0、chmod 0、冲突 0' $WORK/rep-out.txt
+grep 'exit=0' $WORK/rep-out.txt
+exec sh -c 'grep "^  " $WORK/rep-out.txt > $WORK/actions-out.txt'
+
+# ── out-b：删 render/ 后跑全量 update ──
+cd $WORK/out-b
+rm -rf $WORK/cache/xinit/render
+exec sh -c 'xinit-code update > $WORK/rep-outb.txt 2> $WORK/err-outb.txt'
+grep 'write\s+a\.txt' $WORK/rep-outb.txt
+grep '汇总: 写入 1、删除 0、chmod 0、冲突 0' $WORK/rep-outb.txt
+grep 'exit=0' $WORK/rep-outb.txt
+exec sh -c 'grep "^  " $WORK/rep-outb.txt > $WORK/actions-outb.txt'
+
+# 两轮 stdout 动作行同形
+cmp $WORK/actions-out.txt $WORK/actions-outb.txt
+
+# 受管面逐字节
+cmp $WORK/out/a.txt $WORK/out-b/a.txt
+cmp $WORK/out/a.txt $WORK/new-a.txt
+cmp $WORK/out/sub/run.sh $WORK/out-b/sub/run.sh
+# base 逐文件
+cmp $WORK/out/.xinit/base/a.txt $WORK/out-b/.xinit/base/a.txt
+cmp $WORK/out/.xinit/base/a.txt $WORK/new-a.txt
+cmp $WORK/out/.xinit/base/sub/run.sh $WORK/out-b/.xinit/base/sub/run.sh
+# state 逐字节（T6-0：无时间戳/可变字段 → 全等保留）
+cmp $WORK/out/.xinit/state.json $WORK/out-b/.xinit/state.json
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+one
+-- tpl/sub/run.sh --
+#!/bin/sh
+echo hi
+-- new-a.txt --
+two

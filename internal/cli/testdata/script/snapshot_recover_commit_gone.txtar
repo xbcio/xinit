@@ -1,0 +1,71 @@
+# 快照恢复 · git 源记录 commit 不可取（§21.10「commit-gone 恢复」/ 判据 10）：
+# 裸仓模板 → init → 钉 v1.0.0（快照 anchor 落定）→ 删裸仓并以新历史重建（仅
+# v2.0.0，a.txt 内容不同）→ 摘镜像、留快照 → 删 base → update --revision
+# v2.0.0：旧 commit 真不可取（新历史无它、镜像已摘），恢复只能靠快照 → 恢复行
+# + 写 v2 内容 + 逐文件字节对照。
+# 复现配方：design-facts §5（镜像删净 + 源被重写成新历史、新 tag 可取）。
+# 与 brief 的两处行为契约适配（已实证）：受管路径 = 2 条（xinit.yml 隐式排除）、
+# 真实 update 写盘成功时退出码 = 0（退出码 5 只属 diff/dry-run/status --fetch）。
+
+# 缓存路径归一 preamble：darwin/Linux 收敛到 $WORK/cache/xinit。
+# 必须先 mkdir $WORK/cache 再建符号链接——悬挂符号链接会让 MkdirAll 得 EEXIST。
+env XDG_CACHE_HOME=$WORK/cache
+mkdir $WORK/home
+mkdir $WORK/home/Library
+mkdir $WORK/cache
+symlink $WORK/home/Library/Caches -> ../../cache
+
+env GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=x@x GIT_COMMITTER_NAME=x GIT_COMMITTER_EMAIL=x@x
+env GIT_CEILING_DIRECTORIES=$WORK
+
+# 工作仓打 v1.0.0 → 克隆为裸仓（裸仓 ⇒ 模板走镜像缓存）
+exec git -c init.defaultBranch=main init -q $WORK/w
+cp $WORK/xinit.yml $WORK/w/xinit.yml
+cp $WORK/v1-a.txt $WORK/w/a.txt
+mkdir $WORK/w/sub
+cp $WORK/run.sh $WORK/w/sub/run.sh
+exec git -C $WORK/w add -A
+exec git -C $WORK/w commit -qm v1
+exec git -C $WORK/w tag v1.0.0
+exec git clone -q --bare $WORK/w $WORK/tpl.git
+
+xinit init --template $WORK/tpl.git --yes out
+cd $WORK/out
+# 钉版：state.revision=v1.0.0（快照 anchor 落定；后续 --revision v2.0.0 才走新版本）
+xinit-code update --revision v1.0.0
+stdout 'exit=0'
+
+# 删裸仓并以新历史重建：仅 v2.0.0，a.txt 内容不同（旧 commit 真不可取）
+rm -rf $WORK/tpl.git $WORK/w
+exec git -c init.defaultBranch=main init -q $WORK/w2
+cp $WORK/xinit.yml $WORK/w2/xinit.yml
+cp $WORK/v2-a.txt $WORK/w2/a.txt
+mkdir $WORK/w2/sub
+cp $WORK/run.sh $WORK/w2/sub/run.sh
+exec git -C $WORK/w2 add -A
+exec git -C $WORK/w2 commit -qm v2
+exec git -C $WORK/w2 tag v2.0.0
+exec git clone -q --bare $WORK/w2 $WORK/tpl.git
+
+# 摘镜像、留快照：非 render 的缓存条目全删——openTarget 只能重新 clone 新历史
+exec sh -c 'for d in $WORK/home/Library/Caches/xinit $WORK/home/.cache/xinit; do [ -d "$d" ] || continue; for e in "$d"/*; do case "$e" in */render) ;; *) rm -rf "$e";; esac; done; done'
+
+rm -rf .xinit/base
+xinit-code update --revision v2.0.0
+stdout '^base 恢复（来自渲染快照，不依赖模板源，§5\.2、§21）：2 条$'
+stdout 'write\s+a\.txt'
+stdout 'exit=0'
+cmp a.txt $WORK/v2-a.txt
+cmp sub/run.sh $WORK/run.sh
+cmp .xinit/base/a.txt $WORK/v2-a.txt
+cmp .xinit/base/sub/run.sh $WORK/run.sh
+
+-- xinit.yml --
+manifest_version: 1
+-- v1-a.txt --
+v1 content
+-- v2-a.txt --
+v2 content
+-- run.sh --
+#!/bin/sh
+echo hi

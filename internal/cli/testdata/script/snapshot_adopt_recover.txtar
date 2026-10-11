@@ -1,0 +1,42 @@
+# 快照 adopt 挂点闭环（§21.10「adopt 闭环」/ 判据 4）：既有项目（磁盘与渲染一致）
+# → adopt（SyncBase + state.Save 后写快照）→ 删 base → update 快照全命中恢复：
+# 恢复行 + 退 0 + 逐文件字节对照。adopt 用 vars（扁平 YAML）渲染——快照键的 vars
+# 分量非空，同时覆盖「渲染用了变量」的字节源。
+
+mkdir $WORK/proj $WORK/proj/sub
+cp $WORK/want-a.txt $WORK/proj/a.txt
+cp $WORK/want-run.sh $WORK/proj/sub/run.sh
+cd $WORK/proj
+
+xinit-code adopt --template $WORK/tpl --config $WORK/vars.yml
+stdout '基线已重建：2 个文件'
+stdout '本地改动 0 个文件'
+stdout 'exit=0'
+
+# 删整树 base → 快照全命中（adopt 挂点产物）
+rm -rf .xinit/base
+xinit-code update
+stdout '^base 恢复（来自渲染快照，不依赖模板源，§5\.2、§21）：2 条$'
+stdout 'exit=0'
+cmp .xinit/base/a.txt $WORK/want-a.txt
+cmp .xinit/base/sub/run.sh $WORK/want-run.sh
+
+-- tpl/xinit.yml --
+manifest_version: 1
+vars:
+  - name: app
+    default: "app"
+render:
+  - paths: ["a.txt", "sub/run.sh"]
+-- tpl/a.txt --
+hello {{ .app }}
+-- tpl/sub/run.sh --
+#!/bin/sh
+echo {{ .app }}
+-- vars.yml --
+app: myapp
+-- want-a.txt --
+hello myapp
+-- want-run.sh --
+#!/bin/sh
+echo myapp
