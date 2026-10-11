@@ -11,6 +11,7 @@ import (
 	"github.com/xbcio/xinit/internal/manifest"
 	"github.com/xbcio/xinit/internal/plan"
 	"github.com/xbcio/xinit/internal/render"
+	"github.com/xbcio/xinit/internal/renderstore"
 	"github.com/xbcio/xinit/internal/state"
 	"github.com/xbcio/xinit/internal/template"
 )
@@ -20,6 +21,7 @@ type baseSnapshot struct {
 	Metas    map[string]plan.FileMeta // Dst → 元数据（Plan 的 base 参数）
 	Bytes    map[string][]byte        // Dst → base 原始字节（merge 三方输入）
 	Degraded []string                 // 无法重建、本轮按 base✗ 处理的路径（排序）
+	Restored []string                 // §21.6-4：从渲染快照恢复的 Dst（排序 = need 序 = 字节序）
 }
 
 // loadBase 装载 base 快照。base 缺失、单文件缺失或损坏时走 §5.2 恢复：
@@ -103,31 +105,75 @@ func metaFromFileState(fst state.FileState, content []byte) plan.FileMeta {
 
 // restoreBase 执行 §5.2 的逐路径恢复。硬错误一律指引 adopt（不猜）。
 //
+// 恢复链前置一级（§21.6）：先试渲染快照（renderstore.Fetch，只读；缓存
+// 不存在/不可读/任何校验不符 → 静默 miss）——命中的写回**复用既有通道**
+// （原子写、mode 由 fst.Exec 推导），余项才走既有链。混合态语义：余项
+// 为空即完成（不打开模板源）；git 源余项走重渲染；dir 源零命中保持现行
+// 硬错、有命中则余项记 Degraded 不再硬错。
+//
 // readOnly 时跳过唯一的落盘点（写回 .xinit/base/）：重建内容仍进 snap，
 // 磁盘保持原样（dry-run/diff 零写契约，评审 I-1）。
 func restoreBase(projectDir string, st *state.State, cacheRoot string, need []string, snap *baseSnapshot, readOnly bool) error {
 	const adoptHint = "；请运行 xinit adopt --template <source> --revision <ref> --config <vars.yml> 重建基线（§5.2）"
 
+	// §21.6 前置一级：快照命中即恢复（写回字节过同一记录 hash 门，§20.4
+	// 守卫 7 不受影响）；miss 的路径留在 remaining 走既有链。
+	restored := renderstore.Fetch(st, cacheRoot, need)
+	base := state.BaseDir(projectDir)
+	var remaining []string
+	for _, dst := range need {
+		content, ok := restored[dst]
+		if !ok {
+			remaining = append(remaining, dst)
+			continue
+		}
+		fst := st.Files[dst]
+		mode := fs.FileMode(0o644)
+		if fst.Exec {
+			mode = 0o755
+		}
+		if !readOnly {
+			if err := state.WriteFileAtomic(filepath.Join(base, filepath.FromSlash(dst)), content, mode); err != nil {
+				return fmt.Errorf("从渲染快照恢复 base/%s: %w%s", dst, err, adoptHint)
+			}
+		}
+		snap.Metas[dst] = metaFromFileState(fst, content)
+		snap.Bytes[dst] = content
+		snap.Restored = append(snap.Restored, dst)
+	}
+	if len(remaining) == 0 {
+		return nil // 全命中：不打开模板源（§21.7）
+	}
+	note := snapshotNote(snap.Restored)
+
 	if st.Template.Kind != "git" {
-		return fmt.Errorf("base 缺失或损坏，而模板源是 %s 类型——没有历史版本可供重渲染%s",
-			st.Template.Kind, adoptHint)
+		if len(snap.Restored) == 0 {
+			// 零命中：保持现行硬错文案逐字（判据 5）。
+			return fmt.Errorf("base 缺失或损坏，而模板源是 %s 类型——没有历史版本可供重渲染%s",
+				st.Template.Kind, adoptHint)
+		}
+		// 部分恢复（§21.6-3 dir 混合态）：余项按 §5.2 既有降级语义处理，
+		// 不再硬错（dir 与 git 在混合态汇合）。
+		snap.Degraded = append(snap.Degraded, remaining...)
+		sort.Strings(snap.Degraded)
+		return nil
 	}
 	old, err := template.Open(st.Template.Source, st.Template.Commit, cacheRoot, false)
 	if err != nil {
-		return fmt.Errorf("重建 base：模板 %s@%s 已不可取到（commit 被删或强推？）：%v%s",
-			st.Template.Source, st.Template.Commit, err, adoptHint)
+		return fmt.Errorf("重建 base：模板 %s@%s 已不可取到（commit 被删或强推？）：%v%s%s",
+			st.Template.Source, st.Template.Commit, err, adoptHint, note)
 	}
 	mdata, err := fs.ReadFile(old.FS, "xinit.yml")
 	if err != nil {
-		return fmt.Errorf("重建 base：旧模板缺少 xinit.yml：%v%s", err, adoptHint)
+		return fmt.Errorf("重建 base：旧模板缺少 xinit.yml：%v%s%s", err, adoptHint, note)
 	}
 	m, err := manifest.Parse(mdata)
 	if err != nil {
-		return fmt.Errorf("重建 base：旧清单在本版 schema 下解析失败：%v%s", err, adoptHint)
+		return fmt.Errorf("重建 base：旧清单在本版 schema 下解析失败：%v%s%s", err, adoptHint, note)
 	}
 	c, err := m.Compile()
 	if err != nil {
-		return fmt.Errorf("重建 base：旧清单编译失败：%v%s", err, adoptHint)
+		return fmt.Errorf("重建 base：旧清单编译失败：%v%s%s", err, adoptHint, note)
 	}
 
 	// R9：vars 用 state.Vars 原样——不重跑 EvalVars（被删除的变量还在
@@ -135,15 +181,14 @@ func restoreBase(projectDir string, st *state.State, cacheRoot string, need []st
 	// 告警抑制：重渲染只为取证，告警上一轮已报告过。
 	entries, _, err := render.Paths(old.FS, c, st.Vars)
 	if err != nil {
-		return fmt.Errorf("重建 base：重渲染路径失败：%w%s", err, adoptHint)
+		return fmt.Errorf("重建 base：重渲染路径失败：%w%s%s", err, adoptHint, note)
 	}
 	byDst := make(map[string]render.Entry, len(entries))
 	for _, e := range entries {
 		byDst[e.Dst] = e
 	}
 
-	base := state.BaseDir(projectDir)
-	for _, dst := range need {
+	for _, dst := range remaining {
 		fst := st.Files[dst]
 		e, ok := byDst[dst]
 		if !ok {
@@ -152,7 +197,7 @@ func restoreBase(projectDir string, st *state.State, cacheRoot string, need []st
 		}
 		content, _, _, err := render.Content(old.FS, c, st.Vars, e)
 		if err != nil {
-			return fmt.Errorf("重建 base/%s: %w%s", dst, err, adoptHint)
+			return fmt.Errorf("重建 base/%s: %w%s%s", dst, err, adoptHint, note)
 		}
 		if fsutil.CompareHash(content, fst.Binary) != fst.Hash {
 			snap.Degraded = append(snap.Degraded, dst) // 历史「保持旧值」路径，必然不一致
@@ -165,7 +210,7 @@ func restoreBase(projectDir string, st *state.State, cacheRoot string, need []st
 		full := filepath.Join(base, filepath.FromSlash(dst))
 		if !readOnly {
 			if err := state.WriteFileAtomic(full, content, mode); err != nil {
-				return fmt.Errorf("重建 base/%s: %w%s", dst, err, adoptHint)
+				return fmt.Errorf("重建 base/%s: %w%s%s", dst, err, adoptHint, note)
 			}
 		}
 		snap.Metas[dst] = metaFromFileState(fst, content)
@@ -173,6 +218,16 @@ func restoreBase(projectDir string, st *state.State, cacheRoot string, need []st
 	}
 	sort.Strings(snap.Degraded)
 	return nil
+}
+
+// snapshotNote 是硬错误尾附的恢复行（判据 10）：有已恢复路径时 = "\n" +
+// 恢复行；无则空串（错误文本逐字不变）。文案与报告行共用 restoredLineFmt
+// （单一来源，report.go）。
+func snapshotNote(restored []string) string {
+	if len(restored) == 0 {
+		return ""
+	}
+	return "\n" + fmt.Sprintf(restoredLineFmt, len(restored))
 }
 
 // sortedStringKeys 返回 map 键的排序切片（确定性输出）。

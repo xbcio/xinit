@@ -176,6 +176,7 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		return nil, err
 	}
 	rep.Degraded = baseSnap.Degraded
+	rep.Restored = baseSnap.Restored
 
 	// 6. ours 快照（R18：只查 base ∪ theirs 的并集——与 Plan 的并集一致）
 	union := unionKeys(baseSnap.Metas, theirsSnap)

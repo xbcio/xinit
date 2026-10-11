@@ -122,3 +122,33 @@ func TestShellQuoteRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// 快照恢复行（§21.6-4 / §21.8 判据 18）：文案逐字、位置在「base 降级」块
+// 之前、仅 Restored > 0 时输出。
+func TestUpdateReportPrintRestoredLine(t *testing.T) {
+	rep := &UpdateReport{
+		Header:   "xinit update",
+		Source:   "/tpl",
+		Restored: []string{"a.txt", "b.txt"},
+		Degraded: []string{"c.txt"},
+	}
+	var buf strings.Builder
+	rep.Print(&buf)
+	out := buf.String()
+	line := "base 恢复（来自渲染快照，不依赖模板源，§5.2、§21）：2 条\n"
+	if !strings.Contains(out, line) {
+		t.Errorf("恢复行缺失或文案不符（want 含 %q）：\n%s", line, out)
+	}
+	i, j := strings.Index(out, "base 恢复"), strings.Index(out, "base 降级")
+	if i < 0 || j < 0 || i > j {
+		t.Errorf("恢复行应在「base 降级」块之前：i=%d j=%d\n%s", i, j, out)
+	}
+
+	// 空 Restored：恢复行零出现（>0 才输出）。
+	rep2 := &UpdateReport{Header: "xinit diff", Source: "/tpl", Degraded: []string{"c.txt"}}
+	var buf2 strings.Builder
+	rep2.Print(&buf2)
+	if strings.Contains(buf2.String(), "base 恢复") {
+		t.Errorf("Restored 为空时不得有恢复行:\n%s", buf2.String())
+	}
+}

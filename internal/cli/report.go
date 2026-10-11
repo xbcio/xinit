@@ -59,6 +59,10 @@ const conflictExitsAccept = "        若解决结果与模板不同，用上面�
 // conflictExitsPrune 是出路二。
 const conflictExitsPrune = "出路二：把路径写进 .xinit/prune.txt，使其脱离管理（模板对它的改动不再同步）。\n"
 
+// restoredLineFmt 是「base 恢复」行（§21.6-4 / §21.8 判据 18）——restore.go
+// 的硬错误尾注（snapshotNote，判据 10）共用同一串，文案单一来源。
+const restoredLineFmt = "base 恢复（来自渲染快照，不依赖模板源，§5.2、§21）：%d 条"
+
 // conflictFilesRef 只在确有 conflicts/ 内容条目时打印（评审 E1/m-3：
 // ConflictKind 且 theirs 缺失时没有条目，指向 conflicts/ 是不实信息）。
 // 尾部的 \n 是它的一部分：它是冲突报告的末行，缺了会与后续输出黏行
@@ -126,6 +130,9 @@ type UpdateReport struct {
 	Blocked    []string // 第 4 步拒绝：conflicts/ 里仍未解决、必须先处理的路径
 	Refused    []apply.Refusal
 	Degraded   []string // §5.2 降级为 base✗ 的路径
+	// Restored 是本轮由渲染快照恢复（§21.6）的路径（排序 = need 序 = 字节序；
+	// dry-run/diff 的恢复同样进内存、同样报告）。「base 恢复」行仅 >0 时输出。
+	Restored []string
 	// Migrations 是 §17 路径迁移的报告行（dry-run 与实跑同产出，按 Old 排序）。
 	Migrations    []MigrationNote
 	HookName      string   // "post_update"；未声明钩子的清单为 ""
@@ -210,6 +217,10 @@ func (r *UpdateReport) Print(w io.Writer) {
 		for _, m := range r.Migrations {
 			fmt.Fprintf(w, "  %-20s %s → %s（%s）\n", m.Status, m.Old, m.New, migrationText(m))
 		}
+	}
+	// 恢复行在「base 降级」块之前（§21.6-4，形状对齐区块头）。
+	if len(r.Restored) > 0 {
+		fmt.Fprintf(w, restoredLineFmt+"\n", len(r.Restored))
 	}
 	if len(r.Degraded) > 0 {
 		fmt.Fprintf(w, "base 降级（无法重建，本轮按「没有 base」处理，§5.2）：%d 条\n", len(r.Degraded))
