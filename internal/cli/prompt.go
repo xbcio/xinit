@@ -34,6 +34,18 @@ func interactiveSession(force bool) *promptSession {
 	return newPromptSession(os.Stdin, os.Stdout)
 }
 
+// confirm 是信任门的会话化入口（§19.2.3）：会话已 EOF 锁存（用户在更早
+// 提问处耗尽输入）时不再打印提问行、直接按「未确认」返回；其余时候复用
+// hooks.Confirm（提示与判定一字不改），输出走 ps.out（可注入；生产恒
+// os.Stdout）。信任门是 init/update 的最后一次交互读取，故 Confirm 自身
+// 读到 EOF 不另行锁存（无后续读取点；2026-10-11 M7）。
+func (s *promptSession) confirm() (bool, error) {
+	if s.eof {
+		return false, nil
+	}
+	return hooks.Confirm(s.r, s.out)
+}
+
 // askLine 打印 q 后读一行；返回归一后的行（去行尾换行 + TrimSpace）与是否 EOF。
 // err 仅为「非 EOF 的读错误」。EOF 锁存：一旦 EOF，此后不再打印提示。
 func (s *promptSession) askLine(q string) (line string, eof bool, err error) {

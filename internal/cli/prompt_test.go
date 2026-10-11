@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"strings"
@@ -145,6 +146,58 @@ var errBoom = errors.New("boom")
 type errReader struct{}
 
 func (errReader) Read([]byte) (int, error) { return 0, errBoom }
+
+func TestConfirmMatchesHooksConfirm(t *testing.T) {
+	// 未锁存时 ps.confirm 与 hooks.Confirm 逐字节等价（提示与判定一字不改，
+	// §19.2.3）：y/Y/yes/YES 为真，其余与 EOF 为假且不出错。
+	for _, in := range []string{"y\n", "Y\n", "yes\n", "YES\n", "  y  \n", "n\n", "\n", "foo\n", ""} {
+		var got, want bytes.Buffer
+		ps := newPromptSession(strings.NewReader(in), &got)
+		ok, err := ps.confirm()
+		wantOK, wantErr := hooks.Confirm(bufio.NewReader(strings.NewReader(in)), &want)
+		if ok != wantOK || (err == nil) != (wantErr == nil) {
+			t.Fatalf("输入 %q：confirm=(%v,%v) 与 hooks.Confirm=(%v,%v) 不一致",
+				in, ok, err, wantOK, wantErr)
+		}
+		if got.String() != want.String() {
+			t.Fatalf("输入 %q：提示不一致\n got %q\nwant %q", in, got.String(), want.String())
+		}
+	}
+}
+
+func TestConfirmSkipsPromptAfterEOF(t *testing.T) {
+	// 会话已 EOF 锁存（用户在更早的提问处耗尽输入，如 4b 的 C3 路径）⇒ 信任门
+	// 不再打印提问行、直接按「未确认」返回：管道下的空 stdin 只该留下 C3 行，
+	// 不该多出一行无人回答的「信任并执行？[y/N] 」（M3，2026-10-11 M7）。
+	var out bytes.Buffer
+	ps := newPromptSession(strings.NewReader(""), &out)
+	if _, eof, err := ps.askLine("q: "); err != nil || !eof {
+		t.Fatalf("首次读应 EOF: eof=%v err=%v", eof, err)
+	}
+	out.Reset() // 只观察 confirm 自己的写入
+	ok, err := ps.confirm()
+	if err != nil || ok {
+		t.Fatalf("锁存后应直接按未确认返回: ok=%v err=%v", ok, err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("锁存后不应打印信任门提示: %q", out.String())
+	}
+}
+
+func TestConfirmEOFDoesNotLatch(t *testing.T) {
+	// 信任门是 init/update 的**最后一次**交互读取（无后续消费点）⇒ Confirm
+	// 自身读到的 EOF 不另行锁存（裁定 R2，2026-10-11 M7）：此断言把该裁定写进
+	// 测试，避免后来者把「顺手加锁存」当成必要动作。
+	var out bytes.Buffer
+	ps := newPromptSession(strings.NewReader(""), &out)
+	ok, err := ps.confirm()
+	if err != nil || ok {
+		t.Fatalf("EOF 应判未确认: ok=%v err=%v", ok, err)
+	}
+	if ps.eof {
+		t.Fatal("信任门读到的 EOF 不锁存（无后续读取点，2026-10-11 M7）")
+	}
+}
 
 func TestSharedReaderNoLoss(t *testing.T) {
 	// §19.2.3 的硬约束：一次运行只有一条 reader，且与 hooks.Confirm 共用。
