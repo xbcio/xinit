@@ -84,6 +84,45 @@ xinit-code update --accept a.txt
 stderr 'ConflictKind'
 stdout 'exit=1'
 
+cd ..
+# ════ C-1（M9）：BothAdded base✗ 的 --accept 收敛 ════
+# 模板新增 u.txt、本地已有同名不同内容 ⇒ BothAdded；accept? 打印的命令必须
+# 真实可用（修复前 rc=1「内部错误：…保持旧 base 但 files 里没有它」）。
+# 两个子项目都在模板拿到 u.txt 之前 init（out2/out3 的 base✗ 前提）。
+xinit init --template $WORK/tpl --yes out2
+xinit init --template $WORK/tpl --yes out3
+cp $WORK/u-theirs.txt $WORK/tpl/u.txt
+cp $WORK/u-local.txt $WORK/out2/u.txt
+cd out2
+xinit-code update
+stdout 'conflict-both-added\s+u\.txt'
+stdout 'xinit update --accept \x27u\.txt\x27'
+stdout 'exit=2'
+# accept：本地内容保留、base 记模板版、路径自此受管（= 纯重跑收敛的同一末态）
+xinit-code update --accept u.txt
+stdout 'exit=0'
+! exists .xinit/conflicts/u.txt
+cmp u.txt $WORK/u-local.txt
+cmp .xinit/base/u.txt $WORK/u-theirs.txt
+grep 'u\.txt' .xinit/state.json
+# 收敛复核：下一轮零冲突、磁盘不动
+xinit-code update
+stdout 'exit=0'
+cmp u.txt $WORK/u-local.txt
+cd ..
+# ════ C-1 变体（M9）：ours 已手工改到与 theirs 一致后 accept ════
+cp $WORK/u-local.txt $WORK/out3/u.txt
+cd out3
+xinit-code update
+stdout 'conflict-both-added\s+u\.txt'
+stdout 'exit=2'
+cp $WORK/u-theirs.txt u.txt
+xinit-code update --accept u.txt
+stdout 'exit=0'
+cmp u.txt $WORK/u-theirs.txt
+cmp .xinit/base/u.txt $WORK/u-theirs.txt
+cd ..
+
 -- tpl/xinit.yml --
 manifest_version: 1
 -- tpl/a.txt --
@@ -108,3 +147,7 @@ local
 a2 plus local tweak
 -- prune.txt --
 a.txt
+-- u-theirs.txt --
+u-theirs
+-- u-local.txt --
+u-local

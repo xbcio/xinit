@@ -71,11 +71,8 @@ cd ..
 # ════ (d) 症状 2/3/4 的另一载体：BothAdded 空渲染 ════
 # 模板 v2 新增 u.txt（渲染为空）、项目本地已有同名 u.txt ⇒ ConflictBothAdded；
 # 条目落盘（0 字节）+ accept 命令可照抄（§10.3：BothAdded 在 --accept 可用集里）。
-# 这里**不**真跑 accept：base✗ 的路径走 --accept 会在 advanceState 撞上
-# `内部错误："u.txt" 保持旧 base 但 files 里没有它`——这是与本缺陷无关的既有
-# 缺陷（HEAD 上以非空内容同样复现：模板新增 u.txt=u-theirs、本地 u.txt=u-local
-# 时 `update --accept u.txt` → rc=1 同一句；与空渲染归一无关，故不在本任务
-# 的 symptoms 1–4 内、也不做超范围修复；已列入批次 concern）。
+# M9（C-1）起**真跑** accept：base✗ 的路径 accept 已可用（末态 = 磁盘保留本地
+# 内容、base 记模板版〔空渲染 = 0 字节〕、路径自此受管）。
 xinit init --template $WORK/tpl3 --yes p3
 cp $WORK/local-u.txt $WORK/p3/u.txt
 cp $WORK/empty-u.txt $WORK/tpl3/u.txt
@@ -92,6 +89,11 @@ stdout '未解决的冲突（1 条）——先处理它们，update 才会执行
 ! stdout '交互式冲突解决'
 stdout 'exit=2'
 cmp .xinit/conflicts/u.txt $WORK/empty.txt
+xinit-code update --accept u.txt
+stdout 'exit=0'
+! exists .xinit/conflicts/u.txt
+cmp u.txt $WORK/local-u.txt
+cmp .xinit/base/u.txt $WORK/empty.txt
 cd ..
 
 # ════ (e) 0 字节途径（ModeSubst）：模板文件本身截断为 0 字节 ════

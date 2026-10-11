@@ -314,6 +314,7 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 				delete(conflicts, p)
 			}
 			// 其余（重写后干净合并/推进）：照常走决策表的结论。
+			// base✗ 时 files 条目由 advanceState 以 newSrc 补齐（M9 C-1）。
 		}
 	}
 
@@ -1123,10 +1124,16 @@ func advanceState(projectDir string, st *state.State, baseSnap *baseSnapshot,
 				return fmt.Errorf("内部错误：%q 保持旧 base 但旧 base 内容缺失", a.Path)
 			}
 			if !hadOld {
-				return fmt.Errorf("内部错误：%q 保持旧 base 但 files 里没有它", a.Path)
+				// base✗（BothAdded）的 --accept 干净路径：base′ 由 7b 重写为
+				// conflicts/<P> 内容，files 条目缺失——Src 取本轮模板映射
+				//（M9 C-1；修复前此分支报「内部错误」、accept 不可用）。
+				if srcPath = newSrc[a.Path]; srcPath == "" {
+					return fmt.Errorf("内部错误：%q 保持旧 base 但 files 里没有它（且拿不到模板原路径）", a.Path)
+				}
+			} else {
+				srcPath = old.Src
 			}
 			content = b
-			srcPath = old.Src
 		}
 
 		newFiles[a.Path] = state.FileState{
