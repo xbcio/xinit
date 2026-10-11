@@ -1,0 +1,114 @@
+# 空渲染 theirs 归一（C2+C3 同根四症状；2026-10-11 M7）：模板把某个文件整内容
+# 渲染成空时，theirs 表里那个键的值是 []byte(nil)——它必须按「空内容文件」而不是
+# 「模板没有这个路径」解释。四症状同根：① Merge 空渲染撞上 classifyMerges 的
+# `tb == nil` 守卫 → 内部错误 rc=1（误报、零写）；② conflicts/ 不落 0 字节条目；
+# ③ 报告照旧打 `accept?` 命令，但它指向的 conflicts/ 条目不存在（照抄必失败）；
+# ④ 无条目 ⇒ 下轮不阻塞 ⇒ 冲突每轮重新提问。
+#
+# 触发条件（唯一途径）：文件整内容经 Go template 渲染为空。夹具里的
+# `{{- "" -}}` 两个 trim 标记吃掉 txtar 正文必然带的尾换行 ⇒ RenderTemplate
+# 的输出恰为 0 字节、bytes.Buffer.Bytes() 返回 nil。纯 0 字节文件（无 `{{`）
+# 不走内容渲染路径，不触发本缺陷。三个模板都要 `render.paths` 声明——
+# 否则 `{{ … }}` 按 ModeSubst 原样透传（§7.1 阶段 5）。
+
+# ════ (a) 症状 1：Merge 空渲染 = 判冲突，不是内部错误 ════
+xinit init --template $WORK/tpl1 --yes p1
+cp $WORK/new-a.txt $WORK/tpl1/a.txt
+cp $WORK/local-a.txt $WORK/p1/a.txt
+cd p1
+xinit-code update
+! stderr '内部错误'
+stdout 'merge-conflict\s+a\.txt'
+stdout '冲突（1 条）需要你处理：'
+stdout 'accept\?\s+xinit update --accept \x27a\.txt\x27'
+stdout '参考：模板新内容已写到 \.xinit/conflicts/<路径>。'
+stdout 'exit=2'
+# 条目 = 空内容本身（0 字节），本地版原样保留（既有的「保留本地」语义）
+cmp .xinit/conflicts/a.txt $WORK/empty.txt
+cmp a.txt $WORK/local-a.txt
+
+# ════ (b) 症状 2/3：0 字节条目真实可用 —— --accept 声明已解决后收敛 ════
+xinit-code update --accept a.txt
+stdout 'exit=0'
+! exists .xinit/conflicts/a.txt
+cmp .xinit/base/a.txt $WORK/empty.txt
+# 「把你看到并认可的版本记为 base」= 空内容；本地版（≠ 新 base）按行 3 保留
+cmp a.txt $WORK/local-a.txt
+# 收敛后幂等：全 Noop
+xinit-code update
+stdout '汇总: 写入 0、删除 0、chmod 0、冲突 0'
+stdout 'exit=0'
+cd ..
+
+# ════ (c) 症状 4：答 n/EOF 后条目落盘 ⇒ 下轮被第 4 步阻塞、不再重问 ════
+xinit init --template $WORK/tpl2 --yes p2
+cp $WORK/new-a.txt $WORK/tpl2/a.txt
+cp $WORK/local-a.txt $WORK/p2/a.txt
+cd p2
+stdin $WORK/empty.txt
+xinit-code update --interactive
+stdout '输入已结束（EOF）：其余 1 条冲突按「保留本地」处理（§19.4）。'
+stdout 'exit=2'
+cmp .xinit/conflicts/a.txt $WORK/empty.txt
+cmp a.txt $WORK/local-a.txt
+# 下一轮（不带 --interactive）：条目仍在 ⇒ 第 4 步早退，零交互文本（§19.4.2
+# 「回答 n 之后没有第二次询问」）
+xinit-code update
+stdout '未解决的冲突（1 条）——先处理它们，update 才会执行：'
+! stdout '交互式冲突解决'
+! stdout '改用模板版？'
+stdout 'exit=2'
+cmp .xinit/conflicts/a.txt $WORK/empty.txt
+cd ..
+
+# ════ (d) 症状 2/3/4 的另一载体：BothAdded 空渲染 ════
+# 模板 v2 新增 u.txt（渲染为空）、项目本地已有同名 u.txt ⇒ ConflictBothAdded；
+# 条目落盘（0 字节）+ accept 命令可照抄（§10.3：BothAdded 在 --accept 可用集里）。
+# 这里**不**真跑 accept：base✗ 的路径走 --accept 会在 advanceState 撞上
+# `内部错误："u.txt" 保持旧 base 但 files 里没有它`——这是与本缺陷无关的既有
+# 缺陷（HEAD 上以非空内容同样复现：模板新增 u.txt=u-theirs、本地 u.txt=u-local
+# 时 `update --accept u.txt` → rc=1 同一句；与空渲染归一无关，故不在本任务
+# 的 symptoms 1–4 内、也不做超范围修复；已列入批次 concern）。
+xinit init --template $WORK/tpl3 --yes p3
+cp $WORK/local-u.txt $WORK/p3/u.txt
+cp $WORK/empty-u.txt $WORK/tpl3/u.txt
+cd p3
+xinit-code update
+stdout 'conflict-both-added\s+u\.txt'
+stdout 'accept\?\s+xinit update --accept \x27u\.txt\x27'
+stdout 'exit=2'
+cmp .xinit/conflicts/u.txt $WORK/empty.txt
+cmp u.txt $WORK/local-u.txt
+# 症状 4：条目落盘 ⇒ 下一轮第 4 步阻塞（修前无条目 ⇒ 不阻塞 ⇒ 每轮重问）
+xinit-code update
+stdout '未解决的冲突（1 条）——先处理它们，update 才会执行：'
+! stdout '交互式冲突解决'
+stdout 'exit=2'
+cmp .xinit/conflicts/u.txt $WORK/empty.txt
+cd ..
+
+-- tpl1/xinit.yml --
+manifest_version: 1
+render:
+  - paths: ["a.txt"]
+-- tpl1/a.txt --
+a1
+-- tpl2/xinit.yml --
+manifest_version: 1
+render:
+  - paths: ["a.txt"]
+-- tpl2/a.txt --
+a1
+-- tpl3/xinit.yml --
+manifest_version: 1
+render:
+  - paths: ["u.txt"]
+-- new-a.txt --
+{{- "" -}}
+-- empty-u.txt --
+{{- "" -}}
+-- local-a.txt --
+local
+-- local-u.txt --
+u-local
+-- empty.txt --

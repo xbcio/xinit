@@ -640,6 +640,13 @@ func renderTheirs(src *template.Source, compiled *manifest.Compiled, vars render
 		for _, w := range warns {
 			fmt.Fprintf(os.Stderr, "xinit: 警告: %s: %s\n", w.Path, w.Msg)
 		}
+		// 空渲染（Go template 渲染出空内容）是**空内容文件**，不是「模板没有它」：
+		// 归一成非 nil 空切片，使下游按「键存在」判定的全链（classifyMerges 的
+		// b != nil / tb == nil 守卫、conflicts/ 内容条目、--accept、答 n 后不再重问）
+		// 与 buildChanges:791 / advanceState:1102 的键存在语义一致（2026-10-11 M7）。
+		if data == nil {
+			data = []byte{}
+		}
 		rendered[e.Dst] = data
 		srcOf[e.Dst] = e.Src
 	}
@@ -721,8 +728,10 @@ func expandPrune(projectDir string, paths []string) (plan.PruneSet, error) {
 //	rc ≥128   → 改判 ConflictBinary，同上进 conflicts/。
 //
 // 四类冲突动作（Merge 冲突、ConflictBinary、ConflictBothAdded、ConflictKind）
-// 都进 conflicts/ 内容表；内容 = theirsRendered[P]，缺失（如行 6 的 binary 在
-// theirs 里存在则不会缺；Kind 冲突在 theirs 里存在）时跳过。
+// 都进 conflicts/ 内容表；内容 = theirsRendered[P]，**键缺失**时跳过——键缺失
+// = 模板没有该路径（如行 6 的 binary 在 theirs 里存在则不会缺；Kind 冲突在
+// theirs 里存在）；键在且值为空切片 = 空内容文件（renderTheirs 已把空渲染
+// 归一成非 nil 空切片，2026-10-11 M7），照常落 0 字节条目。
 func classifyMerges(actions []plan.Action, baseSnap *baseSnapshot, oursSnap plan.Snap,
 	oursBytes map[string][]byte, theirsSnap plan.Snap, theirsRendered map[string][]byte,
 ) (map[string][]byte, map[string]bool, map[string][]byte, error) {
