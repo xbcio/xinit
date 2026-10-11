@@ -209,9 +209,10 @@ func TestPlanRows(t *testing.T) {
 			base:   Snap{},
 			ours:   Snap{"new.txt": reg("h1")},
 			theirs: Snap{"new.txt": reg("h2")},
-			// Note 锚住行 15 专属句（含旧断言子串 conflicts/；M9 观察②：不得
-			// 复用行 6 的「二进制或混合 EOL」成因句）。
-			want: []Action{{Path: "new.txt", Kind: ConflictBothAdded, NewBase: nil, Note: "两者不同，无法自动合并；theirs 的内容写入 .xinit/conflicts/new.txt"}},
+			// Note 锚自「模板新增了该路径」起（覆盖成因句，T3 评审 Minor-1；
+			// 含旧断言子串 conflicts/；M9 观察②：不得复用行 6 的「二进制或
+			// 混合 EOL」成因句）；收束尾句与行 6 同状，不锚。
+			want: []Action{{Path: "new.txt", Kind: ConflictBothAdded, NewBase: nil, Note: "模板新增了该路径，本地已有同名内容且两者不同，无法自动合并；theirs 的内容写入 .xinit/conflicts/new.txt"}},
 		},
 		{
 			name:   "行16 纯本地新增不在并集 → 不产出 Action、不进 files（R18）",
