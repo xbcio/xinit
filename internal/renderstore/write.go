@@ -13,10 +13,12 @@ import (
 // Write 把一轮渲染的原文快照写到 <cacheRoot>/render/<familyKey>/（§21.3–21.5）。
 // 前置契约：st 必须是本轮 st.Save **成功之后**的持久化状态——键的 vars 分量
 // = st.Vars（停盘值），不得用本轮传入的 vars 参数（§21.3 读写同源）。
-// rendered = 当轮渲染源（Dst → 原文）；清单键集 = st.Files 的键 ∩ rendered。
-// 条目存在且与现算键 + anchor 全匹配（含 tree/ 存在性/条目数核对）→ 不重写；
-// 否则整条覆写轮转（先 tree、后 manifest、再清旧）。任何失败返回 error
-// （调用方 best-effort 记警告，不影响命令退出码）。
+// rendered = 当轮渲染源（Dst → 原文）；清单键集 = st.Files 的键 ∩ rendered，
+// 写侧再过一道过滤：绝对路径 / `..` 段等坏 Dst 经 state.CheckWithinBase 跳过、
+// 不写出条目目录（§21.9，与读侧同门判据）。
+// 条目存在且与现算键 + anchor 全匹配（含 tree/ 存在性/条目数/条目尺寸核对）
+// → 不重写；否则整条覆写轮转（先 tree、后 manifest、再清旧）。任何失败返回
+// error（调用方 best-effort 记警告，不影响命令退出码）。
 func Write(st *state.State, cacheRoot string, rendered map[string][]byte) error {
 	// 清单键集 = st.Files 的键 ∩ 渲染源（§21.4）：st.Files 有而渲染源无 →
 	// 静默略过（宁缺勿错）；坏的 Dst（绝对路径 / .. 段）不得写出条目目录——
@@ -94,9 +96,10 @@ func Write(st *state.State, cacheRoot string, rendered map[string][]byte) error 
 }
 
 // entryMatches 报告现有条目是否与现算键 + anchor 全匹配（§21.5 跳过判据，
-// 全合取）。逐 dst 只核对存在且为普通文件——内容正确性由读侧 raw 门兜底，
-// 写侧不必全量重读；tree/ 普通文件数核对把多余/丢失/被换成目录的条目
-// 判为损坏，触发整条重写。
+// 全合取）。逐 dst 核对存在、为普通文件且尺寸 == 清单记录值——内容正确性仍由
+// 读侧 raw 门兜底，写侧不做全量重读；尺寸核对把「tree 已重写、manifest 未覆写」
+// 窗口（崩溃/磁盘满）留下的半写/截断残字节判为损坏 → 同输入重写即自愈。
+// tree/ 普通文件数核对把多余/丢失/被换成目录的条目判为损坏，触发整条重写。
 func entryMatches(dir string, st *state.State, varsSHA string, dsts []string) bool {
 	m, err := readManifest(filepath.Join(dir, manifestName))
 	if err != nil {
@@ -111,20 +114,21 @@ func entryMatches(dir string, st *state.State, varsSHA string, dsts []string) bo
 		len(m.Files) != len(dsts) {
 		return false
 	}
-	listed := make(map[string]bool, len(m.Files))
+	listed := make(map[string]int, len(m.Files))
 	for _, f := range m.Files {
-		if listed[f.Dst] {
+		if _, dup := listed[f.Dst]; dup {
 			return false // 重复 dst：异常清单，整条重写
 		}
-		listed[f.Dst] = true
+		listed[f.Dst] = f.Size
 	}
 	treeDir := filepath.Join(dir, treeDirName)
 	for _, dst := range dsts {
-		if !listed[dst] {
+		want, ok := listed[dst]
+		if !ok {
 			return false
 		}
 		info, err := os.Lstat(filepath.Join(treeDir, filepath.FromSlash(dst)))
-		if err != nil || !info.Mode().IsRegular() {
+		if err != nil || !info.Mode().IsRegular() || info.Size() != int64(want) {
 			return false
 		}
 	}

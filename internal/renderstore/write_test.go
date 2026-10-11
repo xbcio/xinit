@@ -227,6 +227,59 @@ func TestWriteRewritesWhenTreeFileMissing(t *testing.T) {
 	}
 }
 
+func TestWriteSelfHealsTruncatedTreeFile(t *testing.T) {
+	// 尺寸核对（M10 F-2）：上轮 Write 在「tree 已重写、manifest 未覆写」窗口中断
+	// 后，旧清单仍在而 tree 文件是半写/截断的残字节（尺寸不符）——skip 判据必须
+	// 判为损坏 → 同输入重写整条轮转，残文件恢复为清单记录的原文（自愈）。
+	root := t.TempDir()
+	st := writeFixture("sha256/c1", nil, "a.txt", "sub/b.txt")
+	rendered := map[string][]byte{"a.txt": []byte("alpha\n"), "sub/b.txt": []byte("beta\n")}
+	if err := Write(st, root, rendered); err != nil {
+		t.Fatalf("Write#1: %v", err)
+	}
+	dir := entryDir(root, testKey(st))
+	treeFile := filepath.Join(dir, treeDirName, "a.txt")
+
+	// 对照组：无损的全匹配第二轮仍跳过（字节与 mtime 都不动）。
+	before := snapshotTree(t, dir)
+	if err := Write(st, root, rendered); err != nil {
+		t.Fatalf("Write#2: %v", err)
+	}
+	after := snapshotTree(t, dir)
+	relA := treeDirName + "/a.txt"
+	b, okB := before[relA]
+	a, okA := after[relA]
+	if !okB || !okA {
+		t.Fatalf("tree/a.txt 应在两轮快照内：before=%v after=%v", okB, okA)
+	}
+	if !b.ModTime.Equal(a.ModTime) || !bytes.Equal(b.Data, a.Data) {
+		t.Errorf("全匹配的第二轮必须零重写：mtime %v → %v、字节 %q → %q", b.ModTime, a.ModTime, b.Data, a.Data)
+	}
+
+	// 模拟半写窗口：tree/a.txt 截断成更短的残字节（清单保持旧记录）。
+	if err := os.WriteFile(treeFile, []byte("al"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := manifestT(t, dir)
+	if len(m.Files) != 2 || m.Files[0].Dst != "a.txt" {
+		t.Fatalf("清单应仍为旧记录（a.txt + sub/b.txt）：%+v", m.Files)
+	}
+	info, err := os.Lstat(treeFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() == int64(m.Files[0].Size) {
+		t.Fatalf("前提不成立：残文件尺寸仍与清单相等（%d）", info.Size())
+	}
+
+	if err := Write(st, root, rendered); err != nil {
+		t.Fatalf("Write#3: %v", err)
+	}
+	if got := readFileT(t, treeFile); !bytes.Equal(got, rendered["a.txt"]) {
+		t.Errorf("截断的 tree 文件应自愈为原文：%q, want %q", got, rendered["a.txt"])
+	}
+}
+
 func TestWriteManifestKeySetIsIntersection(t *testing.T) {
 	// 清单键集 = st.Files ∩ 渲染源：rendered 多出的（--force 跳过类）不进清单；
 	// st.Files 多出的（异常缺项）静默略过且不报错（宁缺勿错）。
