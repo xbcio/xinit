@@ -78,11 +78,18 @@ func checkOne(projectDir, p string, deleteSet map[string]bool) (Refusal, bool, e
 			return Refusal{Path: p, Reason: fmt.Sprintf(
 				"父路径 %s 是符号链接——xinit 不穿透（R16，与精确列举的读盘语义一致）；"+
 					"请移走它，或把 %s 写进 .xinit/prune.txt", strings.Join(parts[:i+1], "/"), p)}, true, nil
-		case !last && !fi.IsDir():
+		case !last && fi.Mode().IsRegular():
+			// 常规文件（既有文案，§9.3）。
 			return Refusal{Path: p, Reason: fmt.Sprintf(
 				"父路径 %s 在磁盘上是常规文件（模板要把它变成目录）——文件与目录不能互相顶替；"+
 					"移走它后重跑即可收敛；或把 %s 写进 .xinit/prune.txt 使其脱离管理（§9.3）",
 				strings.Join(parts[:i+1], "/"), p)}, true, nil
+		case !last && !fi.IsDir():
+			// 非常规类型（重解析点/命名管道/设备等，§22.5）：显式 fail-closed、专用文案。
+			// 目录是合法中间段（常规文件已被上一分支分走），不在此拒。
+			return Refusal{Path: p, Reason: fmt.Sprintf(
+				"父路径 %q 是特殊文件形态（重解析点/特殊文件等），不受支持",
+				strings.Join(parts[:i+1], "/"))}, true, nil
 		case last && fi.IsDir():
 			return Refusal{Path: p, Reason: fmt.Sprintf(
 				"%s 在磁盘上是目录（模板要写文件）；移走或改名该目录后重跑即可收敛；"+
