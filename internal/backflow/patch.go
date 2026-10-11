@@ -209,7 +209,13 @@ func correctModeLines(seg []byte, f PatchFile) []byte {
 		// 纯模式变更（Windows 上 git 同态同内容 → 空输出，实测）：整段合成，
 		// 与 unix --no-index 输出逐字节同形（头 + old/new mode；§22.7）。
 		// 注意：O==N 时到不了这里（isNoop 已滤），空输出即形态异常，交给 verify。
-		if f.OldExec == f.NewExec {
+		//
+		// 合成前显式核内容相等（纵深防御；承重前提是 diffGit 钉死的
+		// `-c core.autocrlf=false`，该钉不动）：空段的唯一合法来源是「git 看不见
+		// 差异」。若内容本不等（git 把两侧归一成同一 blob 时会吞掉差异），合成
+		// mode-only 段就等于静默丢弃内容差异——此时原样返回空段，交 verifySegment
+		// fail-closed（M11 终审 M4）。
+		if f.OldExec == f.NewExec || !bytes.Equal(f.T, f.FNew) {
 			return seg
 		}
 		var b bytes.Buffer

@@ -604,6 +604,20 @@ func TestCorrectModeLinesPureModeChange(t *testing.T) {
 	}
 }
 
+// TestCorrectModeLinesEmptySegContentDiffers 覆盖 M11 终审 M4 的 fail-open 角落：
+// git 把两侧内容归一成同一 blob（autocrlf 类配置）时会产出空段——即便 exec 记账
+// 有差异，也不得凭「git 看不到差异」合成 mode-only 段而静默丢弃内容差异。合成
+// 前置 bytes.Equal(f.T, f.FNew) 不成立 → 原样返回空段，交 verifySegment fail-closed。
+func TestCorrectModeLinesEmptySegContentDiffers(t *testing.T) {
+	f := PatchFile{Src: "src/f.txt", T: []byte("a\n"), FNew: []byte("a\r\n"), OldExec: true, NewExec: false}
+	if got := correctModeLines(nil, f); len(got) != 0 {
+		t.Fatalf("内容不等时不得合成 mode-only 段：%q", got)
+	}
+	if err := verifySegment(nil, f); err == nil {
+		t.Fatal("空段必须 fail-closed（verifySegment）")
+	}
+}
+
 // TestCorrectModeLinesNewExec 覆盖 §22.7 R4b 的新增可执行文件：Windows 上 git 见到
 // 的临时文件只有只读位，只可能产出 `new file mode 100644`——校正面把它改写为 exec
 // 记账映射的值；未校正的形态在校验面 fail-closed。

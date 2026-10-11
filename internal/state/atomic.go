@@ -94,10 +94,14 @@ func renameWithRetry(tmp, target string) error {
 		if fi, err := os.Lstat(target); err == nil && fi.Mode().IsRegular() &&
 			fi.Mode().Perm()&0o200 == 0 {
 			if cerr := os.Chmod(target, fi.Mode().Perm()|0o200); cerr == nil {
-				if err := renameFile(tmp, target); err == nil {
+				// 诊断取**清位后这次** rename 的 err：只读位已清除仍失败，原因
+				// 必须来自最后一次尝试（循环的 lastErr 可能已被清位修复、不再
+				// 是真实成因）。
+				rerr := renameFile(tmp, target)
+				if rerr == nil {
 					return nil
 				}
-				return fmt.Errorf("%w（目标只读位已清除、写入仍失败）", lastErr)
+				return fmt.Errorf("%w（目标只读位已清除、写入仍失败）", rerr)
 			}
 		}
 	}

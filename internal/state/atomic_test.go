@@ -201,3 +201,49 @@ func TestRenameReadOnlyFailClosed(t *testing.T) {
 		t.Errorf("tmp 已清理（defer 契约），残留: %v", names)
 	}
 }
+
+// TestRenameReadOnlyFailClosedDiagnosticUsesLastAttempt：fail-closed 诊断的承重
+// 来源是**清位后那次** rename 的 err，不是重试循环的 lastErr（M11 终审 M2）。
+// 首调注入 EACCES 进只读清位分支；清位后的失败换成另一成因（注入哨兵错误）——
+// wrap 的必须是后者；若仍包 lastErr，errors.Is(err, EACCES) 会误真。
+func TestRenameReadOnlyFailClosedDiagnosticUsesLastAttempt(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(p, []byte("old"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	origFile, origRetryable := renameFile, renameRetryable
+	defer func() { renameFile, renameRetryable = origFile, origRetryable }()
+
+	renameRetryable = func(error) bool { return false }
+	postErr := errors.New("清位后 rename 仍失败（注入：另一成因）")
+	calls := 0
+	renameFile = func(oldpath, newpath string) error {
+		calls++
+		if calls == 1 {
+			return transientRenameErr(oldpath, newpath) // 首调 EACCES → 进只读清位分支
+		}
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: postErr}
+	}
+
+	err := WriteFileAtomic(p, []byte("new"), 0o644)
+	if err == nil {
+		t.Fatal("清位后仍失败应当报错（fail-closed）")
+	}
+	if !strings.Contains(err.Error(), "目标只读位已清除、写入仍失败") {
+		t.Errorf("错误应含钉死文案: %v", err)
+	}
+	if !errors.Is(err, postErr) {
+		t.Errorf("诊断必须包清位后那次 rename 的 err: %v", err)
+	}
+	if errors.Is(err, syscall.EACCES) {
+		t.Errorf("不得再包重试循环的 lastErr（该成因已被清位修复）: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("rename 调用次数 = %d, want 2（首调 + 清位后重试一次）", calls)
+	}
+}
