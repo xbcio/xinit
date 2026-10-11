@@ -189,15 +189,133 @@ func patchSegment(tmp string, f PatchFile) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("生成 %s 的补丁段：%w", f.Src, err)
 	}
+	seg = correctModeLines(seg, f) // §22.7 R4b：mode 行以 exec 记账为权威
 	if err := verifySegment(seg, f); err != nil {
 		return nil, err
 	}
 	return seg, nil
 }
 
-// writeRecipeFile 写一个配方临时文件并按 exec 位**显式 chmod**：mode 行来自临时
-// 文件的权限位，不 chmod 则纯 mode 变更空输出、exec 位静默丢失（§20.6 步骤 1
-// 实测）。先按 0600 写再 chmod——别依赖 `os.WriteFile` 的 mode 参数（会被 umask 削）。
+// correctModeLines 按 f.OldExec/f.NewExec 校正/合成配方段的 mode 信息（§22.7 R4b）：
+// git 的 mode 行来自临时文件的权限位（writeRecipeFile 的 chmod），在 Windows 上
+// 不可用（os.Chmod 只影响只读位）——权威来源是 exec 记账。unix 上 git 已按真实
+// 权限产出正确形态，本函数幂等、输出逐字节不变。
+func correctModeLines(seg []byte, f PatchFile) []byte {
+	wantOld, wantNew := modeString(f.OldExec), modeString(f.NewExec)
+	if f.IsNew {
+		return setNewFileMode(seg, wantNew) // `new file mode ` 值改写（形态见 verify）
+	}
+	if len(seg) == 0 {
+		// 纯模式变更（Windows 上 git 同态同内容 → 空输出，实测）：整段合成，
+		// 与 unix --no-index 输出逐字节同形（头 + old/new mode；§22.7）。
+		// 注意：O==N 时到不了这里（isNoop 已滤），空输出即形态异常，交给 verify。
+		if f.OldExec == f.NewExec {
+			return seg
+		}
+		var b bytes.Buffer
+		fmt.Fprintf(&b, "diff --git a/%s b/%s\nold mode %s\nnew mode %s\n",
+			f.Src, f.Src, wantOld, wantNew)
+		return b.Bytes()
+	}
+	lines := strings.Split(string(seg), "\n")
+	if f.OldExec != f.NewExec {
+		// 内容+模式/纯模式：head 后确保 old/new mode 两行、值精确；
+		// index 行若带 mode 后缀（Windows 双侧 644 时 git 追加的错值）→ 剥除
+		// （unix 该形态本无后缀，实测 F4/F6——校正幂等、字节不变）。
+		lines = stripIndexModeSuffix(lines)
+		lines = ensureModeLines(lines, wantOld, wantNew)
+	} else {
+		// 无模式差异：index 行后缀 = wantNew（unix 实测本就如此；Windows 错值改写）。
+		lines = setIndexModeSuffix(lines, wantNew)
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+// modeString 把 exec 记账位映射为 git 的 6 位八进制 mode 串。
+func modeString(exec bool) string {
+	if exec {
+		return "100755"
+	}
+	return "100644"
+}
+
+// newFileModeLineRe 匹配 `new file mode` 行（值本身由 verifySegment 校对）。
+var newFileModeLineRe = regexp.MustCompile(`^new file mode \d{6}$`)
+
+// indexLineModeRe 匹配整条 index 行：第 3 组是两侧 mode 相等时 git 追加的
+// ` <mode>` 后缀（内容+模式无后缀；纯 mode 变更整行不出现）。
+var indexLineModeRe = regexp.MustCompile(`^index ([0-9a-f]{40})\.\.([0-9a-f]{40})(?: (\d{6}))?$`)
+
+// setNewFileMode 把段内 `new file mode` 行的值改写为 want（新增文件在 Windows 上
+// git 只可能产出 100644）；无该行则原样返回，由 verifySegment fail-closed。
+func setNewFileMode(seg []byte, want string) []byte {
+	lines := strings.Split(string(seg), "\n")
+	for i, ln := range lines {
+		if newFileModeLineRe.MatchString(ln) {
+			lines[i] = "new file mode " + want
+			break
+		}
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+// stripIndexModeSuffix 剥掉 index 行的 mode 后缀（Windows 双侧同 mode 时 git 追加
+// 的错值；unix 的内容+模式形态本无后缀，故幂等）。
+func stripIndexModeSuffix(lines []string) []string {
+	for i, ln := range lines {
+		if m := indexLineModeRe.FindStringSubmatch(ln); m != nil && m[3] != "" {
+			lines[i] = "index " + m[1] + ".." + m[2]
+		}
+	}
+	return lines
+}
+
+// ensureModeLines 让 `old mode`/`new mode` 两行齐备且值精确：齐则原地改写；缺则
+// 按 git 的实测形态插在 `diff --git ` 头与 index 行之间。无头行（形态异常）原样
+// 返回，由 verifySegment fail-closed。
+func ensureModeLines(lines []string, wantOld, wantNew string) []string {
+	oldIdx, newIdx, headIdx := -1, -1, -1
+	for i, ln := range lines {
+		switch {
+		case strings.HasPrefix(ln, "old mode "):
+			oldIdx = i
+		case strings.HasPrefix(ln, "new mode "):
+			newIdx = i
+		case strings.HasPrefix(ln, "diff --git "):
+			headIdx = i
+		}
+	}
+	if oldIdx >= 0 && newIdx >= 0 {
+		lines[oldIdx] = "old mode " + wantOld
+		lines[newIdx] = "new mode " + wantNew
+		return lines
+	}
+	if headIdx < 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines)+2)
+	out = append(out, lines[:headIdx+1]...)
+	out = append(out, "old mode "+wantOld, "new mode "+wantNew)
+	return append(out, lines[headIdx+1:]...)
+}
+
+// setIndexModeSuffix 让 index 行的 mode 后缀等于 want：已有则改写值，没有则追加
+// （O==N 时 git 必带后缀，两平台只差值本身）。无 index 行则原样返回，由
+// verifySegment fail-closed。
+func setIndexModeSuffix(lines []string, want string) []string {
+	for i, ln := range lines {
+		if m := indexLineModeRe.FindStringSubmatch(ln); m != nil {
+			lines[i] = "index " + m[1] + ".." + m[2] + " " + want
+			break
+		}
+	}
+	return lines
+}
+
+// writeRecipeFile 写一个配方临时文件并显式 chmod（0600 → 0644/0755）：unix 上
+// 这一步让 git 直接产出正确 mode 行；**mode 行的权威来源是 exec 记账**——
+// Windows 上 chmod 只影响只读位，产出段的 mode 由 correctModeLines 校正/合成
+// （§22.7 R4b）。先按 0600 写再 chmod——别依赖 os.WriteFile 的 mode 参数。
 func writeRecipeFile(p string, content []byte, exec bool) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return fmt.Errorf("创建配方目录 %s：%w", filepath.Dir(p), err)
@@ -251,9 +369,12 @@ func diffGit(dir string, left, right string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-// fullIndexLineRe 匹配 --full-index 的 index 行（40 位双侧；mode 相等时 git 会
-// 追加 ` <mode>` 后缀，纯 mode 变更则整行不出现）。
-var fullIndexLineRe = regexp.MustCompile(`(?m)^index ([0-9a-f]{40})\.\.([0-9a-f]{40})`)
+// fullIndexLineRe 匹配 --full-index 的 index 行（40 位双侧；第 3 组是两侧 mode
+// 相等时 git 追加的 ` <mode>` 后缀，内容+模式无后缀、纯 mode 变更则整行不出现）。
+var fullIndexLineRe = regexp.MustCompile(`(?m)^index ([0-9a-f]{40})\.\.([0-9a-f]{40})(?: (\d{6}))?`)
+
+// modeValueLineRe 取段内 mode 行的名字与值（§22.7 R4b 的值校验面）。
+var modeValueLineRe = regexp.MustCompile(`(?m)^(new file mode|old mode|new mode) (\d{6})$`)
 
 // verifySegment 在拼装前钉住配方产出形态（fail-closed，全部可在本层判定）：
 //
@@ -264,7 +385,10 @@ var fullIndexLineRe = regexp.MustCompile(`(?m)^index ([0-9a-f]{40})\.\.([0-9a-f]
 //   - 非新增：index 左值 == T 的 blob sha —— 这是可接收性①（pre-image blob 须在
 //     接收仓可解析）的本地代理：接收仓里 T 就是同一个对象；纯 mode 变更没有 index
 //     行，须有 `old mode`/`new mode` 两行（§20.6 步骤 2 实测形态）；
-//   - 新增：index 左值全 0（/dev/null 侧）且带 `new file mode`（步骤 2'）。
+//   - 新增：index 左值全 0（/dev/null 侧）且带 `new file mode`（步骤 2'）；
+//   - mode 行的**值**必须等于 exec 记账的映射（§22.7 R4b）：`new file mode` ==
+//     modeString(NewExec)；非新增且 O≠N 时 `old mode`/`new mode` 两行值精确且 index
+//     行不得带 mode 后缀；非新增且 O==N 时 index 行须带后缀且值 == modeString(NewExec)。
 func verifySegment(seg []byte, f PatchFile) error {
 	if len(seg) == 0 {
 		return fmt.Errorf("配方未产出 %s 的 diff 段：该文件与模板没有 git 认得的差异（内容与 exec 位都已比过，故属形态异常）", f.Src)
@@ -281,18 +405,46 @@ func verifySegment(seg []byte, f PatchFile) error {
 		if m[1] != strings.Repeat("0", 40) {
 			return fmt.Errorf("新增文件 %s 的 index 左值应为全 0（/dev/null 侧），实际 %s", f.Src, m[1])
 		}
+		if got, want := modeValue(s, "new file mode"), modeString(f.NewExec); got != want {
+			return fmt.Errorf("新增文件 %s 的 `new file mode` 值 %s 与 exec 记账（%s）不符（§22.7 R4b）", f.Src, got, want)
+		}
 		return nil
 	}
 	if m == nil {
 		if !strings.Contains(s, "old mode ") || !strings.Contains(s, "new mode ") {
 			return fmt.Errorf("非新增的 %s 段既无 index 行也无 `old mode`/`new mode`（配方产出形态异常）：\n%s", f.Src, s)
 		}
+	}
+	if m != nil {
+		if want := gitBlobHash(f.T); m[1] != want {
+			return fmt.Errorf("补丁的 pre-image（%s）与模板原文的 blob（%s）不一致：%s——该补丁在接收仓无法用 `am -3` 的索引信息重建基线（§20.6 可接收性①）；常见成因是 git 配置对临时文件内容做了转换", m[1], want, f.Src)
+		}
+	}
+	if f.OldExec != f.NewExec {
+		// 有 mode 差异：两行的值必须是记账期望；index 行（若在）不得带 mode 后缀
+		// ——后缀是「两侧 mode 相等」的标记，与记账矛盾。
+		wantOld, wantNew := modeString(f.OldExec), modeString(f.NewExec)
+		if modeValue(s, "old mode") != wantOld || modeValue(s, "new mode") != wantNew || (m != nil && m[3] != "") {
+			return fmt.Errorf("非新增的 %s 段 mode 行与 exec 记账（%s→%s）不符（§22.7 R4b）", f.Src, wantOld, wantNew)
+		}
 		return nil
 	}
-	if want := gitBlobHash(f.T); m[1] != want {
-		return fmt.Errorf("补丁的 pre-image（%s）与模板原文的 blob（%s）不一致：%s——该补丁在接收仓无法用 `am -3` 的索引信息重建基线（§20.6 可接收性①）；常见成因是 git 配置对临时文件内容做了转换", m[1], want, f.Src)
+	// 无 mode 差异：index 行须带后缀且值 == 记账期望（缺行/缺后缀/错值同判）。
+	if want := modeString(f.NewExec); m == nil || m[3] != want {
+		return fmt.Errorf("非新增的 %s 段 index 行 mode 后缀与 exec 记账（%s）不符（§22.7 R4b）", f.Src, want)
 	}
 	return nil
+}
+
+// modeValue 取段内 name 类 mode 行的值（`new file mode`/`old mode`/`new mode`）；
+// 无该行返回空串（调用方 fail-closed）。
+func modeValue(s, name string) string {
+	for _, m := range modeValueLineRe.FindAllStringSubmatch(s, -1) {
+		if m[1] == name {
+			return m[2]
+		}
+	}
+	return ""
 }
 
 // gitBlobHash 复算 git 的 blob 对象名 `sha1("blob <len>\0" + content)`。

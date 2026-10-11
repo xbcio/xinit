@@ -3,6 +3,7 @@ package backflow
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -580,6 +581,217 @@ func TestCheckSrcPathForbiddenChars(t *testing.T) {
 		if got := checkSrcPath(tc.src) == nil; got != tc.want {
 			t.Errorf("checkSrcPath(%q) 通过 = %v, want %v", tc.src, got, tc.want)
 		}
+	}
+}
+
+// TestCorrectModeLinesPureModeChange 覆盖 §22.7 R4b 的纯模式变更合成：Windows 上
+// git 同态同内容 → 空输出，权威形态按 exec 记账整段合成（与 unix --no-index 输出
+// 逐字节同形：头 + old/new mode、无 index 行）。
+func TestCorrectModeLinesPureModeChange(t *testing.T) {
+	const rel = "scripts/run.sh"
+	f := PatchFile{Src: rel, T: []byte("same\n"), FNew: []byte("same\n"), OldExec: true, NewExec: false}
+	got := correctModeLines(nil, f)
+	want := "diff --git a/" + rel + " b/" + rel + "\nold mode 100755\nnew mode 100644\n"
+	if string(got) != want {
+		t.Fatalf("合成段 = %q, want %q（逐字节 = unix 实测形态）", got, want)
+	}
+	if err := verifySegment(got, f); err != nil {
+		t.Fatalf("合成段必须过 verifySegment：%v", err)
+	}
+	// 幂等：unix 上 git 产出的同形段经校正逐字节不变。
+	if again := correctModeLines([]byte(want), f); string(again) != want {
+		t.Fatalf("unix 形态应逐字节不变：%q vs %q", again, want)
+	}
+}
+
+// TestCorrectModeLinesNewExec 覆盖 §22.7 R4b 的新增可执行文件：Windows 上 git 见到
+// 的临时文件只有只读位，只可能产出 `new file mode 100644`——校正面把它改写为 exec
+// 记账映射的值；未校正的形态在校验面 fail-closed。
+func TestCorrectModeLinesNewExec(t *testing.T) {
+	const (
+		rel = "scripts/run.sh"
+		F   = "#!/bin/sh\necho hi\n"
+	)
+	winSeg := "diff --git b/" + rel + " b/" + rel + "\n" +
+		"new file mode 100644\n" +
+		"index " + strings.Repeat("0", 40) + ".." + gitBlobHash([]byte(F)) + "\n" +
+		"--- /dev/null\n" +
+		"+++ b/" + rel + "\n" +
+		"@@ -0,0 +1,2 @@\n" +
+		"+#!/bin/sh\n" +
+		"+echo hi\n"
+	f := PatchFile{Src: rel, FNew: []byte(F), IsNew: true, NewExec: true}
+	if err := verifySegment([]byte(winSeg), f); err == nil {
+		t.Fatalf("未校正的 Windows 形态必须 fail-closed：\n%s", winSeg)
+	}
+	got := string(correctModeLines([]byte(winSeg), f))
+	want := strings.Replace(winSeg, "new file mode 100644\n", "new file mode 100755\n", 1)
+	if got != want {
+		t.Fatalf("校正结果 = %q, want %q（只有 mode 行的值变）", got, want)
+	}
+	mustContainT(t, got, "new file mode 100755\n")
+	if err := verifySegment([]byte(got), f); err != nil {
+		t.Fatalf("校正后必须过 verifySegment：%v", err)
+	}
+}
+
+// TestCorrectModeLinesContentAndMode 覆盖 §22.7 R4b 的内容+模式双料段：unix 实测
+// 形态（头 + old/new mode + 无后缀 index + hunks）经校正逐字节不变；Windows 形态
+// （头 + 带错值后缀的 index + hunks——git 见不到 mode 差）校正为 canonical。
+func TestCorrectModeLinesContentAndMode(t *testing.T) {
+	const (
+		rel = "src/tool.sh"
+		T   = "l1\n"
+		F   = "l2\n"
+	)
+	left, right := gitBlobHash([]byte(T)), gitBlobHash([]byte(F))
+	head := "diff --git a/" + rel + " b/" + rel + "\n"
+	modes := "old mode 100644\nnew mode 100755\n"
+	hunks := "--- a/" + rel + "\n+++ b/" + rel + "\n@@ -1 +1 @@\n-l1\n+l2\n"
+	unixSeg := head + modes + "index " + left + ".." + right + "\n" + hunks
+	f := PatchFile{Src: rel, T: []byte(T), FNew: []byte(F), OldExec: false, NewExec: true}
+	if got := correctModeLines([]byte(unixSeg), f); string(got) != unixSeg {
+		t.Fatalf("unix 形态应逐字节不变：\n%q\n%q", unixSeg, got)
+	}
+	winSeg := head + "index " + left + ".." + right + " 100644\n" + hunks
+	if err := verifySegment([]byte(winSeg), f); err == nil {
+		t.Fatalf("未校正的 Windows 形态必须 fail-closed：\n%s", winSeg)
+	}
+	got := string(correctModeLines([]byte(winSeg), f))
+	if got != unixSeg {
+		t.Fatalf("Windows 形态应校正为 canonical：\n%q\nwant\n%q", got, unixSeg)
+	}
+	if err := verifySegment([]byte(got), f); err != nil {
+		t.Fatalf("校正后必须过 verifySegment：%v", err)
+	}
+}
+
+// TestVerifySegmentModeValueFailClosed 覆盖 §22.7 R4b 的值校验面：mode 行值被篡改、
+// index 行 mode 后缀缺失或错值时一律 fail-closed，且文案逐字冻结（三个 fail-closed
+// 钉项）——校验全在本层，无需 Windows 真实 git。
+func TestVerifySegmentModeValueFailClosed(t *testing.T) {
+	const (
+		rel = "src/f.txt"
+		T   = "l1\n"
+		F   = "l2\n"
+	)
+	left, right := gitBlobHash([]byte(T)), gitBlobHash([]byte(F))
+	head := "diff --git a/" + rel + " b/" + rel + "\n"
+	indexBare := "index " + left + ".." + right + "\n"
+	indexWith := func(mode string) string { return "index " + left + ".." + right + " " + mode + "\n" }
+	hunks := "--- a/" + rel + "\n+++ b/" + rel + "\n@@ -1 +1 @@\n-l1\n+l2\n"
+
+	contentAndMode := PatchFile{Src: rel, T: []byte(T), FNew: []byte(F), OldExec: false, NewExec: true}
+	contentOnly := PatchFile{Src: rel, T: []byte(T), FNew: []byte(F)}
+	newExec := PatchFile{Src: rel, FNew: []byte(F), IsNew: true, NewExec: true}
+	msgModePair := func(old, new string) string {
+		return fmt.Sprintf("非新增的 %s 段 mode 行与 exec 记账（%s→%s）不符（§22.7 R4b）", rel, old, new)
+	}
+	msgIndex := func(mode string) string {
+		return fmt.Sprintf("非新增的 %s 段 index 行 mode 后缀与 exec 记账（%s）不符（§22.7 R4b）", rel, mode)
+	}
+
+	cases := []struct {
+		name string
+		f    PatchFile
+		seg  string
+		want string
+	}{
+		{
+			name: "新增值错（Windows 形态 644 而记账 755）",
+			f:    newExec,
+			seg: "diff --git b/" + rel + " b/" + rel + "\nnew file mode 100644\n" +
+				"index " + strings.Repeat("0", 40) + ".." + right + "\n--- /dev/null\n+++ b/" + rel + "\n",
+			want: fmt.Sprintf("新增文件 %s 的 `new file mode` 值 %s 与 exec 记账（%s）不符（§22.7 R4b）", rel, "100644", "100755"),
+		},
+		{
+			name: "O≠N：new mode 值错",
+			f:    contentAndMode,
+			seg:  head + "old mode 100644\nnew mode 100644\n" + indexBare + hunks,
+			want: msgModePair("100644", "100755"),
+		},
+		{
+			name: "O≠N：old mode 值错",
+			f:    contentAndMode,
+			seg:  head + "old mode 100755\nnew mode 100755\n" + indexBare + hunks,
+			want: msgModePair("100644", "100755"),
+		},
+		{
+			name: "O≠N：缺 old/new mode 两行",
+			f:    contentAndMode,
+			seg:  head + indexBare + hunks,
+			want: msgModePair("100644", "100755"),
+		},
+		{
+			name: "O≠N：index 行不得带 mode 后缀",
+			f:    contentAndMode,
+			seg:  head + "old mode 100644\nnew mode 100755\n" + indexWith("100644") + hunks,
+			want: msgModePair("100644", "100755"),
+		},
+		{
+			name: "O==N：index 行缺 mode 后缀",
+			f:    contentOnly,
+			seg:  head + indexBare + hunks,
+			want: msgIndex("100644"),
+		},
+		{
+			name: "O==N：index 后缀值错",
+			f:    contentOnly,
+			seg:  head + indexWith("100755") + hunks,
+			want: msgIndex("100644"),
+		},
+		{
+			name: "O==N 双侧 exec：index 后缀须为 100755",
+			f:    PatchFile{Src: rel, T: []byte(T), FNew: []byte(F), OldExec: true, NewExec: true},
+			seg:  head + indexWith("100644") + hunks,
+			want: msgIndex("100755"),
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := verifySegment([]byte(c.seg), c.f)
+			if err == nil {
+				t.Fatalf("必须 fail-closed：\n%s", c.seg)
+			}
+			if err.Error() != c.want {
+				t.Fatalf("错误文案 = %q, want %q（冻结钉项）", err.Error(), c.want)
+			}
+		})
+	}
+
+	// 正例：三个状态的 canonical 段都必须过（校验面不得误伤正确形态）。
+	for _, c := range []struct {
+		name string
+		f    PatchFile
+		seg  string
+	}{
+		{
+			name: "新增非 exec",
+			f:    PatchFile{Src: rel, FNew: []byte(F), IsNew: true},
+			seg: "diff --git b/" + rel + " b/" + rel + "\nnew file mode 100644\n" +
+				"index " + strings.Repeat("0", 40) + ".." + right + "\n--- /dev/null\n+++ b/" + rel + "\n",
+		},
+		{
+			name: "O≠N canonical",
+			f:    contentAndMode,
+			seg:  head + "old mode 100644\nnew mode 100755\n" + indexBare + hunks,
+		},
+		{
+			name: "O==N canonical",
+			f:    contentOnly,
+			seg:  head + indexWith("100644") + hunks,
+		},
+		{
+			name: "O==N 双侧 exec canonical",
+			f:    PatchFile{Src: rel, T: []byte(T), FNew: []byte(F), OldExec: true, NewExec: true},
+			seg:  head + indexWith("100755") + hunks,
+		},
+	} {
+		t.Run("正例/"+c.name, func(t *testing.T) {
+			if err := verifySegment([]byte(c.seg), c.f); err != nil {
+				t.Fatalf("canonical 段不得被误判：%v\n%s", err, c.seg)
+			}
+		})
 	}
 }
 
