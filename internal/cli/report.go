@@ -45,7 +45,7 @@ func exitError(code int, format string, args ...any) *ExitError {
 // ConflictKind）换用 conflictExitsMainKindOnly（M9 O1）。
 const conflictExitsMain = "出路一：手工解决冲突，使内容与模板一致（或等模板回退），重跑 update 即收敛；\n"
 
-// conflictExitsMainKindOnly 是「本轮冲突全为类型冲突（ConflictKind）」时的出路一
+// conflictExitsMainKindOnly 是「该节冲突全为类型冲突（ConflictKind）」时的出路一
 // 第一行（M9 O1）：类型冲突无 --accept 出口，「使内容与模板一致」不成立——出口
 // 是 prune 或移走障碍物（§8.1/§10.3）。
 const conflictExitsMainKindOnly = "出路一：类型冲突无 --accept 出口——写进 .xinit/prune.txt（脱离管理），或移走障碍物，重跑 update 即收敛；\n"

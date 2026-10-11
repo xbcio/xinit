@@ -548,7 +548,7 @@ xinit update: /path/to/my-service-template
 参考：模板新内容已写到 .xinit/conflicts/<路径>。
 ```
 
-类型冲突（symlink / 目录障碍）不可 `--accept`（§10.3）——该轮全为类型冲突时，出路一替换为「类型冲突无 `--accept` 出口——写进 `.xinit/prune.txt`（脱离管理），或移走障碍物」。
+类型冲突（symlink / 目录障碍）不可 `--accept`（§10.3）——该节全为类型冲突时，出路一替换为「类型冲突无 `--accept` 出口——写进 `.xinit/prune.txt`（脱离管理），或移走障碍物」。
 
 要点：
 
