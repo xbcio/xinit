@@ -214,6 +214,20 @@ func TestQualifyRejectsUnknownCommit(t *testing.T) {
 	assertCriterionText(t, err)
 }
 
+// 守卫 4 加固：选项形状的位置参数 fail-closed（M8 观察-2）——`--all` 不得被
+// rev-list 当选项；修复前它等价选最新提交并通过资格预检。
+func TestQualifyRejectsOptionShapedCommit(t *testing.T) {
+	dir := mkRepoT(t, map[string]string{"a.txt": "1\n"})
+	writeFileT(t, dir, "a.txt", "2\n")
+	commitAllT(t, dir, "feat: base\n\nTemplate-Upstream: yes\n") // 消息形态照抄 TestQualifyOK
+
+	q, err := Qualify(dir, "--all")
+	if err == nil {
+		t.Fatalf("选项形状的 commit 应拒绝；got %+v", q)
+	}
+	assertContainsAll(t, err, `无法解析 "--all"`)
+}
+
 // 守卫 5：trailer 变体（§20.10 用例 8 实测定形的四种形状 + 逐字比较负例）。
 func TestQualifyTrailerVariants(t *testing.T) {
 	cases := []struct {

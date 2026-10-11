@@ -92,6 +92,11 @@ xinit-code backflow HEAD
 stderr '是 merge 提交（2 个父提交）'
 stdout 'exit=1'
 
+# ── 守卫 4 加固（M9 观察-2）：选项形状的位置参数 fail-closed ──
+xinit-code backflow -- --all
+stderr '无法解析 "--all"'
+stdout 'exit=1'
+
 # ── 守卫 7 成因①：base 与记录 commit 不同源 → 整体拒绝（先跑 update 收敛）──
 mkdir $WORK/proj2
 cd $WORK/proj2

@@ -144,7 +144,7 @@ func worktreeState(repoDir string) (dirty, untracked []string, err error) {
 // checkCommitShape 跑守卫 4：`git rev-list --parents -n 1 <commit>` 词数须为 2
 // （root 提交 1 词、merge 提交 ≥3 词、命令失败均拒），返回解析出的完整 commit sha。
 func checkCommitShape(repoDir, commit string) (string, error) {
-	out, err := runGit(repoDir, nil, "rev-list", "--parents", "-n", "1", commit)
+	out, err := runGit(repoDir, nil, "rev-list", "--parents", "-n", "1", "--end-of-options", commit)
 	if err != nil {
 		return "", fmt.Errorf("提交不符合回流要求：判据 = %s，实际无法解析 %q（%s）。请确认该提交存在，或重拆提交（对齐 xkitora 场景 D）后再跑", critSingleCommit, commit, firstLine(err.Error()))
 	}
