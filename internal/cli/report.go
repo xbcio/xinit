@@ -41,8 +41,14 @@ func exitError(code int, format string, args ...any) *ExitError {
 }
 
 // conflictExitsMain 是出路一第一行（两种变体共用；§10.3：M3 起 --accept 真实
-// 可用，出路一直接给出命令，不再是 M2 的占位注记）。
+// 可用，出路一直接给出命令，不再是 M2 的占位注记）。kindOnly 轮（该节冲突全为
+// ConflictKind）换用 conflictExitsMainKindOnly（M9 O1）。
 const conflictExitsMain = "出路一：手工解决冲突，使内容与模板一致（或等模板回退），重跑 update 即收敛；\n"
+
+// conflictExitsMainKindOnly 是「本轮冲突全为类型冲突（ConflictKind）」时的出路一
+// 第一行（M9 O1）：类型冲突无 --accept 出口，「使内容与模板一致」不成立——出口
+// 是 prune 或移走障碍物（§8.1/§10.3）。
+const conflictExitsMainKindOnly = "出路一：类型冲突无 --accept 出口——写进 .xinit/prune.txt（脱离管理），或移走障碍物，重跑 update 即收敛；\n"
 
 // conflictExitsAccept 是出路一第二行——只在**该节确实打印过 accept? 行**时
 // 拼接：否则「上面的 xinit update --accept」悬空；且 ConflictKind 根本不可
@@ -60,9 +66,13 @@ const conflictExitsPrune = "出路二：把路径写进 .xinit/prune.txt，使�
 const conflictFilesRef = "参考：模板新内容已写到 .xinit/conflicts/<路径>。\n"
 
 // conflictExitsFor 组合冲突出路文案；hasFiles=false 时省掉「参考：」句，
-// hasAccept=false 时省掉出路一第二行（该节没有 accept? 行可指）。
-func conflictExitsFor(hasFiles, hasAccept bool) string {
+// hasAccept=false 时省掉出路一第二行（该节没有 accept? 行可指），kindOnly=true
+// （该节冲突全为 ConflictKind）时出路一主句换成 kind-only 变体（M9 O1）。
+func conflictExitsFor(hasFiles, hasAccept, kindOnly bool) string {
 	s := conflictExitsMain
+	if kindOnly {
+		s = conflictExitsMainKindOnly
+	}
 	if hasAccept {
 		s += conflictExitsAccept
 	}
@@ -71,6 +81,24 @@ func conflictExitsFor(hasFiles, hasAccept bool) string {
 		s += conflictFilesRef
 	}
 	return s
+}
+
+// allKindConflicts 报告 paths（Blocked/Conflicted 之一）是否全为 ConflictKind；
+// 空集或存在非 kind/无动作条目一律 false（保守回退既有主句）。
+func allKindConflicts(paths []string, actions []plan.Action) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	kind := make(map[string]plan.ActionKind, len(actions))
+	for _, a := range actions {
+		kind[a.Path] = a.Kind
+	}
+	for _, p := range paths {
+		if k, ok := kind[p]; !ok || k != plan.ConflictKind {
+			return false
+		}
+	}
+	return true
 }
 
 // UpdateReport 是 update / diff 的完整结果；Print 的输出就是用户看到的报告。
@@ -150,7 +178,7 @@ func (r *UpdateReport) Print(w io.Writer) {
 		}
 		// 被阻断的路径由 listConflicts 从磁盘枚举而来——conflicts/ 文件确实
 		// 在，参考句成立。
-		fmt.Fprint(w, conflictExitsFor(true, blockedAccept))
+		fmt.Fprint(w, conflictExitsFor(true, blockedAccept, allKindConflicts(r.Blocked, r.Actions)))
 		if !r.DryRun {
 			return
 		}
@@ -205,7 +233,7 @@ func (r *UpdateReport) Print(w io.Writer) {
 				conflictedAccept = true
 			}
 		}
-		fmt.Fprint(w, conflictExitsFor(len(r.ConflictFiles) > 0, conflictedAccept))
+		fmt.Fprint(w, conflictExitsFor(len(r.ConflictFiles) > 0, conflictedAccept, allKindConflicts(r.Conflicted, r.Actions)))
 	}
 	if r.BackupDir != "" {
 		fmt.Fprintf(w, "备份: %s\n", r.BackupDir)

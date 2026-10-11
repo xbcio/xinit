@@ -16,6 +16,9 @@ stdout '汇总: 写入 0、删除 0、chmod 0、冲突 1'
 stdout '出路一'
 # M7 T2 正向锚：该节确打过 accept? 行 ⇒ 出路一的 accept 句保留（逐字）
 stdout '若解决结果与模板不同，用上面的 xinit update --accept <路径> 声明已解决'
+# M9 O1 负向锚：本轮冲突是内容冲突（Merge），不是全类型冲突 ⇒ 出路一主句保持
+# 既有变体，不得出现 kind-only 变体句。
+! stdout '类型冲突无 --accept 出口'
 stdout '出路二'
 # F2/O6 回归锚（v1.0.2 G4）：冲突报告末行「参考：」必须以「。」收尾——
 # conflictFilesRef 的尾 \n 若缺，会与下一行（xinit-code 的 exit 行）黏行，

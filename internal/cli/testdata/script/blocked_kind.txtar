@@ -16,6 +16,10 @@ xinit-code update
 stdout 'conflict-kind\s+a\.txt'
 ! stdout 'accept\?'
 stdout '出路一'
+# M9 O1 正向锚：本轮冲突全为类型冲突 ⇒ 出路一主句换成「无 --accept 出口」变体
+# （旧主句「使内容与模板一致」随之消失——出口 = prune / 移走障碍物，§8.1/§10.3）。
+stdout '类型冲突无 --accept 出口'
+! stdout '使内容与模板一致'
 ! stdout '用上面的'
 ! stdout '若解决结果与模板不同'
 stdout '出路二'
@@ -31,6 +35,9 @@ stdout '未解决的冲突（1 条）——先处理它们，update 才会执行
 stdout 'conflict\s+a\.txt'
 ! stdout 'accept\?'
 stdout '出路一'
+# M9 O1 正向锚（Blocked 节，同为一轮全类型冲突）：变体句在此节同样成立。
+stdout '类型冲突无 --accept 出口'
+! stdout '使内容与模板一致'
 ! stdout '用上面的'
 ! stdout '若解决结果与模板不同'
 stdout '出路二'
