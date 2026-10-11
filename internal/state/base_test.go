@@ -110,7 +110,7 @@ func TestSyncBaseMissingContentIsError(t *testing.T) {
 
 func TestSyncBaseRejectsTraversalDst(t *testing.T) {
 	// Dst 可以引用 vars，而变量未必有 pattern —— 值可以是 "../evil.go"。
-	// 写路径必须和读路径一样守（checkWithinBase 的注释点名的就是这个危险），
+	// 写路径必须和读路径一样守（CheckWithinBase 的注释点名的就是这个危险），
 	// 且必须先整体校验再落盘：坏路径不能留下半棵 base 树。
 	dir := t.TempDir()
 	err := SyncBase(dir,

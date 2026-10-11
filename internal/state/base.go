@@ -28,7 +28,7 @@ func BaseDir(projectDir string) string {
 //     否则 update 会拿到过期的 base）。
 //
 // 先整体校验、再统一落盘：Dst 可能引用了无 pattern 的变量（值可以是
-// "../x"），坏的 Dst 不能留下半棵 base 树。checkWithinBase 的注释已经
+// "../x"），坏的 Dst 不能留下半棵 base 树。CheckWithinBase 的注释已经
 // 点名"写入会穿出项目根"——写路径必须和读路径一样守。
 //
 // rendered 以 Dst 为键。
@@ -37,7 +37,7 @@ func SyncBase(projectDir string, entries []render.Entry, rendered map[string][]b
 
 	want := make(map[string]bool, len(entries))
 	for _, e := range entries {
-		if err := checkWithinBase(e.Dst); err != nil {
+		if err := CheckWithinBase(e.Dst); err != nil {
 			return err
 		}
 		if _, ok := rendered[e.Dst]; !ok {
@@ -109,7 +109,7 @@ func removeStale(base string, want map[string]bool) error {
 
 // ReadBase 读取某个 Dst 的 base 内容。
 func ReadBase(projectDir, dst string) ([]byte, error) {
-	if err := checkWithinBase(dst); err != nil {
+	if err := CheckWithinBase(dst); err != nil {
 		return nil, err
 	}
 	full := filepath.Join(BaseDir(projectDir), filepath.FromSlash(dst))
@@ -120,11 +120,12 @@ func ReadBase(projectDir, dst string) ([]byte, error) {
 	return data, nil
 }
 
-// checkWithinBase 拒绝绝对路径与 .. 段。
+// CheckWithinBase 拒绝绝对路径与 .. 段（原 checkWithinBase 导出；renderstore
+// 读侧写回不经过 SyncBase 通道，必须复用同一实现，§21.9）。
 //
 // 模板路径可以引用 vars，而变量未必有 pattern —— 值为 "../../x" 时
 // 写入会穿出项目根。
-func checkWithinBase(dst string) error {
+func CheckWithinBase(dst string) error {
 	if dst == "" {
 		return fmt.Errorf("base 路径不能为空")
 	}
