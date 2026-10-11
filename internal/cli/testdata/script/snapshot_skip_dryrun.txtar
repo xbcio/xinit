@@ -2,7 +2,8 @@
 # init → 改模板（真实 update 会写 a.txt 且快照覆写轮转）→ 深拷贝 render/ 前像 →
 # diff 与 update --dry-run 各跑一次，`diff -r` 前像零差异（缓存侧零写）；随后真实
 # update 作对照：`diff -r` 必报差异（证明前面不是「全都没写」的假绿）。
-# T6-1：diff 退出码 1 → 「必报差异」轮必须 `! exec`。
+# T6-1/M-3a：「必报差异」轮断言 diff 恰为退出 1（仅 rc==1 视为差异；rc 0 或出错
+# 码 2 均红——不得用 `! exec` 吸收任意非零）。
 # 缓存路径归一 preamble：先 mkdir $WORK/cache 再建符号链接（悬挂链接 ⇒ MkdirAll
 # 得 EEXIST）。
 
@@ -31,10 +32,10 @@ stdout 'write\s+a\.txt'
 stdout 'exit=5'
 exec sh -c 'diff -r $WORK/render-before $WORK/cache/xinit/render'
 
-# 对照：真实 update 必须写（缓存侧覆写轮转 → diff 退出 1 → ! exec）
+# 对照：真实 update 必须写（缓存侧覆写轮转 → 断言 diff 恰 rc==1；M-3a 收窄）
 xinit-code update
 stdout 'exit=0'
-! exec sh -c 'diff -r $WORK/render-before $WORK/cache/xinit/render'
+exec sh -c 'diff -r $WORK/render-before $WORK/cache/xinit/render > /dev/null; test $? -eq 1'
 
 -- tpl/xinit.yml --
 manifest_version: 1

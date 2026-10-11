@@ -1,7 +1,8 @@
 # 快照跳过 · pending 轮零写（§21.10 必测「pending 轮零写 + 收敛轮写入」/ O2 行为锚、
 # 判据 6、12）：dir 源冲突轮（退 2，pending）——写了会覆写掉当下唯一 anchor 相符的
 # 有效条目 → 深比对前像零差异；收敛轮（退 0）快照覆写轮转 → 深比对必报差异。
-# T6-1：「必报差异」轮必须 `! exec`（diff 退出码 1）。
+# T6-1/M-3a：「必报差异」轮断言 diff 恰为退出 1（仅 rc==1 视为差异；rc 0 或出错
+# 码 2 均红——不得用 `! exec` 吸收任意非零）。
 # 缓存路径归一 preamble：先 mkdir $WORK/cache 再建符号链接（悬挂链接 ⇒ MkdirAll
 # 得 EEXIST）。
 
@@ -30,8 +31,8 @@ exec sh -c 'diff -r $WORK/render-before $WORK/cache/xinit/render'
 cp $WORK/new-a.txt a.txt
 xinit-code update
 stdout 'exit=0'
-# 收敛轮已写入（覆写轮转 → diff 退出 1 → ! exec）
-! exec sh -c 'diff -r $WORK/render-before $WORK/cache/xinit/render'
+# 收敛轮已写入（覆写轮转 → 断言 diff 恰 rc==1；M-3a 收窄）
+exec sh -c 'diff -r $WORK/render-before $WORK/cache/xinit/render > /dev/null; test $? -eq 1'
 
 -- tpl/xinit.yml --
 manifest_version: 1

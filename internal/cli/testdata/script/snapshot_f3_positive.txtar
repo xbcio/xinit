@@ -38,6 +38,9 @@ exec sh -c 'grep "^  " $WORK/rep-outb.txt > $WORK/actions-outb.txt'
 
 # 两轮 stdout 动作行同形
 cmp $WORK/actions-out.txt $WORK/actions-outb.txt
+# 两轮 stderr 逐字节同（M-1：err 捕获此前零断言；双方同为「非 git 仓库」恒定警告行，
+# 无路径/时间戳成分）
+cmp $WORK/err-out.txt $WORK/err-outb.txt
 
 # 受管面逐字节
 cmp $WORK/out/a.txt $WORK/out-b/a.txt
