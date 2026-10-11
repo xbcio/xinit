@@ -6,7 +6,7 @@
 
 BIN ?= bin/xinit
 
-.PHONY: build install test vet fmt check clean
+.PHONY: build install test vet fmt check clean crosswin
 
 build:
 	go build -o $(BIN) .
@@ -30,6 +30,17 @@ fmt:
 	fi
 
 check: fmt vet test
+
+# crosswin：Windows 交叉编译门禁（M11 §22.13）；无需 Windows 机器。
+# 逐包 go test -c 覆盖全部测试文件的 Windows 编译面（含 txtar 宿主代码）。
+crosswin:
+	GOOS=windows GOARCH=amd64 go build ./...
+	GOOS=windows GOARCH=arm64 go build ./...
+	GOOS=windows go vet ./...
+	@for pkg in $$(go list ./...); do \
+		GOOS=windows go test -c -o /dev/null "$$pkg" || exit 1; \
+	done
+	@echo "crosswin: OK（14 包）"
 
 clean:
 	rm -rf bin/
