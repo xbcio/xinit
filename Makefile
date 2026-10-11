@@ -32,15 +32,16 @@ fmt:
 check: fmt vet test
 
 # crosswin：Windows 交叉编译门禁（M11 §22.13）；无需 Windows 机器。
-# 逐包 go test -c 覆盖全部测试文件的 Windows 编译面（含 txtar 宿主代码）。
+# 逐包 go test -c 覆盖全部测试文件的 Windows 编译面（含 txtar 宿主代码）；
+# 回显包数取自本次 go list 实况（不写死，包集随仓库演进自适应）。
 crosswin:
 	GOOS=windows GOARCH=amd64 go build ./...
 	GOOS=windows GOARCH=arm64 go build ./...
 	GOOS=windows go vet ./...
-	@for pkg in $$(go list ./...); do \
-		GOOS=windows go test -c -o /dev/null "$$pkg" || exit 1; \
-	done
-	@echo "crosswin: OK（14 包）"
+	@pkgs="$$(go list ./...)" || exit 1; n=0; for pkg in $$pkgs; do \
+		GOOS=windows go test -c -o /dev/null "$$pkg" || exit 1; n=$$((n+1)); \
+	done; \
+	echo "crosswin: OK（$$n 包）"
 
 clean:
 	rm -rf bin/
