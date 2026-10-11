@@ -382,9 +382,13 @@ func assertCriterionText(t *testing.T, err error) {
 
 // assertTrailerCriterionText 断言错误里打印了守卫 5 的判据原文（§20.4 行 5 修订版：
 // 判定全落 parse 输出上，不再声明「逐字匹配」——空白整族属 parse 归一）。
+// 首两段是 spec 核句的**连续子串**（T6 若按 spec 整句断言，子串面仍成立），
+// 末段是「含」字的操作口径澄清。
 func assertTrailerCriterionText(t *testing.T, err error) {
 	t.Helper()
-	assertContainsAll(t, err, "判据", "`Template-Upstream: yes`", "判定全落 `git interpret-trailers --parse` 输出上")
+	assertContainsAll(t, err, "判据",
+		"提交消息末段 trailer 块含 `Template-Upstream: yes`（判定全落 `git interpret-trailers --parse` 输出上）",
+		"键大小写须逐字；空白与 CRLF 属 parse 归一")
 }
 
 func assertContainsAll(t *testing.T, err error, wants ...string) {

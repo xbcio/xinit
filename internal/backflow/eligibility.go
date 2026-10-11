@@ -22,13 +22,14 @@ type Qualified struct {
 // 判据原文——守卫 4/5 失败时逐字打印（§20.4 表；§20.10 文案基准表第 5 行）。
 const (
 	critSingleCommit = "提交存在且非 root/非 merge：`git rev-list --parents -n 1 <commit>` 词数 == 2"
-	critTrailer      = "提交消息末段 trailer 块含 `Template-Upstream: yes`（判定全落 `git interpret-trailers --parse` 输出上）"
+	critTrailer      = "提交消息末段 trailer 块含 `Template-Upstream: yes`（判定全落 `git interpret-trailers --parse` 输出上）——键大小写须逐字；空白与 CRLF 属 parse 归一"
 )
 
-// trailerLine 是 trailer 的逐字判定行。判定全落 `git interpret-trailers --parse`
-// 的输出上（§20.4 行 5）：**键大小写非逐字 → 拒**（parse 对键原样输出）；**空白与
-// CRLF 属 parse 归一 → 接受**（§20.10 用例 8 实测定形：`Key:value`、冒号后多空格、
-// 键尾空格、值尾空格四形状都归一出本行）；本包不自行重实现块判定与逐字差分。
+// trailerLine 是 trailer 的判定目标行（比对落在 parse 输出上，非原始消息）。判定全落
+// `git interpret-trailers --parse` 的输出上（§20.4 行 5）：**键大小写敏感**（parse 对键
+// 原样输出，非逐字即拒）；**空白与 CRLF 由 `--parse` 归一 → 接受**（§20.10 用例 8 实测定形：
+// `Key:value`、冒号后多空格、键尾空格、值尾空格四形状都归一出本行）；本包不自行重实现
+// 块判定与逐字差分。
 const trailerLine = "Template-Upstream: yes"
 
 // inProgressOps 是守卫 2 的五探测（§20.4），按此顺序报告。
@@ -45,7 +46,7 @@ var inProgressOps = []struct {
 }
 
 // Qualify 跑 §20.4 守卫 1–5：派生是 git 仓、无进行中操作、已跟踪文件干净、
-// 提交存在且非 root/非 merge、提交消息末段 trailer 块含逐字行。
+// 提交存在且非 root/非 merge、提交消息末段 trailer 块判出目标行（见 checkTrailer）。
 // 任一不过返回普通 error（CLI 层负责包 ExitError 与退出码）。
 func Qualify(projectDir, commit string) (*Qualified, error) {
 	if _, err := runGit(projectDir, nil, "rev-parse", "--git-dir"); err != nil {
