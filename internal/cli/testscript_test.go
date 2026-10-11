@@ -111,10 +111,12 @@ func TestScripts(t *testing.T) {
 }
 
 func TestCacheIsolationEnv(t *testing.T) {
+	// 期望值以 POSIX 字面表达原意，再归一为平台形态（helper 用 filepath.Join
+	// 构造：Windows 输出反斜杠，FromSlash 在 unix 恒等 ⇒ darwin 零变化）。
 	want := map[string]string{
 		"HOME":           "/base",
-		"XDG_CACHE_HOME": "/base/.cache",
-		"LocalAppData":   "/base/AppData/Local",
+		"XDG_CACHE_HOME": filepath.FromSlash("/base/.cache"),
+		"LocalAppData":   filepath.FromSlash("/base/AppData/Local"),
 	}
 	got := map[string]string{}
 	for _, kv := range cacheIsolationEnv("/base") {
