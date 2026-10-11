@@ -30,6 +30,23 @@ stdout 'exit=1'
 xinit-code adopt --template $WORK/tpl
 stdout 'exit=1'
 
+# ── 场景 2：本地改动含 generated 路径（M9 T6 I-2）──
+# 磁盘 gen.txt 与渲染结果不同 ⇒ localDiff 含 generated 路径 ⇒ 走 adopt.go 的
+# generated 分支（genCount > 0），其尾句（generated 路径被本地删除按删除分支
+# 处理）必须出现——此前只有 genCount == 0 分支（场景 1）有断言。
+# 路径用 $WORK 绝对形式：上一节 cd 到 proj，相对路径会落错 cwd。
+mkdir $WORK/proj2
+cp $WORK/gen-local.txt $WORK/proj2/gen.txt
+cd $WORK/proj2
+xinit-code adopt --template $WORK/tpl-gen --config $WORK/vars.yml
+stdout '基线已重建：1 个文件'
+stdout '本地改动 1 个文件（磁盘与模板渲染结果不同；其中 generated 路径 1 个）'
+stdout '被本地删除的按删除分支处理（行 10）'
+stdout 'local-diff\s+gen\.txt'
+stdout 'exit=0'
+# base 是渲染结果（不是磁盘的 gen-local）
+cmp .xinit/base/gen.txt $WORK/tpl-gen/gen.txt
+
 -- tpl/xinit.yml --
 manifest_version: 1
 vars:
@@ -47,3 +64,14 @@ a disk (locally modified)
 b template
 -- vars.yml --
 app: app
+-- tpl-gen/xinit.yml --
+manifest_version: 1
+vars:
+  - name: app
+    default: "app"
+generated:
+  paths: ["gen.txt"]
+-- tpl-gen/gen.txt --
+gen template
+-- gen-local.txt --
+gen local

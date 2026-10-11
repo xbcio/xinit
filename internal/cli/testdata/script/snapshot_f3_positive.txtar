@@ -4,10 +4,11 @@
 # （先删 render/）各跑一次全量 update（模板已推进，两轮都是真实写入）：
 #   受管面 / base 逐文件 cmp + state.json 逐字节 cmp（无时间戳字段，全等保留——
 #   T6-0 实证：state.go:20-28 序列化字段全为确定值，marshal 键排序确定）
-#   + 两轮 stdout 动作行同形。
+#   + 两轮 stdout 除备份时间戳行外逐行同。
 # preamble 置顶：符号链接须建在默认缓存路径被真实占用之前（否则 symlink EEXIST
 # 挂脚本）——out/out-b 共用 $WORK/cache/xinit，删 render/ 只影响 out-b。
-# .xinit/backup 时间戳目录与常驻 lock 不入对照（时间戳不可比）。
+# .xinit/backup 时间戳目录与常驻 lock 不入对照（时间戳不可比）：受管树对照天然
+# 不含它们（逐文件 cmp 点名的面），stdout 侧只有 `备份: <时间戳>` 一行需剔除。
 
 env XDG_CACHE_HOME=$WORK/cache
 mkdir $WORK/home
@@ -26,7 +27,10 @@ exec sh -c 'xinit-code update > $WORK/rep-out.txt 2> $WORK/err-out.txt'
 grep 'write\s+a\.txt' $WORK/rep-out.txt
 grep '汇总: 写入 1、删除 0、chmod 0、冲突 0' $WORK/rep-out.txt
 grep 'exit=0' $WORK/rep-out.txt
-exec sh -c 'grep "^  " $WORK/rep-out.txt > $WORK/actions-out.txt'
+# stdout 对照面 = 「除备份时间戳行外的全部行」：早前用 grep "^  " 只提两空格开头
+# 的动作行，头行/汇总/exit 等非动作行天然漏比（M10 F-3 O-2）——改为剔除唯一
+# 不可比行，其余默认参与对照。
+exec sh -c 'grep -v "^备份: " $WORK/rep-out.txt > $WORK/stdout-out.txt'
 
 # ── out-b：删 render/ 后跑全量 update ──
 cd $WORK/out-b
@@ -35,10 +39,11 @@ exec sh -c 'xinit-code update > $WORK/rep-outb.txt 2> $WORK/err-outb.txt'
 grep 'write\s+a\.txt' $WORK/rep-outb.txt
 grep '汇总: 写入 1、删除 0、chmod 0、冲突 0' $WORK/rep-outb.txt
 grep 'exit=0' $WORK/rep-outb.txt
-exec sh -c 'grep "^  " $WORK/rep-outb.txt > $WORK/actions-outb.txt'
+exec sh -c 'grep -v "^备份: " $WORK/rep-outb.txt > $WORK/stdout-outb.txt'
 
-# 两轮 stdout 动作行同形
-cmp $WORK/actions-out.txt $WORK/actions-outb.txt
+# 两轮 stdout 逐字节同（对照面见上：仅剔除备份时间戳行，其余行——含 update 头行、
+# 动作行、汇总、exit——全部参与）
+cmp $WORK/stdout-out.txt $WORK/stdout-outb.txt
 # 两轮 stderr 逐字节同（M-1：err 捕获此前零断言；双方同为「非 git 仓库」恒定警告行，
 # 无路径/时间戳成分）
 cmp $WORK/err-out.txt $WORK/err-outb.txt

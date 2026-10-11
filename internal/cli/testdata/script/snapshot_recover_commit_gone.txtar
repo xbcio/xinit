@@ -51,8 +51,9 @@ exec git clone -q --bare $WORK/w2 $WORK/tpl.git
 # 摘镜像、留快照：非 render 的缓存条目全删——openTarget 只能重新 clone 新历史
 exec sh -c 'for d in $WORK/home/Library/Caches/xinit $WORK/home/.cache/xinit; do [ -d "$d" ] || continue; for e in "$d"/*; do case "$e" in */render) ;; *) rm -rf "$e";; esac; done; done'
 # 前置断言（M-2）：缓存根恰剩 render/——摘净了，「旧 commit 真不可取」前提才成立；
-# 目录缺失或残留任何镜像条目（ls 得空或多项）均红。
-exec sh -c 'test "$(ls $WORK/cache/xinit)" = "render"'
+# 目录缺失或残留任何镜像条目（ls 得空或多项）均红。非空前置（M10 F-3 O-1）：
+# ls 得空串时先红在「没摘净」这一步，而不是拿空串去比 "render" 才失败。
+exec sh -c 'test -n "$(ls $WORK/cache/xinit)" && test "$(ls $WORK/cache/xinit)" = "render"'
 
 rm -rf .xinit/base
 xinit-code update --revision v2.0.0
