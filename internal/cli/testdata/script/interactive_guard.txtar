@@ -122,6 +122,11 @@ stdout 'exit=2'
 ! stdout '交互式冲突解决'
 ! stdout '改用模板版？'
 ! stdout 'accept\?'
+# M7 T2：该节无 accept? 行 ⇒ 出路一的 accept 句随之省略——「用上面的
+# xinit update --accept」在 ConflictKind 轮次里是悬空指代（§10.3）
+stdout '出路一'
+! stdout '用上面的'
+! stdout '若解决结果与模板不同'
 # theirs 键缺失 ⇒ 无 conflicts/ 内容条目（§10.3/§19.4.1 ：「它可能根本没有 theirs 内容」）
 ! exists .xinit/conflicts/b.bin
 cd ..

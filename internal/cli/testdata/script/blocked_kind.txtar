@@ -1,0 +1,46 @@
+# Blocked 早退节的 accept 指代（M7 T2；§10.3）：类型冲突（ConflictKind）不在
+# --accept 可用集里（「accept 改变不了类型」）⇒ 该节既无 accept? 行，出路一
+# 也不得出现「用上面的 xinit update --accept」句——否则是悬空指代。
+# 夹具：模板改 a.txt（theirs 键在 ⇒ conflicts/ 有内容条目），本地把 a.txt
+# 换成符号链接 ⇒ §8.1 第一步的类型冲突（base 侧 regular、ours 侧 symlink）。
+# 首轮走冲突节、第二轮走第 4 步早退节（Blocked），两处触发点各钉一遍。
+
+xinit init --template $WORK/tpl --yes out
+cp $WORK/new-a.txt $WORK/tpl/a.txt
+rm out/a.txt
+exec ln -s nowhere out/a.txt
+cd out
+
+# ── 首轮：冲突节（Conflicted）——条目在、accept 不可用 ⇒ 无 accept 句 ──
+xinit-code update
+stdout 'conflict-kind\s+a\.txt'
+! stdout 'accept\?'
+stdout '出路一'
+! stdout '用上面的'
+! stdout '若解决结果与模板不同'
+stdout '出路二'
+# 类型冲突的 theirs 键存在 ⇒ 内容条目照常落盘、参考句成立
+stdout '参考：模板新内容已写到 \.xinit/conflicts/<路径>。'
+stdout 'exit=2'
+cmp .xinit/conflicts/a.txt $WORK/new-a.txt
+exec sh -c 'test -L a.txt'
+
+# ── 第二轮（冲突未解决）：第 4 步早退节（Blocked）——同一组断言再钉一遍 ──
+xinit-code update
+stdout '未解决的冲突（1 条）——先处理它们，update 才会执行：'
+stdout 'conflict\s+a\.txt'
+! stdout 'accept\?'
+stdout '出路一'
+! stdout '用上面的'
+! stdout '若解决结果与模板不同'
+stdout '出路二'
+stdout 'exit=2'
+cmp .xinit/conflicts/a.txt $WORK/new-a.txt
+exec sh -c 'test -L a.txt'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- new-a.txt --
+a2

@@ -40,11 +40,18 @@ func exitError(code int, format string, args ...any) *ExitError {
 	return &ExitError{Code: code, msg: fmt.Sprintf(format, args...)}
 }
 
-// conflictExits 是冲突的两条出路（§10.3：M3 起 --accept 真实可用，
-// 出路一直接给出命令；不再是 M2 的占位注记）。
-const conflictExits = "出路一：手工解决冲突，使内容与模板一致（或等模板回退），重跑 update 即收敛；\n" +
-	"        若解决结果与模板不同，用上面的 xinit update --accept <路径> 声明已解决（把你看到并认可的版本记为 base，§10.3）。\n" +
-	"出路二：把路径写进 .xinit/prune.txt，使其脱离管理（模板对它的改动不再同步）。\n"
+// conflictExitsMain 是出路一第一行（两种变体共用；§10.3：M3 起 --accept 真实
+// 可用，出路一直接给出命令，不再是 M2 的占位注记）。
+const conflictExitsMain = "出路一：手工解决冲突，使内容与模板一致（或等模板回退），重跑 update 即收敛；\n"
+
+// conflictExitsAccept 是出路一第二行——只在**该节确实打印过 accept? 行**时
+// 拼接：否则「上面的 xinit update --accept」悬空；且 ConflictKind 根本不可
+// --accept（§10.3「accept 改变不了类型」），对它的轮次给 accept 指令是误导
+// （2026-10-11 M7）。
+const conflictExitsAccept = "        若解决结果与模板不同，用上面的 xinit update --accept <路径> 声明已解决（把你看到并认可的版本记为 base，§10.3）。\n"
+
+// conflictExitsPrune 是出路二。
+const conflictExitsPrune = "出路二：把路径写进 .xinit/prune.txt，使其脱离管理（模板对它的改动不再同步）。\n"
 
 // conflictFilesRef 只在确有 conflicts/ 内容条目时打印（评审 E1/m-3：
 // ConflictKind 且 theirs 缺失时没有条目，指向 conflicts/ 是不实信息）。
@@ -52,12 +59,18 @@ const conflictExits = "出路一：手工解决冲突，使内容与模板一致
 // （v1.0.1 F2/O6——dry-run 的尾注、备份行都紧跟在它后面）。
 const conflictFilesRef = "参考：模板新内容已写到 .xinit/conflicts/<路径>。\n"
 
-// conflictExitsFor 组合冲突出路文案；hasFiles=false 时省掉「参考：」句。
-func conflictExitsFor(hasFiles bool) string {
-	if hasFiles {
-		return conflictExits + conflictFilesRef
+// conflictExitsFor 组合冲突出路文案；hasFiles=false 时省掉「参考：」句，
+// hasAccept=false 时省掉出路一第二行（该节没有 accept? 行可指）。
+func conflictExitsFor(hasFiles, hasAccept bool) string {
+	s := conflictExitsMain
+	if hasAccept {
+		s += conflictExitsAccept
 	}
-	return conflictExits
+	s += conflictExitsPrune
+	if hasFiles {
+		s += conflictFilesRef
+	}
+	return s
 }
 
 // UpdateReport 是 update / diff 的完整结果；Print 的输出就是用户看到的报告。
@@ -126,15 +139,18 @@ func (r *UpdateReport) Print(w io.Writer) {
 		}
 		// Blocked ∩ Acceptable（accept 也豁免第 4 步，update 侧 except）：
 		// 这一轮正是用户最需要命令的时候，而出路文案指向「上面的 --accept
-		// 命令」——不打就成了悬空引用（T7 评审 Minor-1）。
+		// 命令」——不打就成了悬空引用（T7 评审 Minor-1）。出路一的 accept 句
+		// 随 blockedAccept 出现（M7 T2）：一条 accept? 行都没打时它必悬空。
+		blockedAccept := false
 		for _, p := range r.Blocked {
 			if acceptable[p] {
 				fmt.Fprintf(w, "  %-20s xinit update --accept %s\n", "accept?", shellQuote(p))
+				blockedAccept = true
 			}
 		}
 		// 被阻断的路径由 listConflicts 从磁盘枚举而来——conflicts/ 文件确实
 		// 在，参考句成立。
-		fmt.Fprint(w, conflictExitsFor(true))
+		fmt.Fprint(w, conflictExitsFor(true, blockedAccept))
 		if !r.DryRun {
 			return
 		}
@@ -181,13 +197,15 @@ func (r *UpdateReport) Print(w io.Writer) {
 	}
 	if len(r.Conflicted) > 0 {
 		fmt.Fprintf(w, "冲突（%d 条）需要你处理：\n", len(r.Conflicted))
+		conflictedAccept := false
 		for _, p := range r.Conflicted {
 			fmt.Fprintf(w, "  %-20s %s\n", "conflict", p)
 			if acceptable[p] {
 				fmt.Fprintf(w, "  %-20s xinit update --accept %s\n", "accept?", shellQuote(p))
+				conflictedAccept = true
 			}
 		}
-		fmt.Fprint(w, conflictExitsFor(len(r.ConflictFiles) > 0))
+		fmt.Fprint(w, conflictExitsFor(len(r.ConflictFiles) > 0, conflictedAccept))
 	}
 	if r.BackupDir != "" {
 		fmt.Fprintf(w, "备份: %s\n", r.BackupDir)
