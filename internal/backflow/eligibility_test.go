@@ -1,7 +1,9 @@
 package backflow
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -263,16 +265,112 @@ func TestQualifyTrailerCRLFAccepted(t *testing.T) {
 	}
 }
 
-// 守卫 5：值尾空白由 `git interpret-trailers --parse` 吞掉 → 逐字比较落在 parse 输出上
-// 即通过。口径交由该子进程（控制器裁定：勿自行重实现 trailer 解析），本用例把这条
-// 实测边界钉住，避免后人「顺手加个 TrimSpace 敏感化」把口径拆回自定义实现。
-func TestQualifyTrailerValueTrailingSpaceNormalized(t *testing.T) {
+// 守卫 5：**空白整族 → 接受**（spec §20.10 用例 8 修订后的既定 parse 口径）。
+// `git interpret-trailers --parse` 会把 `Key:value`、冒号后多空格、键尾空格、值尾空格
+// 四种写法一并归一出逐字行——与 CRLF 归一同类。判定口径单一、全落 parse 输出上；
+// 本包不自行重实现块判定与逐字差分。本用例把这条边界钉住，防后人「顺手加个
+// TrimSpace 敏感化」把口径拆成两套（那必然连带重实现末段块判定）。
+// 夹具须 --cleanup=verbatim：git 默认 strip 会先吃掉行尾空白，变体就到不了 git。
+func TestQualifyTrailerWhitespaceNormalizedAccepted(t *testing.T) {
+	cases := []struct{ name, line string }{
+		{"冒号后无空格", "Template-Upstream:yes"},
+		{"冒号后两空格", "Template-Upstream:  yes"},
+		{"键尾空格", "Template-Upstream : yes"},
+		{"值尾空格", "Template-Upstream: yes "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := mkRepoT(t, map[string]string{"a.txt": "1\n"})
+			writeFileT(t, dir, "a.txt", "2\n")
+			sha := commitMsgT(t, dir, "feat: x\n\n"+tc.line+"\n")
+
+			if q, err := Qualify(dir, sha); err != nil {
+				t.Fatalf("空白经 parse 归一后应通过：%v（got %+v）", err, q)
+			}
+		})
+	}
+}
+
+// F-1：`log.showSignature=true` 时 git 会把 gpg 程序的输出（stderr）转发到自己的
+// stdout 且**前置**于消息正文。`Qualified.Message` 是 T2 生成 mailbox Subject/正文的
+// 唯一来源，必须逐字等于提交消息——污染是静默进交付物的，不是 fail-closed。
+func TestQualifyMessageFreeOfSignatureNoise(t *testing.T) {
 	dir := mkRepoT(t, map[string]string{"a.txt": "1\n"})
 	writeFileT(t, dir, "a.txt", "2\n")
-	sha := commitMsgT(t, dir, "feat: x\n\nTemplate-Upstream: yes \n")
+	commitAllT(t, dir, "base\n\nTemplate-Upstream: yes\n")
+	msg := "feat: 改共享面\n\nTemplate-Upstream: yes\n"
+	sha := craftSignedCommitT(t, dir, msg)
+	runGitT(t, dir, "config", "log.showSignature", "true")
+	runGitT(t, dir, "config", "gpg.program", fakeGpgT(t))
 
-	if q, err := Qualify(dir, sha); err != nil {
-		t.Fatalf("值尾空白经 parse 归一后应通过：%v（got %+v）", err, q)
+	q, err := Qualify(dir, sha)
+	if err != nil {
+		t.Fatalf("应通过：%v", err)
+	}
+	want := msg + "\n" // `%B` 在消息末尾再补一个 LF
+	if q.Message != want {
+		t.Fatalf("Message 应为逐字提交消息（不含 gpg 前言行）；got %q, want %q", q.Message, want)
+	}
+	if strings.Contains(q.Message, "XFAKEGPG-NOISE") {
+		t.Fatalf("Message 被 gpg 输出污染：%q", q.Message)
+	}
+}
+
+// F-3（M-1）：`status.showUntrackedFiles=no` 不得让未跟踪警告静默消失（spec 明确
+// 「未跟踪文件只警告」的语义面）；命令显式带 --untracked-files=normal 钉住。
+func TestQualifyUntrackedSurvivesShowUntrackedFilesConfig(t *testing.T) {
+	dir := mkRepoT(t, map[string]string{"a.txt": "1\n"})
+	writeFileT(t, dir, "a.txt", "2\n")
+	sha := commitAllT(t, dir, okMsg)
+	runGitT(t, dir, "config", "status.showUntrackedFiles", "no")
+	writeFileT(t, dir, "u.txt", "x\n")
+
+	q, err := Qualify(dir, sha)
+	if err != nil {
+		t.Fatalf("未跟踪文件不该挡在门外：%v", err)
+	}
+	if len(q.Untracked) != 1 || q.Untracked[0] != "u.txt" {
+		t.Fatalf("Untracked 应仍收集 u.txt；got %v", q.Untracked)
+	}
+}
+
+// F-4（M-3）：Stat 的非 NotExist 错误不得被当作「标记不存在」（那种读法会漏检进行中
+// 操作）。存在性无法判定时 fail-closed 拒绝，文案点名该标记。
+// 用自指符号链接稳定构造：`.git/MERGE_HEAD` → 自身，os.Stat 报 ELOOP，且 git 自身
+// 的 rev-parse / status / rev-list 不受影响（探针实测）。
+func TestQualifyFailsClosedOnStatError(t *testing.T) {
+	dir := mkRepoT(t, map[string]string{"a.txt": "1\n"})
+	writeFileT(t, dir, "a.txt", "2\n")
+	sha := commitAllT(t, dir, okMsg)
+	gitDir := runGitT(t, dir, "rev-parse", "--absolute-git-dir")
+	if err := os.Symlink("MERGE_HEAD", filepath.Join(gitDir, "MERGE_HEAD")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Qualify(dir, sha)
+	if err == nil {
+		t.Fatal("存在性无法判定时应 fail-closed 拒绝")
+	}
+	if !strings.Contains(err.Error(), "MERGE_HEAD") {
+		t.Fatalf("文案应点名探测失败的标记；got %q", err)
+	}
+}
+
+// F-5（M-4）：守卫 1 的错误必须保留底层 git 错误（%w）——否则 git 缺失/损坏时文案
+// 误报「不在 git 仓库内」，把人引向同样失败的 `git init`。
+func TestQualifyNonGitDirWrapsGitError(t *testing.T) {
+	dir := mkRepoT(t, map[string]string{"a.txt": "1\n"}) // 建仓必须在置空 PATH 之前
+	t.Setenv("PATH", "")
+
+	_, err := Qualify(dir, "HEAD")
+	if err == nil {
+		t.Fatal("git 不可用时应报错")
+	}
+	if !strings.Contains(err.Error(), "回流要求派生项目是 git 仓库（opt-in）") {
+		t.Fatalf("要点句应保留；got %q", err)
+	}
+	if !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("应保留底层 exec 错误链（errors.Is(err, exec.ErrNotFound)）；got %v", err)
 	}
 }
 
@@ -282,10 +380,11 @@ func assertCriterionText(t *testing.T, err error) {
 	assertContainsAll(t, err, "判据", "`git rev-list --parents -n 1 <commit>` 词数 == 2")
 }
 
-// assertTrailerCriterionText 断言错误里打印了守卫 5 的判据原文。
+// assertTrailerCriterionText 断言错误里打印了守卫 5 的判据原文（§20.4 行 5 修订版：
+// 判定全落 parse 输出上，不再声明「逐字匹配」——空白整族属 parse 归一）。
 func assertTrailerCriterionText(t *testing.T, err error) {
 	t.Helper()
-	assertContainsAll(t, err, "判据", "`git interpret-trailers --parse`", "`Template-Upstream: yes`（逐字匹配）")
+	assertContainsAll(t, err, "判据", "`Template-Upstream: yes`", "判定全落 `git interpret-trailers --parse` 输出上")
 }
 
 func assertContainsAll(t *testing.T, err error, wants ...string) {

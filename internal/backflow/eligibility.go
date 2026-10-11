@@ -2,7 +2,9 @@ package backflow
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,11 +22,13 @@ type Qualified struct {
 // 判据原文——守卫 4/5 失败时逐字打印（§20.4 表；§20.10 文案基准表第 5 行）。
 const (
 	critSingleCommit = "提交存在且非 root/非 merge：`git rev-list --parents -n 1 <commit>` 词数 == 2"
-	critTrailer      = "提交消息末段 trailer 块（`git interpret-trailers --parse` 口径）含 `Template-Upstream: yes`（逐字匹配）"
+	critTrailer      = "提交消息末段 trailer 块含 `Template-Upstream: yes`（判定全落 `git interpret-trailers --parse` 输出上）"
 )
 
-// trailerLine 是 trailer 的逐字判定行（键与值均大小写/空白敏感；空白口径由
-// `git interpret-trailers --parse` 归一，本包不自行解析）。
+// trailerLine 是 trailer 的逐字判定行。判定全落 `git interpret-trailers --parse`
+// 的输出上（§20.4 行 5）：**键大小写非逐字 → 拒**（parse 对键原样输出）；**空白与
+// CRLF 属 parse 归一 → 接受**（§20.10 用例 8 实测定形：`Key:value`、冒号后多空格、
+// 键尾空格、值尾空格四形状都归一出本行）；本包不自行重实现块判定与逐字差分。
 const trailerLine = "Template-Upstream: yes"
 
 // inProgressOps 是守卫 2 的五探测（§20.4），按此顺序报告。
@@ -45,7 +49,9 @@ var inProgressOps = []struct {
 // 任一不过返回普通 error（CLI 层负责包 ExitError 与退出码）。
 func Qualify(projectDir, commit string) (*Qualified, error) {
 	if _, err := runGit(projectDir, nil, "rev-parse", "--git-dir"); err != nil {
-		return nil, fmt.Errorf("回流要求派生项目是 git 仓库（opt-in）：%s 不在 git 仓库内，README「3.2 生成派生项目」有这条 opt-in 说明（派生项目不必是 git 仓，回流只在 git 派生上可用）；请在该目录 git init，或放弃回流", projectDir)
+		// %w 保真底层 git 错误：git 缺失/损坏时不能被读成「不在 git 仓库内」
+		// （那会把人引向同样失败的 git init）。
+		return nil, fmt.Errorf("回流要求派生项目是 git 仓库（opt-in）：%s 不在 git 仓库内（%w），README「3.2 生成派生项目」有这条 opt-in 说明（派生项目不必是 git 仓，回流只在 git 派生上可用）；请在该目录 git init，或放弃回流", projectDir, err)
 	}
 	if err := checkNoOperationInProgress(projectDir); err != nil {
 		return nil, err
@@ -61,7 +67,10 @@ func Qualify(projectDir, commit string) (*Qualified, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := runGit(projectDir, nil, "log", "-1", "--format=%B", sha)
+	// --no-show-signature：`log.showSignature=true` 时 git 会把 gpg 程序的输出
+	// （走 stderr）转发到自身 stdout 且**前置**于消息正文，Message 会被静默污染
+	// （它是 T2 生成 mailbox Subject/正文的唯一来源）。
+	raw, err := runGit(projectDir, nil, "log", "-1", "--no-show-signature", "--format=%B", sha)
 	if err != nil {
 		return nil, fmt.Errorf("读取提交消息失败：%w", err)
 	}
@@ -87,8 +96,15 @@ func checkNoOperationInProgress(repoDir string) error {
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(repoDir, p)
 		}
-		if _, err := os.Stat(p); err == nil {
+		switch _, statErr := os.Stat(p); {
+		case statErr == nil:
 			return fmt.Errorf("工作树上有进行中的操作：%s（检测到 %s）。请完成该操作或 %s 后再跑", op.what, op.marker, op.abort)
+		case errors.Is(statErr, fs.ErrNotExist):
+			// 标记不存在 = 该操作不在进行中，继续探测下一个。
+		default:
+			// 存在性无法判定（EACCES / ELOOP 等）不得当作「不存在」——漏检进行中
+			// 操作会让后续导出一个语义可疑的提交，故 fail-closed。
+			return fmt.Errorf("探测进行中操作失败：无法判定 %s 是否存在（%s）：%w；判据 = 五探测（MERGE_HEAD / CHERRY_PICK_HEAD / REVERT_HEAD / rebase-merge / rebase-apply）任一存在即拒绝，无法判定时按 fail-closed 拒绝", op.marker, p, statErr)
 		}
 	}
 	return nil
@@ -98,7 +114,9 @@ func checkNoOperationInProgress(repoDir string) error {
 // 归未跟踪（只警告），其余任何条目归脏（拒绝面）。
 // 等价性：spec 判据「`--untracked-files=no` 为空」⇔「无非 `??` 条目」。
 func worktreeState(repoDir string) (dirty, untracked []string, err error) {
-	out, err := runGit(repoDir, nil, "status", "--porcelain", "-z")
+	// --untracked-files=normal 显式钉住：用户全局 `status.showUntrackedFiles=no`
+	// 会让未跟踪警告静默消失（spec「未跟踪文件只警告」的语义面）。
+	out, err := runGit(repoDir, nil, "status", "--porcelain", "--untracked-files=normal", "-z")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -142,10 +160,10 @@ func checkCommitShape(repoDir, commit string) (string, error) {
 	}
 }
 
-// checkTrailer 跑守卫 5：把提交消息喂给 `git interpret-trailers --parse`，
-// 按该进程的输出判定——「末段块/单行消息/CRLF」口径全部交给它，本包不自行重实现解析。
-// 通过条件 = 输出中恰有一行逐字等于 `Template-Upstream: yes`，且没有其它同键行
-// （值非逐字、键大小写不符、同键出现多次一律 fail-closed 拒绝）。
+// checkTrailer 跑守卫 5：把提交消息喂给 `git interpret-trailers --parse`，按该进程的
+// 输出判定——「末段块 / 单行消息 / CRLF / 空白整族」口径全部交给它，本包不自行重实现
+// 块判定与逐字差分（§20.4 行 5）。通过条件 = 输出中恰有一行等于 `Template-Upstream: yes`
+// 且没有其它同键行：键大小写不符、值非 `yes`、同键在末段块内出现多次一律 fail-closed 拒。
 func checkTrailer(repoDir, message string) error {
 	parsed, err := runGit(repoDir, []byte(message), "interpret-trailers", "--parse")
 	if err != nil {

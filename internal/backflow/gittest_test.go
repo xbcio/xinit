@@ -72,3 +72,48 @@ func commitMsgT(t *testing.T, dir, msg string) string {
 	runGitT(t, dir, "commit", "-q", "--cleanup=verbatim", "-F", f)
 	return runGitT(t, dir, "rev-parse", "HEAD")
 }
+
+// hashObjectT 把一段内容写进对象库（`git hash-object -w --stdin`），返回对象 sha。
+func hashObjectT(t *testing.T, dir, kind, content string) string {
+	t.Helper()
+	cmd := exec.Command("git", "hash-object", "-t", kind, "-w", "--stdin")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e")
+	cmd.Stdin = strings.NewReader(content)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git hash-object -t %s: %v", kind, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// craftSignedCommitT 手工造一个带 `gpgsig` 头的提交对象（tree/parent 取自当前 HEAD、
+// 消息为 msg），把 HEAD 指过去——tree 不变，故工作树保持干净。返回该提交 sha。
+// 用于「签名污染面」夹具：`log.showSignature=true` 时 git 会把 gpg 程序的 stderr
+// 转发到自己的 stdout，且**前置**于消息正文（真 gpg 与假 gpg 同此机制）。
+func craftSignedCommitT(t *testing.T, dir, msg string) string {
+	t.Helper()
+	obj := "tree " + runGitT(t, dir, "rev-parse", "HEAD^{tree}") + "\n" +
+		"parent " + runGitT(t, dir, "rev-parse", "HEAD") + "\n" +
+		"author t <t@e> 0 +0000\ncommitter t <t@e> 0 +0000\n" +
+		"gpgsig -----BEGIN PGP SIGNATURE-----\n \n iQEcBAABAgAGBQJfakefake\n -----END PGP SIGNATURE-----\n\n" +
+		msg
+	sha := hashObjectT(t, dir, "commit", obj)
+	runGitT(t, dir, "update-ref", "HEAD", sha)
+	return sha
+}
+
+// fakeGpgT 写一个假 gpg 程序（标记行写 **stderr** 并退出非零——git 会把 gpg 程序的
+// stderr 转发到自身 stdout 且前置，与真 gpg 校验失败的实测表现一致），返回其路径。
+// 放在仓外以免污染工作树；用 `gpg.program` 指过去即可让污染面在任何机器上稳定复现，
+// 不依赖本机是否装了 gpg。
+func fakeGpgT(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "fakegpg")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\necho XFAKEGPG-NOISE >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
