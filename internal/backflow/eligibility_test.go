@@ -221,6 +221,7 @@ func TestQualifyTrailerVariants(t *testing.T) {
 	}{
 		{"末段块命中", "feat: x\n\nTemplate-Upstream: yes\n", false},
 		{"与其他 trailer 同块", "feat: x\n\nSigned-off-by: A <a@e>\nTemplate-Upstream: yes\n", false},
+		{"正文引用该行、末段块也命中", "feat: x\n\n正文里引用 Template-Upstream: yes 这一行。\n\nTemplate-Upstream: yes\n", false},
 		{"正文中间（非末段块）", "feat: x\n\nTemplate-Upstream: yes\n\nmore body\n", true},
 		{"值非逐字 no", "feat: x\n\nTemplate-Upstream: no\n", true},
 		{"值非逐字 Yes", "feat: x\n\nTemplate-Upstream: Yes\n", true},
