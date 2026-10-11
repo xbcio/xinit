@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -264,10 +265,14 @@ func TestRestoreBaseNoCacheRootCreated(t *testing.T) {
 
 // ⑦ 缓存不可读 → 静默 miss，行为与现状逐字同（判据 8/16）。
 // 注意权限值：brief 原文的 0500 目录**可遍历**（r-x），读取照常成功——去 x
-// 后的 0400 才真正不可遍历（T4-0 裁定，与 T2-M1 同构）。
+// 后的 0400 才真正不可遍历（T4-0 裁定，与 T2-M1 同构；守卫同 T2 的
+// renderstore/fetch_test.go:194-200）。
 func TestRestoreBaseUnreadableCacheMisses(t *testing.T) {
 	if os.Geteuid() == 0 {
-		t.Skip("root 无视文件权限，无法制造不可读缓存")
+		t.Skip("root 无视权限位，无法制造不可读缓存")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 权限位不生效（R9：Windows 运行期 park）")
 	}
 	// sealEntryUnreadableT 把 <cacheRoot>/render 去 r+x（0400）并注册恢复，
 	// 让 t.TempDir 的清理仍能删除。
