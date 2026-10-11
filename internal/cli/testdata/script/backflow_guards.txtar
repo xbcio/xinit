@@ -1,3 +1,4 @@
+[windows] skip '缓存接线为 darwin/Linux 形态；Windows 变体待真机'
 # backflow 守卫与错误面（§20.4 八守卫 / §20.7 表末两行 / §20.5 句 4 / §20.6 全 noop）：
 # rc=1 与文案逐条断言（文案基准表第 1–5、8、13 行）。正向主链在 backflow_main.txtar，
 # 警告不导出面在 backflow_warns.txtar。

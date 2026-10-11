@@ -1,3 +1,4 @@
+[windows] skip '缓存接线为 darwin/Linux 形态；Windows 变体待真机'
 # 快照篡改 · CRLF 孪生（§21.10「篡改 tree → 按未命中」「CRLF 孪生负例」/ 判据 8、
 # 10、11）：dir 源 2 文件 → init → 删 base → 把 tree/b.txt 换成 CRLF 孪生
 # （编码变、raw sha256 变；归一化 hash 不变 → 只有 raw 门拦得住）→ update：

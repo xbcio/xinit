@@ -1,3 +1,4 @@
+[windows] skip '缓存接线为 darwin/Linux 形态；Windows 变体待真机'
 # 复仇测试（§21.7 常备 golden / §21.11 项 9）：同一项目两分支——「删 base + 留
 # 快照」（快照恢复）vs「删 base + 删快照」（git 源重渲染）——base/ 树与 state.json
 # 逐字节相等（同二进制下 §5.1 不变量的推论）。

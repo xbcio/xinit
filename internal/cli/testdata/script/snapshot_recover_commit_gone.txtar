@@ -1,3 +1,4 @@
+[windows] skip '缓存接线为 darwin/Linux 形态；Windows 变体待真机'
 # 快照恢复 · git 源记录 commit 不可取（§21.10「commit-gone 恢复」/ 判据 10）：
 # 裸仓模板 → init → 钉 v1.0.0（快照 anchor 落定）→ 删裸仓并以新历史重建（仅
 # v2.0.0，a.txt 内容不同）→ 摘镜像、留快照 → 删 base → update --revision

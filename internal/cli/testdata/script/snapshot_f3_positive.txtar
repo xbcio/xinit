@@ -1,3 +1,4 @@
+[windows] skip '缓存接线为 darwin/Linux 形态；Windows 变体待真机'
 # F3 正面锚（§21.11 项 19 / §21.9-F3「可丢弃」）：健康项目删 render/ → 全量
 # update 结果与未删时逐字节同。同一 init 产物的两份拷贝：out（带快照）与 out-b
 # （先删 render/）各跑一次全量 update（模板已推进，两轮都是真实写入）：

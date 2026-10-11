@@ -4,11 +4,13 @@
 # `! exists` 双覆盖（循 check_template.txtar:46-47 先例）。
 # 不加 preamble：这里要的正是「$WORK/home 下默认双路径」都不得被创建
 # （darwin 走 HOME/Library/Caches、Linux 走 XDG_CACHE_HOME）。
+# Windows 变体（§22.13 P5）：LocalAppData 条件接线（默认 Setup 已设 $WORK/home/AppData/Local）。
 
 xinit init --template $WORK/tpl --yes out
 
 # 删缓存：rm 内置先 chmod 再删，权限正常；双路径覆盖两平台
 rm -rf $WORK/home/Library/Caches/xinit $WORK/home/.cache/xinit
+[windows] rm -rf $WORK/home/AppData/Local/xinit
 
 cd $WORK/out
 rm -rf .xinit/base
@@ -18,6 +20,7 @@ stdout 'exit=1'
 ! stdout 'base 恢复'
 ! exists $WORK/home/Library/Caches/xinit
 ! exists $WORK/home/.cache/xinit
+[windows] ! exists $WORK/home/AppData/Local/xinit
 
 -- tpl/xinit.yml --
 manifest_version: 1

@@ -1,3 +1,4 @@
+[windows] skip '缓存接线为 darwin/Linux 形态；Windows 变体待真机'
 # 快照跳过 · pending 轮零写（§21.10 必测「pending 轮零写 + 收敛轮写入」/ O2 行为锚、
 # 判据 6、12）：dir 源冲突轮（退 2，pending）——写了会覆写掉当下唯一 anchor 相符的
 # 有效条目 → 深比对前像零差异；收敛轮（退 0）快照覆写轮转 → 深比对必报差异。

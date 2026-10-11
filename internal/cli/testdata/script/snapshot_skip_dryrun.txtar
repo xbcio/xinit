@@ -1,3 +1,4 @@
+[windows] skip '缓存接线为 darwin/Linux 形态；Windows 变体待真机'
 # 快照跳过 · dry-run/diff 零写（§21.10「dry-run 零写」/ 判据 6）：
 # init → 改模板（真实 update 会写 a.txt 且快照覆写轮转）→ 深拷贝 render/ 前像 →
 # diff 与 update --dry-run 各跑一次，`diff -r` 前像零差异（缓存侧零写）；随后真实

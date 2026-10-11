@@ -1,3 +1,4 @@
+[windows] skip 'ENOTDIR 注入在 Windows 双失效；Windows 版注入待真机实测错误码'
 # 快照写失败注入（§21.10「写失败注入」/ 判据 7）：init（快照正常落盘）→ 把两个
 # 平台的缓存父目录替换为普通文件（darwin: $WORK/home/Library/Caches、Linux:
 # $WORK/home/.cache）→ update：rc=0、stderr 恰一行写失败警告、项目树与 state
@@ -8,6 +9,7 @@
 # T6-2 实证（darwin 实测）：仅删 <cacheRoot>/xinit 时 MkdirAll 会在仍可写的
 # Caches 父目录内重建成功（注入不生效）；故按行为契约把夹具收窄到「平台缓存
 # 父目录替换为普通文件」。
+# Windows 首跑：本脚本依赖 ENOTDIR 注入（POSIX 语义），Windows 形态见 §22.17 R14-6。
 
 xinit init --template $WORK/tpl --yes out
 
