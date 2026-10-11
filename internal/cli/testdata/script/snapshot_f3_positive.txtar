@@ -45,8 +45,9 @@ exec sh -c 'grep -v "^备份: " $WORK/rep-outb.txt > $WORK/stdout-outb.txt'
 # 动作行、汇总、exit——全部参与）
 cmp $WORK/stdout-out.txt $WORK/stdout-outb.txt
 # 两轮 stderr 逐字节同（M-1：err 捕获此前零断言；双方同为「非 git 仓库」恒定警告行，
-# 无路径/时间戳成分）
-cmp $WORK/err-out.txt $WORK/err-outb.txt
+# 无路径/时间戳成分）。非空前置（M10 T6 rerev O-1）：两侧都必须非空——捕获侧失效时
+# 「空 = 空」会让 cmp vacuous 绿，前置把这种假绿变红。
+exec sh -c 'test -s $WORK/err-out.txt && test -s $WORK/err-outb.txt && cmp $WORK/err-out.txt $WORK/err-outb.txt'
 
 # 受管面逐字节
 cmp $WORK/out/a.txt $WORK/out-b/a.txt

@@ -53,7 +53,9 @@ exec sh -c 'for d in $WORK/home/Library/Caches/xinit $WORK/home/.cache/xinit; do
 # 前置断言（M-2）：缓存根恰剩 render/——摘净了，「旧 commit 真不可取」前提才成立；
 # 目录缺失或残留任何镜像条目（ls 得空或多项）均红。非空前置（M10 F-3 O-1）：
 # ls 得空串时先红在「没摘净」这一步，而不是拿空串去比 "render" 才失败。
-exec sh -c 'test -n "$(ls $WORK/cache/xinit)" && test "$(ls $WORK/cache/xinit)" = "render"'
+# -A（M10 T6 rerev O-2）：隐藏条目一并纳入判据——摘除循环刻意不为 dotfile 扩展
+# （非镜像条目不该被循环顺手删），故断言侧一旦出现 dotfile 即红，由人看现场。
+exec sh -c 'test -n "$(ls -A $WORK/cache/xinit)" && test "$(ls -A $WORK/cache/xinit)" = "render"'
 
 rm -rf .xinit/base
 xinit-code update --revision v2.0.0
