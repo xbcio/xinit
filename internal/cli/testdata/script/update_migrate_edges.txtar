@@ -85,22 +85,22 @@ cmp bar.txt $WORK/local.txt
 ! exists foo.txt
 cd ..
 
-[darwin] xinit init --template $WORK/t10d --yes p10d
-[darwin] cp $WORK/local.txt p10d/foo.txt
-[darwin] mv $WORK/t10d/foo.txt $WORK/t10d/bar.txt
-[darwin] cp $WORK/blocker.txt p10d/BAR.txt
-[darwin] cd p10d
-[darwin] xinit-code update
-[darwin] stdout '^  skip                 foo\.txt → bar\.txt（跳过：父目录里已有折叠等价的条目 BAR\.txt（.*（§9\.3））$'
-[darwin] stdout 'exit=2'
-[darwin] cmp foo.txt $WORK/local.txt
-[darwin] cmp BAR.txt $WORK/blocker.txt
-[darwin] rm BAR.txt
-[darwin] xinit-code update
-[darwin] stdout '^  migrated             foo\.txt → bar\.txt'
-[darwin] stdout 'exit=0'
-[darwin] cmp bar.txt $WORK/local.txt
-[darwin] cd ..
+[casefold] xinit init --template $WORK/t10d --yes p10d
+[casefold] cp $WORK/local.txt p10d/foo.txt
+[casefold] mv $WORK/t10d/foo.txt $WORK/t10d/bar.txt
+[casefold] cp $WORK/blocker.txt p10d/BAR.txt
+[casefold] cd p10d
+[casefold] xinit-code update
+[casefold] stdout '^  skip                 foo\.txt → bar\.txt（跳过：父目录里已有折叠等价的条目 BAR\.txt（.*（§9\.3））$'
+[casefold] stdout 'exit=2'
+[casefold] cmp foo.txt $WORK/local.txt
+[casefold] cmp BAR.txt $WORK/blocker.txt
+[casefold] rm BAR.txt
+[casefold] xinit-code update
+[casefold] stdout '^  migrated             foo\.txt → bar\.txt'
+[casefold] stdout 'exit=0'
+[casefold] cmp bar.txt $WORK/local.txt
+[casefold] cd ..
 
 # ════ 场景 11：混合 EOL + 模板改内容 → fallback、磁盘零改写（验收 14）════
 xinit init --template $WORK/t11 --yes p11

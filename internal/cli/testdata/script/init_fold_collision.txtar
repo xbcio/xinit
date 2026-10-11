@@ -15,9 +15,9 @@ cmp out/README.md want-README.md
 
 # 大小写不敏感文件系统（darwin 默认）才会触发折叠碰撞路径，
 # 在其上追加检查折叠碰撞的警告与「不记入 state/base」语义
-[darwin] stderr '同一个文件'
-[darwin] ! grep 'readme.md' out/.xinit/state.json
-[darwin] ! exists out/.xinit/base/readme.md
+[casefold] stderr '同一个文件'
+[casefold] ! grep 'readme.md' out/.xinit/state.json
+[casefold] ! exists out/.xinit/base/readme.md
 -- tpl/xinit.yml --
 manifest_version: 1
 -- tpl/readme.md --

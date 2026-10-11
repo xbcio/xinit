@@ -26,6 +26,18 @@ func exitCode(err error) int {
 	return 1
 }
 
+// cacheIsolationEnv 返回用户缓存隔离的三变量接线（§22.13）：darwin/Linux 据
+// HOME/XDG_CACHE_HOME、Windows 据 %LocalAppData%（os.UserCacheDir 口径；darwin
+// 上该变量无读者，零影响）。**两处调用点基不同，不得混用**：
+// TestMain → os.TempDir()/xinit-test-home；Setup → $WORK/home。
+func cacheIsolationEnv(home string) [][2]string {
+	return [][2]string{
+		{"HOME", home},
+		{"XDG_CACHE_HOME", filepath.Join(home, ".cache")},
+		{"LocalAppData", filepath.Join(home, "AppData", "Local")},
+	}
+}
+
 func TestMain(m *testing.M) {
 	// 测试隔离（M10 前置）：把用户缓存目录（os.UserCacheDir 据 HOME/
 	// XDG_CACHE_HOME 推导）引到一次性暂存目录，Go 单测不再脏写真实缓存。
@@ -47,8 +59,9 @@ func TestMain(m *testing.M) {
 			fmt.Fprintf(os.Stderr, "xinit-test: 创建隔离 HOME %s: %v\n", home, err)
 			os.Exit(1)
 		}
-		os.Setenv("HOME", home)
-		os.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+		for _, kv := range cacheIsolationEnv(home) {
+			os.Setenv(kv[0], kv[1])
+		}
 	}
 
 	testscript.Main(m, map[string]func(){
@@ -80,10 +93,39 @@ func TestScripts(t *testing.T) {
 	testscript.Run(t, testscript.Params{
 		Dir: "testdata/script",
 		Setup: func(env *testscript.Env) error {
-			home := filepath.Join(env.Getenv("WORK"), "home")
-			env.Setenv("HOME", home)
-			env.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+			// Env.Setenv 不做 $ 展开（实测）——必须 env.Getenv("WORK") 拼绝对路径。
+			for _, kv := range cacheIsolationEnv(filepath.Join(env.Getenv("WORK"), "home")) {
+				env.Setenv(kv[0], kv[1])
+			}
 			return nil
 		},
+		Condition: func(cond string) (bool, error) {
+			// casefold：大小写不敏感文件系统（折叠语义）平台 = darwin || windows
+			// （§22.13）。内置条件从不走到这里（testscript 先判）。
+			if cond == "casefold" {
+				return runtime.GOOS == "darwin" || runtime.GOOS == "windows", nil
+			}
+			return false, fmt.Errorf("unknown condition %q", cond)
+		},
 	})
+}
+
+func TestCacheIsolationEnv(t *testing.T) {
+	want := map[string]string{
+		"HOME":           "/base",
+		"XDG_CACHE_HOME": "/base/.cache",
+		"LocalAppData":   "/base/AppData/Local",
+	}
+	got := map[string]string{}
+	for _, kv := range cacheIsolationEnv("/base") {
+		got[kv[0]] = kv[1]
+	}
+	if len(got) != len(want) {
+		t.Fatalf("cacheIsolationEnv 变量数 = %d，want %d（三变量缺一即红）", len(got), len(want))
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("cacheIsolationEnv[%s] = %q，want %q", k, got[k], v)
+		}
+	}
 }
