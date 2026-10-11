@@ -10,8 +10,11 @@ import (
 )
 
 // transientRenameErr：模拟 Windows 上杀软/索引器持句柄的瞬态 rename 失败。
-// 用 os.LinkError 包 EACCES：与 Windows 的 Errno 5（ERROR_ACCESS_DENIED）同形，
-// 且 os.IsPermission 口径成立（§22.8）。
+// 用 os.LinkError 包 syscall.EACCES：os.IsPermission 口径成立（Go 对 EACCES 有
+// 专用分支）——只读清位分支据此进入（§22.8）。注意它**不是** Windows 分类器认的
+// 可重试形态：分类器认 ERROR_ACCESS_DENIED(5)/ERROR_SHARING_VIOLATION(32)
+// （rename_windows.go），而 GOOS=windows 下 syscall.EACCES 是 invented 常量
+// 536870913 ≠ Errno 5——勿把两者当同形。
 func transientRenameErr(oldpath, newpath string) error {
 	return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EACCES}
 }
@@ -81,6 +84,10 @@ func TestRenameBoundedRetry(t *testing.T) {
 		if err == nil {
 			t.Fatal("恒瞬态错误应当失败")
 		}
+		// spec 钉死值 10 的独立保护：下面的断言只锁「相对常量」，本断言锁常量本身。
+		if renameAttempts != 10 {
+			t.Fatalf("renameAttempts = %d, want 10（§22.8 钉死值，不得静默改动）", renameAttempts)
+		}
 		if calls != renameAttempts {
 			t.Errorf("rename 调用次数 = %d, want %d（有界重试上界）", calls, renameAttempts)
 		}
@@ -107,9 +114,10 @@ func TestRenameReadOnlyTargetClearBit(t *testing.T) {
 	origFile, origRetryable := renameFile, renameRetryable
 	defer func() { renameFile, renameRetryable = origFile, origRetryable }()
 
-	// 显式覆写恒 false，不吃默认分类器：默认恒 false 仅 unix 档成立，
-	// Windows 档会把 EACCES（Errno 5 = ERROR_ACCESS_DENIED）认作可重试，
-	// 用例会结构性必败。显式覆写使(a)用例平台无关、(b)语义完好保留
+	// 显式覆写恒 false，不吃默认分类器（分类器随平台而异：unix 恒 false；Windows
+	// 认 ERROR_ACCESS_DENIED(5)/ERROR_SHARING_VIOLATION(32)，见 rename_windows.go
+	// ——注入的 syscall.EACCES 在 GOOS=windows 是 invented 常量 536870913，
+	// 两者勿当同形）。显式覆写使(a)用例平台无关、(b)语义完好保留
 	// 「分类器不认、但属权限类」的只读清位路径、(c)交叉编译面完整。
 	renameRetryable = func(error) bool { return false }
 	calls := 0
@@ -160,8 +168,8 @@ func TestRenameReadOnlyFailClosed(t *testing.T) {
 	origFile, origRetryable := renameFile, renameRetryable
 	defer func() { renameFile, renameRetryable = origFile, origRetryable }()
 
-	// 显式覆写恒 false（理由同 TestRenameReadOnlyTargetClearBit：默认恒 false
-	// 仅 unix 档成立，Windows 档会重试 EACCES 致计数断言必败）。
+	// 显式覆写恒 false（理由同 TestRenameReadOnlyTargetClearBit：不吃随平台
+	// 而异的默认分类器，用例保持平台无关）。
 	renameRetryable = func(error) bool { return false }
 	calls := 0
 	renameFile = func(oldpath, newpath string) error {
