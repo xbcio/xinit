@@ -8,7 +8,7 @@
 
 - 派生项目**不必是 git 仓库**（有 git 时体验更好：备份之外多一层版本控制兜底）。
 - 不需要修改被模板跟踪的 `.gitignore`：`init` / `update` 会幂等把 `.xinit/` 写进 `.git/info/exclude`。
-- 依赖：**git ≥ 2.38**（硬依赖，启动时检查，不满足即退出）。
+- 依赖：**git ≥ 2.38**（硬依赖，启动时检查，不满足即退出）；钩子另需 PATH 中有 POSIX `sh`（Git for Windows 自带）。
 
 ## 目录
 
@@ -368,7 +368,7 @@ xinit adopt: /path/to/minimal-template@v1.1.0
 
 **EOF 语义两侧刻意不同**：`init` 的 vars 采集读到输入结束就**中止**——静默采用半套回答会产出一个你从未确认过的变量集；`update` 的冲突提问读到输入结束则把**其余全部按「保留本地」**处理（已答的按回答处理），永不丢数据。
 
-**Ctrl-C**：等待输入期间按 Ctrl-C 按终端默认语义终止（shell 视角退出码 130），不写入任何项目内容，也没有专属退出码——所有提问点都在本轮第一次**内容**写盘之前。只读路径不提问：`--dry-run` 恒不提问；`diff` 不注册 `--interactive`（传它是 unknown flag），本身也不提问。
+**Ctrl-C**：等待输入期间按 Ctrl-C 按终端默认语义终止（unix 下 shell 视角退出码 130；Windows 由宿主决定），不写入任何项目内容，也没有专属退出码——所有提问点都在本轮第一次**内容**写盘之前。只读路径不提问：`--dry-run` 恒不提问；`diff` 不注册 `--interactive`（传它是 unknown flag），本身也不提问。
 
 ## 5. 模板清单 `xinit.yml` 参考
 
@@ -591,14 +591,14 @@ $ xinit update
 | `overwritten/` | 被模板覆盖掉的你的内容（`generated` 路径），持久保留 |
 | `backup/` | 每次 `update` 改写前的原内容 + exec 位，按运行开始时刻分目录（同名时追加 `-2`、`-3`），**不覆盖、不自动清理** |
 | `backflow/` | 回流产物（`backflow` 生成的 `.patch`；文件名含派生与模板两个短 sha）。有它在 `.xinit/` 里就已进 `.git/info/exclude` 的整目录条目，不用单独登记 |
-| `lock` | 项目锁，防止并发 `update`（`diff` / `status` / `check` 只读不加锁） |
+| `lock` | 项目锁，防止并发 `update`（`diff` / `status` / `check` 只读不加锁）；unix 用 flock、Windows 用 LockFileEx；锁文件常驻不删；Windows 上持锁期间被共享模式占用，外部工具删不掉（§22.3） |
 | `prune.txt` | 一行一个路径：这些路径脱离管理、不再同步 |
 
 ### 用户缓存目录与渲染快照缓存
 
 `init` / `adopt` 成功、`update` **收敛轮**（无未解决冲突、折叠拒绝或障碍物）成功后（均在项目状态成功落盘之后），会把本轮**渲染原文**顺手写一份到用户级缓存目录（best-effort：写失败只在 stderr 警告，命令照常成功、项目状态零影响；§21）。它**只用于**在项目内 `.xinit/base/`（基线树）丢失或损坏时作恢复来源——覆盖「dir 源 base 丢失」与「git 源记录的 commit 在模板源中取不到」这两个原本只能 `adopt`（或硬错）的口子；**恢复链**在 base 健康时不读快照（零命中也不创建缓存根）。
 
-- **位置**：`<UserCacheDir>/xinit/render/<familyKey>/`——darwin 为 `~/Library/Caches/xinit/render/`，Linux 为 `$XDG_CACHE_HOME/xinit/render/`；条目内是 `manifest.json`（清单）与 `tree/<Dst>`（逐路径的渲染原文）。
+- **位置**：`<UserCacheDir>/xinit/render/<familyKey>/`——darwin 为 `~/Library/Caches/xinit/render/`，Linux 为 `$XDG_CACHE_HOME/xinit/render/`，Windows 为 `%LocalAppData%\xinit\render\`；条目内是 `manifest.json`（清单）与 `tree/<Dst>`（逐路径的渲染原文）。**Windows 注**：`%LocalAppData%` 未定义（服务账户/精简 CI）时用户缓存目录推导失败——快照写侧按 best-effort 降级为一行警告，读侧（快照/镜像）按其既有错误面处理（§22.14、§22.17 R14-12）。
 - **可整体删除**：`rm -rf <cacheRoot>/render`（`<cacheRoot>` 即 `<UserCacheDir>/xinit`）——删掉后行为与没有快照一致，这也是快照损坏时的维修指引。
 - **无 GC**：每族（= 一个「输入元组」：引擎版本、模板来源、种类、变量）至多一份条目，写入即整条覆写轮转；总量 = 去重后的输入元组数，随使用缓慢增长、**无自动清理**。
 - **已知限制（跨项目同族边界）**：同 (engine, source, kind, vars) 的两个项目钉在不同 commit 时，后写者覆写前者的条目（last-manifest-wins）——前者此后 base 丢失只能走 git 重渲染回退 / dir 硬错。
@@ -672,11 +672,11 @@ $ xinit update
   - 「计划内但被钩子改写」——这些路径下一轮可能被判定为「本地改过」，报告会点名它们。
 - **执行时机**：`post_init` 在 `init` 落盘后；`post_update` 在**每一轮** `update` 落盘后执行——**包括本轮没有任何模板改动的 `Noop` 轮**。所以钩子应当幂等，并且要意识到它每轮都会跑。
 - **不承诺回滚**：钩子是任意命令，`npm install` 会改写依赖目录、生成器可能删掉不在计划内的旧文件，「工作树与运行前逐字节一致」物理上做不到。工具能保证的是：**本项目改写过的计划内路径**的原文都在 `.xinit/backup/<时间戳>/` 里，钩子写坏的东西需要你用自己的方式恢复（模板侧还有 git）。
-- **平台**：v1 的钩子依赖 `sh`，`sh` 缺失的平台不支持钩子并会明确报错。
+- **平台**：钩子以 `sh -c` 执行（§22.12 维持唯一形态）——PATH 中没有 POSIX `sh` 的平台不支持钩子并会明确报错（Windows 由 Git for Windows 自带 sh 满足）。
 
 ## 11. 已知限制
 
-1. **平台**：v1 面向 unix（macOS / Linux）。钩子以 `sh -c` 执行，没有 `sh` 的平台不支持钩子；Windows 原生支持不在 v1 范围内。
+1. **平台**：macOS / Linux / **Windows 原生**（§22 设计；Windows 真机验证清单见 §22.17——本批含交叉编译门禁与 darwin 可测的代理语义，真机行为未验证）。钩子以 `sh -c` 执行（Windows 用 Git for Windows 自带 sh）；Windows 无「可执行位」语义：exec 记账照常比较与迁移，`check` 的 A9 按平台跳过；`.xinit/lock` 持锁期间（Windows 句柄共享模式）外部工具删不掉；reparse/junction 形态显式拒绝、完整语义未支持（§22.5、§22.16 P6）。
 2. **git 模板的选版（重要）**：`init` **没有** `--revision` 旗标，永远取模板默认分支的 **HEAD**，并在状态里记为 `"HEAD"`——而 `"HEAD"` 无法参与 semver 比较，所以 **`init` 之后第一次 `update` 必须显式写 `--revision <tag>`**（否则退出码 1，报错信息里会提示）。一次对齐之后默认模式即可继续工作。（dir 源没有这个问题：它没有版本概念，首个 `update` 直接跑即可——见第 4 节。）
    建议：模板仓库要发版本就**先打 tag 再让新项目 init**。如果模板的 HEAD 领先于最新 tag，`init` 会把未发布的改动一起带进新项目；随后若按上面的办法对齐到最新 tag，这些改动会被**回退**（工具会打印「目标版本不是当前版本的后代（降级/回退）」的警告，但不会阻止你）。
 3. **不承诺回滚**：见上一节的「不承诺回滚」。
@@ -690,6 +690,8 @@ $ xinit update
 5. **`git ≥ 2.38` 是硬依赖**：启动时检查，不满足即退出。
 6. **M9 之前 init 的存量项目**：若当时在项目目录外以相对路径给出模板源（该相对路径在项目目录内解析不到），`state.template.source` 记录的是相对路径——在项目目录内 `update` 会落入 git URL 分支而失败（历史行为）。把 `.xinit/state.json` 里的 `template.source` 改成绝对路径即可恢复；M9 起 `init`/`adopt` 对本地路径源一律记绝对路径。
 7. **模板源目录迁移/改名**：`state.template.source` 记的是绝对路径——模板目录移动后，把 `.xinit/state.json` 里的 `template.source` 改成新绝对路径即可恢复。
+8. **路径字符收紧（M11 起，§22.4）**：受管路径任一段不得含 `\` 或 `:`（Windows 上分别有分隔符 / 盘符与 ADS 语义）。此前可渲染的 dir 源文件（如 `a\b.txt`、`a:b.txt`）M11 起明确拒绝——请改名，或改用 git 模板源；git 源中不存在这类文件名，不受影响。
+9. **dir 源的版本锚点含 exec 位（§22.7 R4c）**：dir 源树 hash 含可执行位信息——模板目录跨平台复制（如 macOS → Windows）后 exec 记账可能翻转，`update` 可能报告「模板版本变化」类输出而模板内容实际未变（忽略即可，或改用 git 源）。
 
 ## 12. 开发
 
