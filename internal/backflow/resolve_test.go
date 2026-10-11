@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/manifest"
 	"github.com/xbcio/xinit/internal/render"
 )
@@ -533,5 +534,43 @@ func TestApplyMapRejectsIllegalShape(t *testing.T) {
 		if strings.Contains(err.Error(), "已存在") {
 			t.Errorf("非法形状 %q 不得与「已存在」闸门混用同一文案: %v", src, err)
 		}
+	}
+}
+
+// TestValidateTemplatePathForbiddenChars 覆盖 §22.4 的 #7 落点：模板态路径
+// 与正向 validateDstPath 同口径（单点谓词），`\`（Windows 分隔符/逃逸闭合）
+// 与 `:`（盘符/ADS）一律 fail-closed —— 补丁路径最终写进模板仓。
+func TestValidateTemplatePathForbiddenChars(t *testing.T) {
+	for _, p := range []string{`a\b`, `a\..\..\evil`, "C:/x", "C:x", "f.txt:ads", `\\srv\share`} {
+		err := validateTemplatePath(p)
+		if err == nil {
+			t.Fatalf("validateTemplatePath(%q) 必须拒绝（§22.4）", p)
+		}
+		if !strings.Contains(err.Error(), fsutil.ForbidCharsReason) {
+			t.Errorf("validateTemplatePath(%q) 的错误文本必须含冻结理由句：got %q", p, err.Error())
+		}
+	}
+	// 零回归：既有的合法/非法形态口径不变。
+	for _, tc := range []struct {
+		p    string
+		want bool
+	}{
+		{"dir/file.txt", true},
+		{"好/文件.txt", true},
+		{"", false},
+		{"/abs", false},
+		{"a/../b", false},
+		{"a/./b", false},
+		{"a//b", false},
+	} {
+		if got := validateTemplatePath(tc.p) == nil; got != tc.want {
+			t.Errorf("validateTemplatePath(%q) 通过 = %v, want %v", tc.p, got, tc.want)
+		}
+	}
+	// 调用方（ApplyMap）的包裹文案必须带上谓词原文，不被吞掉。
+	r := mkResolverT(t, mainDocT, nil, 0)
+	_, err := r.ApplyMap("foo/x.go", `a\b`)
+	if err == nil || !strings.Contains(err.Error(), fsutil.ForbidCharsReason) {
+		t.Errorf("ApplyMap 必须把谓词理由句带到用户面前：%v", err)
 	}
 }

@@ -166,6 +166,9 @@ func WithinResolvedRoot(root, rel string) (bool, error) {
 		if p == "" || p == "." || p == ".." {
 			return false, fmt.Errorf("非法路径段 %q（%s）", p, rel)
 		}
+		if fsutil.CheckForbiddenChars(p) != nil {
+			return false, fmt.Errorf("非法路径段 %q（%s）", p, rel)
+		}
 	}
 	cur, deepest := rootAbs, rootAbs
 	for _, p := range parts {

@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
-	"strings"
 
+	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/render"
 )
 
@@ -126,19 +125,8 @@ func ReadBase(projectDir, dst string) ([]byte, error) {
 // 模板路径可以引用 vars，而变量未必有 pattern —— 值为 "../../x" 时
 // 写入会穿出项目根。
 func CheckWithinBase(dst string) error {
-	if dst == "" {
-		return fmt.Errorf("base 路径不能为空")
-	}
-	if path.IsAbs(dst) {
-		return fmt.Errorf("base 路径不能是绝对路径: %q", dst)
-	}
-	for _, seg := range strings.Split(dst, "/") {
-		if seg == ".." {
-			return fmt.Errorf("base 路径不能含 .. 段: %q", dst)
-		}
-	}
-	if cleaned := path.Clean(dst); cleaned != dst {
-		return fmt.Errorf("base 路径不规范: %q（Clean 后为 %q）", dst, cleaned)
+	if err := fsutil.CheckRelPath(dst); err != nil {
+		return fmt.Errorf("base 路径%s", err)
 	}
 	return nil
 }

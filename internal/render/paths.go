@@ -3,7 +3,6 @@ package render
 import (
 	"fmt"
 	"io/fs"
-	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -272,6 +271,9 @@ func renderPathVars(src string, v Vars) (string, error) {
 		if strings.Contains(string(out), "/") {
 			return "", fmt.Errorf("路径段 %q 渲染为 %q：含 '/'，会把一个段变成多级目录", seg, out)
 		}
+		if fsutil.CheckForbiddenChars(string(out)) != nil {
+			return "", fmt.Errorf("路径段 %q 渲染为 %q：%s", seg, out, fsutil.ForbidCharsReason)
+		}
 		segs[i] = string(out)
 	}
 	return strings.Join(segs, "/"), nil
@@ -322,6 +324,9 @@ func applyRenames(p string, rules []resolvedRename) (string, error) {
 			return "", fmt.Errorf(
 				"rename 的替换值含 '/'，会把一个路径段变成多级目录（%q → %q）", p, seg)
 		}
+		if fsutil.CheckForbiddenChars(seg) != nil {
+			return "", fmt.Errorf("rename 的替换值%s（%q → %q）", fsutil.ForbidCharsReason, p, seg)
+		}
 		segs[i] = seg
 	}
 	return strings.Join(segs, "/"), nil
@@ -359,22 +364,8 @@ func replaceToken(s, from, to string) string {
 // Clean 之后文件会静默移到上一级。含 / 的值会让一个路径段变成多级目录，
 // 而路径变量未必有 pattern。
 func validateDstPath(dst, src string) error {
-	if dst == "" {
-		return fmt.Errorf("%s: 渲染后的路径为空", src)
-	}
-	if path.IsAbs(dst) {
-		return fmt.Errorf("%s: 渲染后的路径 %q 是绝对路径", src, dst)
-	}
-	for _, seg := range strings.Split(dst, "/") {
-		switch seg {
-		case "":
-			return fmt.Errorf("%s: 渲染后的路径 %q 含空路径段", src, dst)
-		case ".", "..":
-			return fmt.Errorf("%s: 渲染后的路径 %q 含 %q 段", src, dst, seg)
-		}
-	}
-	if cleaned := path.Clean(dst); cleaned != dst {
-		return fmt.Errorf("%s: 渲染后的路径 %q 不规范（Clean 后为 %q）", src, dst, cleaned)
+	if err := fsutil.CheckRelPath(dst); err != nil {
+		return fmt.Errorf("%s: 渲染后的路径%s", src, err)
 	}
 	return nil
 }

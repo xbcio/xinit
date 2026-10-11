@@ -6,7 +6,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -260,18 +259,9 @@ func checkEscapePath(p string) string {
 	return p
 }
 
-// validCheckKey 判定 files 键是否为规范相对路径（§4.3）：非空、非绝对、
-// 按 / 分段无空/"."/".." 段、path.Clean 不变。state.Load 不查，check 补全。
+// validCheckKey 判定 files 键是否为规范相对路径（§4.3、§22.4）：口径 = fsutil.CheckRelPath。
 func validCheckKey(p string) bool {
-	if p == "" || path.IsAbs(p) || path.Clean(p) != p {
-		return false
-	}
-	for _, seg := range strings.Split(p, "/") {
-		if seg == "" || seg == "." || seg == ".." {
-			return false
-		}
-	}
-	return true
+	return fsutil.ValidRelPath(p)
 }
 
 // checkGroupA 执行 A1–A10（§18.2）。返回的错误只来自 IO 意外；

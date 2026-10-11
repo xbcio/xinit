@@ -6,6 +6,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/manifest"
 )
 
@@ -394,6 +395,76 @@ func TestPathsRejectsDotDotSegment(t *testing.T) {
 	fsys := fstest.MapFS{"{{ .slug }}/main.go": &fstest.MapFile{Data: []byte("x")}}
 	if _, _, err := Paths(fsys, c, Vars{"slug": ".."}); err == nil {
 		t.Fatal(".. 段应报错")
+	}
+}
+
+// TestPathsPathVariableValueForbiddenChars 覆盖 §22.4 的 #3 落点：路径段
+// 渲染出的值含 `\` 或 `:` 一律硬错（Windows 上 `\` 亦为分隔符、`:` 承载
+// 盘符/ADS 语义），错误文本带统一理由句。
+func TestPathsPathVariableValueForbiddenChars(t *testing.T) {
+	c := compile(t, "manifest_version: 1\nvars:\n  - name: slug\n")
+	for _, val := range []string{`a\b`, "a:b"} {
+		fsys := fstest.MapFS{"{{ .slug }}/main.go": &fstest.MapFile{Data: []byte("x")}}
+		_, _, err := Paths(fsys, c, Vars{"slug": val})
+		if err == nil {
+			t.Fatalf("路径段渲染为 %q 必须硬错（§22.4）", val)
+		}
+		if !strings.Contains(err.Error(), fsutil.ForbidCharsReason) {
+			t.Errorf("渲染值 %q 的错误文本必须含冻结理由句：got %q", val, err.Error())
+		}
+	}
+}
+
+// TestPathsRenameToForbiddenCharsRejected 覆盖 §22.4 的 #4 落点：rename
+// 替换值含 `\` 或 `:` 同样硬错（替换值会把干净的源路径段变成非法段）。
+func TestPathsRenameToForbiddenCharsRejected(t *testing.T) {
+	c := compile(t, `
+manifest_version: 1
+rename:
+  - from: "xkitora"
+    to: 'a\b'
+`)
+	fsys := fstest.MapFS{"xkitora/main.go": &fstest.MapFile{Data: []byte("x")}}
+	_, _, err := Paths(fsys, c, Vars{})
+	if err == nil {
+		t.Fatal("rename 替换值含 `\\` 必须硬错（§22.4）")
+	}
+	if !strings.Contains(err.Error(), fsutil.ForbidCharsReason) {
+		t.Errorf("错误文本必须含冻结理由句：got %q", err.Error())
+	}
+}
+
+// TestValidateDstPathForbiddenChars 覆盖 §22.4 的 #2 落点。
+func TestValidateDstPathForbiddenChars(t *testing.T) {
+	for _, dst := range []string{`a\b.txt`, "a:b.txt"} {
+		err := validateDstPath(dst, dst)
+		if err == nil {
+			t.Fatalf("validateDstPath(%q) 必须硬错（§22.4）", dst)
+		}
+		if !strings.Contains(err.Error(), fsutil.ForbidCharsReason) {
+			t.Errorf("错误文本必须含冻结理由句：got %q", err.Error())
+		}
+	}
+	// 零回归：既有口径的空路径文案逐字不变（#2 只换判据、不换措辞）。
+	if err := validateDstPath("", "a.go"); err == nil || !strings.Contains(err.Error(), "渲染后的路径为空") {
+		t.Errorf("空渲染路径的文案必须逐字保留：%v", err)
+	}
+}
+
+// TestPathsTighteningOnDiskScan 是行为收紧基线（§22.4）：dir 源磁盘扫描面
+// ——磁盘上的 `a\b.txt` / `a:b.txt` 名在 darwin 上本是「可渲染」，统一谓词后
+// 变为硬错（README 的收紧声明与本用例同源，T7）。
+func TestPathsTighteningOnDiskScan(t *testing.T) {
+	c := compile(t, "manifest_version: 1\n")
+	for _, name := range []string{`a\b.txt`, "a:b.txt"} {
+		fsys := fstest.MapFS{name: &fstest.MapFile{Data: []byte("x")}}
+		_, _, err := Paths(fsys, c, Vars{})
+		if err == nil {
+			t.Fatalf("dir 源里的 %q 必须硬错（§22.4 收紧）", name)
+		}
+		if !strings.Contains(err.Error(), fsutil.ForbidCharsReason) {
+			t.Errorf("%q 的错误文本必须含冻结理由句：got %q", name, err.Error())
+		}
 	}
 }
 

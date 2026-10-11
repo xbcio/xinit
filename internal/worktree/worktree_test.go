@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/xbcio/xinit/internal/fsutil"
@@ -162,5 +163,25 @@ func TestWithinResolvedRoot(t *testing.T) {
 	// 相对 root：内部先做 Abs，不应因相对路径产生假阴性
 	if ok, err := WithinResolvedRoot(".", "internal"); err != nil || !ok {
 		t.Fatalf("相对根：got %v, %v", ok, err)
+	}
+}
+
+// TestWithinResolvedRootForbiddenChars 覆盖 §22.4 的 #9 落点（兜住接驳面）：
+// 段里含 `\` 或 `:` 一律非法，且和既有非法段一样不被「前缀不存在就 break」
+// 短路（先整体校验段、再探前缀）。
+func TestWithinResolvedRootForbiddenChars(t *testing.T) {
+	root := mkTree(t)
+	for _, rel := range []string{`a\b`, "a:b", `a\b/x.txt`, `new/a\..\..\x`} {
+		ok, err := WithinResolvedRoot(root, rel)
+		if err == nil {
+			t.Errorf("WithinResolvedRoot(%q) 必须报错（§22.4）", rel)
+			continue
+		}
+		if ok {
+			t.Errorf("WithinResolvedRoot(%q) 报错时不得返回 true", rel)
+		}
+		if !strings.Contains(err.Error(), "非法路径段") {
+			t.Errorf("错误文案应为「非法路径段」口径：%q", err.Error())
+		}
 	}
 }

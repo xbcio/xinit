@@ -175,6 +175,35 @@ func TestGroupAValidKey(t *testing.T) {
 	}
 }
 
+// TestValidCheckKey 是 A1 键谓词与 §22.4 单点谓词的一致性面（验收 #14 的
+// A1 侧）：既有非法形态零回归，Windows 形态（`\` / 盘符 / ADS）新增拒绝。
+func TestValidCheckKey(t *testing.T) {
+	for p, want := range map[string]bool{
+		"a.txt":        true,
+		"a/b.txt":      true,
+		"sub/d/f.go":   true,
+		"好/文件.txt":     true,
+		"":             false,
+		"../x":         false,
+		"/x":           false,
+		".":            false,
+		"..":           false,
+		"a/./b":        false,
+		"a//b":         false,
+		"a/":           false,
+		"a/..":         false,
+		"./a":          false,
+		`a\b`:          false,
+		"a:b":          false,
+		"C:/x":         false,
+		"f.txt:stream": false,
+	} {
+		if got := validCheckKey(p); got != want {
+			t.Errorf("validCheckKey(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
 func TestGroupAClean(t *testing.T) {
 	// 含子目录的干净项目：目录不入表，A 组零行（§18.9 验收 4 后半）。
 	dir, st := writeStateAndBase(t, map[string][]byte{

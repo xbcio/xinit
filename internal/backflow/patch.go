@@ -9,11 +9,12 @@ import (
 	"mime"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/xbcio/xinit/internal/fsutil"
 )
 
 // ErrAllNoop 是「该提交的改动在模板坐标系下为空」的哨兵（§20.6）：判 noop 的
@@ -315,9 +316,8 @@ func checkShaArg(what, sha string) error {
 // checkSrcPath 是写盘前的路径闸门（§20.7 规则 4 已在解析层闸过合法性，这里是
 // 纵深防御：`filepath.Join(<tmp>, "b", Src)` 的前缀逃逸面 + 非规范形态一律 fail-closed）。
 func checkSrcPath(src string) error {
-	if src == "" || src == "." || strings.HasPrefix(src, "/") ||
-		strings.HasPrefix(src, "../") || strings.HasSuffix(src, "/") || path.Clean(src) != src {
-		return fmt.Errorf("待导出条目的 Src %q 非法：必须是模板树里的规范相对路径（不得为空/绝对/含 `..`/非规范）", src)
+	if !fsutil.ValidRelPath(src) {
+		return fmt.Errorf("待导出条目的 Src %q 非法：必须是模板树里的规范相对路径（不得为空/绝对/含 `..`/含 `\\` 或 `:`/非规范）", src)
 	}
 	return nil
 }

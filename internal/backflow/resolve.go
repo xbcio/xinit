@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/manifest"
 	"github.com/xbcio/xinit/internal/render"
 )
@@ -307,24 +308,7 @@ func (r *Resolver) ApplyMap(dst, src string) (string, error) {
 // 自动候选。`..` 段必须挡在这里 —— 补丁路径最终写进模板仓，穿越段会把目标
 // 带出仓库（fail-closed）。
 func validateTemplatePath(p string) error {
-	if p == "" {
-		return fmt.Errorf("路径为空")
-	}
-	if path.IsAbs(p) {
-		return fmt.Errorf("是绝对路径")
-	}
-	for _, seg := range strings.Split(p, "/") {
-		switch seg {
-		case "":
-			return fmt.Errorf("含空路径段")
-		case ".", "..":
-			return fmt.Errorf("含 %q 段", seg)
-		}
-	}
-	if cleaned := path.Clean(p); cleaned != p {
-		return fmt.Errorf("不规范（Clean 后为 %q）", cleaned)
-	}
-	return nil
+	return fsutil.CheckRelPath(p)
 }
 
 // replayMatches 用合成单文件 FS 做正向重放，判定候选 P 是否恰好渲染为 dst

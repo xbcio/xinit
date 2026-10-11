@@ -3,8 +3,10 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/render"
 )
 
@@ -184,5 +186,37 @@ func TestReadBaseMissing(t *testing.T) {
 	}
 	if _, err := ReadBase(dir, "nope.go"); err == nil {
 		t.Fatal("不存在的 base 应报错")
+	}
+}
+
+// TestCheckWithinBaseWindowsForms 是 §22.4 收紧面：反斜杠逃逸闭合
+// （`filepath.FromSlash` + Clean 归一后出根）与盘符/ADS 形态一律硬错，
+// 错误文本带统一理由句（冻结钉项）。
+func TestCheckWithinBaseWindowsForms(t *testing.T) {
+	for _, p := range []string{`a\..\..\evil`, `a\b`, "C:/x", "f.txt:ads"} {
+		err := CheckWithinBase(p)
+		if err == nil {
+			t.Fatalf("CheckWithinBase(%q) 必须拒绝（§22.4）", p)
+		}
+		if !strings.Contains(err.Error(), fsutil.ForbidCharsReason) {
+			t.Errorf("CheckWithinBase(%q) 的错误文本必须含冻结理由句：got %q", p, err.Error())
+		}
+	}
+	// 零回归：既有合法形态与既有非法形态的口径不动（消息面统一为
+	// `base 路径<谓词片段>`）。
+	for _, tc := range []struct {
+		p    string
+		want bool
+	}{
+		{"a.go", true},
+		{"sub/dir/f.go", true},
+		{"", false},
+		{"/abs/x", false},
+		{"../x", false},
+		{"a/./b", false},
+	} {
+		if got := CheckWithinBase(tc.p) == nil; got != tc.want {
+			t.Errorf("CheckWithinBase(%q) 通过 = %v, want %v", tc.p, got, tc.want)
+		}
 	}
 }

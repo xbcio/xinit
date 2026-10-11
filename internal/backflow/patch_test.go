@@ -552,6 +552,37 @@ func TestBuildPatchFailClosed(t *testing.T) {
 	}
 }
 
+// TestCheckSrcPathForbiddenChars 覆盖 §22.4 的 #8 落点（写盘前的纵深防御）：
+// `\` 与 `:` 形态一律 fail-closed，合法形态零回归。
+func TestCheckSrcPathForbiddenChars(t *testing.T) {
+	for _, src := range []string{`a\b`, `a\..\..\evil`, "C:/x", "C:x", "f.txt:ads", `\\srv\share`} {
+		err := checkSrcPath(src)
+		if err == nil {
+			t.Fatalf("checkSrcPath(%q) 必须拒绝（§22.4）", src)
+		}
+		if !strings.Contains(err.Error(), "规范相对路径") {
+			t.Errorf("拒绝文案要点明「规范相对路径」口径：%q", err.Error())
+		}
+	}
+	for _, tc := range []struct {
+		src  string
+		want bool
+	}{
+		{"dir/file.txt", true},
+		{"好/文件.txt", true},
+		{"", false},
+		{".", false},
+		{"/etc/x", false},
+		{"../out.txt", false},
+		{"a/../b.txt", false},
+		{"a/", false},
+	} {
+		if got := checkSrcPath(tc.src) == nil; got != tc.want {
+			t.Errorf("checkSrcPath(%q) 通过 = %v, want %v", tc.src, got, tc.want)
+		}
+	}
+}
+
 // equalStringsT 比对两个字符串切片（顺序敏感）。
 func equalStringsT(a, b []string) bool {
 	if len(a) != len(b) {
