@@ -46,6 +46,12 @@ func OpenDir(dir string) (fs.FS, error) {
 // （现状不动），再 exclude —— 目录命中 → fs.SkipDir、文件命中 →
 // skip，与 render.Paths 的 §3.2 语义一致（目录被排除后其下 ! 无法
 // 重新包含）。
+//
+// §22.7 R4c 立注：dir 源树 hash **含可执行位**（输入元组/版本锚点契约不破坏，
+// 维持现状）。可观测差异：跨平台移动模板目录（如 macOS → Windows）后 exec
+// 记账可能整体翻转、hash 随之变化，update 可能报告「模板版本变化」类输出而
+// 模板内容实际未变。与快照键「exec 不入键」（§21.9）互指——对象不同：
+// 那里是输入元组，这里是版本锚点。
 func TreeHashOf(dir string, exclude *fsutil.Matcher) (string, error) {
 	fsys := os.DirFS(dir)
 

@@ -283,6 +283,8 @@ func classifyMigrations(projectDir string, actions []plan.Action, base *baseSnap
 		qa.Note = "路径迁移自 " + p.Old + "：本地改动已保留"
 		plan.SettleMergeClean(qa, base.Metas, ours, theirs) // 按 Path=Q 原样调用，不重映射
 		if localExecDiff(p.Old, base.Metas, ours) {
+			// §22.6 立注：该注的出现/消失与 unix 不同——无 x 位语义平台
+			// 上本地 exec 位恒 false，注的触发面随之收窄（可观测差异）。
 			qa.Note += "；新路径保留本地 exec 位"
 		}
 		merged[p.New] = out
