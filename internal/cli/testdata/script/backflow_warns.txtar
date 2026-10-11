@@ -115,6 +115,35 @@ stdout '≥40'
 # 截断而非绕开上限：第 41+ 条不得出现（45 行命中，只列前 40 条）
 ! stdout 'keep/many\.txt:4[1-9]:'
 
+# ── vacuous 的两成因之「全空渲染」（§20.5 ②③，评审 M-2）：规则在、渲染为空串 ──
+# 剔除提示（②）必须与 vacuous 行（③）同时出现——而非被 vacuous 分支吞掉。
+exec git -c init.defaultBranch=main init -q $WORK/tplv
+mkdir $WORK/tplv/keep
+cp $WORK/tplv-xinit.yml $WORK/tplv/xinit.yml
+cp $WORK/k1.txt $WORK/tplv/keep/k.txt
+exec git -C $WORK/tplv add -A
+exec git -C $WORK/tplv commit -qm v1
+exec git -C $WORK/tplv tag v1.0.0
+
+mkdir $WORK/projv
+cd $WORK/projv
+exec git -c init.defaultBranch=main init -q
+xinit init --template $WORK/tplv --yes .
+exec git add -A
+exec git commit -qm c0
+cp $WORK/k2.txt keep/k.txt
+exec git add -A
+exec git commit -qm 'feat: k' -m 'Template-Upstream: yes'
+xinit-code backflow HEAD
+stdout 'exit=0'
+stdout 'backflow-ok keep/k\.txt'
+# ② 剔除提示：逐条点名规则
+stdout '未产出扫描 token'
+stdout 'substitute\[0\]\.to'
+# ③ 空集 vacuous 行（成因＝全空渲染）
+stdout '渲染后为空集（vacuous）'
+stdout '未经硬闸门'
+
 -- xinit.yml --
 manifest_version: 1
 vars:
@@ -132,6 +161,19 @@ upstream:
   # 域判定先于边界分类（域外是硬闸门）：要让 binary/generated/render/symlink
   # 等边界出口在报告里现身，夹具须把它们纳入共享面；out/** 取反留作域外面。
   paths: ["**", "!out/**"]
+-- tplv-xinit.yml --
+manifest_version: 1
+vars:
+  - name: app
+    default: "myapp"
+  - name: opt
+    default: ""
+substitute:
+  - from: "mytmpl"
+    to: "{{ .opt }}"
+    paths: ["**"]
+upstream:
+  paths: ["keep/**"]
 -- prune.txt --
 prune/**
 -- k1.txt --

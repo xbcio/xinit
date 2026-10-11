@@ -109,6 +109,8 @@ xinit-code backflow HEAD
 stdout 'base 与记录 commit 不同源（上一轮 pending 推进过 base）'
 stdout 'keep/k\.txt'
 stdout '先跑 `xinit update` 收敛'
+# 未执行扫描的出口不打扫描段（评审 M-1）
+! stdout '夹带扫描'
 stdout 'exit=1'
 cp $WORK/base-k-save.txt .xinit/base/keep/k.txt
 
@@ -120,6 +122,7 @@ xinit-code backflow HEAD
 stdout 'backflow-excluded other\.txt'
 stdout '不属于共享面（upstream\.paths）'
 stdout '全部路径被出口过滤'
+! stdout '夹带扫描'
 stdout 'exit=1'
 
 # ── 全 noop：改动在模板坐标系下为空 → rc=1（哨兵原文，无计数后缀）──
@@ -131,6 +134,7 @@ stdout 'backflow-noop app\.txt'
 stdout '该提交的改动在模板坐标系下为空'
 # 哨兵原文打印：不得拼 err.Error() 的计数后缀（§20.10 行 13）
 ! stdout 'noop 剔除'
+! stdout '夹带扫描'
 stdout 'exit=1'
 
 # ── 清单缺 upstream.paths 且未给 --paths → rc=1（不得静默「全域外」）──
@@ -155,6 +159,7 @@ exec git commit -qm 'feat: k' -m 'Template-Upstream: yes'
 xinit-code backflow HEAD
 stdout '模板未声明 upstream\.paths'
 stdout '`--paths`'
+! stdout '夹带扫描'
 stdout 'exit=1'
 
 # ── dir 模板源 → 拒绝（无 git blob 可作 pre-image）──
@@ -184,6 +189,9 @@ exec git commit -qm 'feat: k' -m 'Template-Upstream: yes'
 xinit-code backflow HEAD --paths 'keep/**'
 stdout 'exit=0'
 stdout 'backflow-ok keep/k\.txt（来源：--paths）'
+# 扫描段：token 集为空集（成因＝零规则）→ 显式 vacuous 行（§20.5 ③）
+stdout '清单未声明 substitute/rename 规则'
+stdout '未经硬闸门'
 
 # ── 翻译冲突（§20.3 fail-closed）：改动落在替换点行（半径内）→ 冲突、
 #    整体不产补丁、打印三侧冲突块（文案基准表第 11 条）──
@@ -204,6 +212,7 @@ stdout '>>>>>>> theirs'
 stdout '改回模板措辞后重导出'
 stdout '整体 fail-closed 不产补丁'
 ! stdout 'backflow-ok'
+! stdout '夹带扫描'
 ! exists .xinit/backflow
 
 -- xinit.yml --

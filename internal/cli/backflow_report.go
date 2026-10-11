@@ -74,6 +74,10 @@ type BackflowReport struct {
 
 	Untracked []string // 未跟踪文件（守卫 3 警告面）
 
+	// ScanRan 标记夹带扫描是否真的执行过：只有走到补丁生成才算（§20.5 的
+	// 扫描面 = 待导出补丁的新增行）。缺键/成因①/守卫 8/全 noop/冲突这些
+	// 出口没跑扫描，报告不打扫描段——否则「未命中」会被误读成「扫过了没问题」。
+	ScanRan       bool
 	Scans         []backflow.ScanHit // 夹带扫描命中（≤MaxScanHits）
 	ScanTruncated bool               // 命中达上限（打「≥40」）
 	Dropped       []string           // 未产出扫描 token 的规则
@@ -111,7 +115,9 @@ func (r *BackflowReport) Print(w io.Writer) {
 	}
 
 	r.printConflicts(w)
-	r.printScan(w)
+	if r.ScanRan {
+		r.printScan(w)
+	}
 
 	if r.Artifact != "" {
 		label := "产物"
@@ -157,14 +163,24 @@ func (r *BackflowReport) printConflicts(w io.Writer) {
 	fmt.Fprintln(w, "出口：把冲突块内的行改回模板措辞后重导出（§20.3 冲突半径：替换点行 ±1 与紧邻插入都会落进同一 hunk）。")
 }
 
-// printScan 打印夹带扫描段（§20.5）：命中行 / vacuous / dropped + 「未经硬闸门」自陈。
+// printScan 打印夹带扫描段（§20.5）：空渲染剔除提示 / vacuous 行 / 命中行 +
+// 「未经硬闸门」自陈。调用方只在真扫描后调用（见 BackflowReport.ScanRan）。
 func (r *BackflowReport) printScan(w io.Writer) {
+	// §20.5 ②：渲染后为空串（或渲染失败）的 token 剔除并打印一行提示。
+	// 先于 vacuous 分支——「全空渲染」正是 vacuous 的成因之一，剔除提示
+	// 必须随 vacuous 行一起出现（T6 评审 M-2）。
+	r.printDropped(w)
 	if r.Vacuous {
-		fmt.Fprintln(w, "夹带扫描：替换/改名规则的 `to` 渲染后为空集（vacuous），无 token 可查（§20.5）")
+		// §20.5 ③：空集打显式 vacuous 行；两成因措辞分开——「零规则」是清单
+		// 面（模板作者没写替换/改名），「全空渲染」是规则面（写了但渲染为空）。
+		if len(r.Dropped) == 0 {
+			fmt.Fprintln(w, "夹带扫描：清单未声明 substitute/rename 规则（token 集为空），无 token 可查（§20.5 ③ vacuous）")
+		} else {
+			fmt.Fprintln(w, "夹带扫描：替换/改名规则的 `to` 渲染后为空集（vacuous），无 token 可查（§20.5 ③）")
+		}
 		fmt.Fprintln(w, "未经硬闸门：模板作者需人工审查新增行与新增文件路径（§20.5）。")
 		return
 	}
-	r.printDropped(w)
 	if len(r.Scans) == 0 {
 		fmt.Fprintln(w, "夹带扫描：新增行与新增文件路径未命中派生词 token")
 		fmt.Fprintln(w, "未经硬闸门：模板作者仍需人工审查新增行（§20.5）。")

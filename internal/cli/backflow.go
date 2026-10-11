@@ -430,6 +430,8 @@ func runBackflow(o BackflowOptions) (*BackflowReport, error) {
 	rep.fill(items, kept)
 
 	// ── §20.5 夹带扫描（警告级：rc 恒不影响导出完成）──
+	// 只有走到这里（补丁已生成）才置 ScanRan：其余出口不跑扫描、报告不打扫描段。
+	rep.ScanRan = true
 	tokens, dropped, vacuous := backflow.BuildTokens(compiled, st.Vars)
 	rep.Dropped, rep.Vacuous = dropped, vacuous
 	rep.Scans = backflow.Scan(backflow.AddedLinesFromPatch(res.Patch), newFilePaths, tokens)
