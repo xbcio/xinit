@@ -372,6 +372,10 @@ func TestQualifyNonGitDirWrapsGitError(t *testing.T) {
 	if !errors.Is(err, exec.ErrNotFound) {
 		t.Fatalf("应保留底层 exec 错误链（errors.Is(err, exec.ErrNotFound)）；got %v", err)
 	}
+	// G-1：git 进程起不来时 stderr 为空，`runGit` 不该拼出一对空括号（用户可见文案）。
+	if strings.Contains(err.Error(), "（）") {
+		t.Fatalf("stderr 为空时不该出现空括号；got %q", err)
+	}
 }
 
 // assertCriterionText 断言错误里打印了守卫 4 的判据原文（§20.10 文案基准表第 5 行）。
@@ -382,8 +386,11 @@ func assertCriterionText(t *testing.T, err error) {
 
 // assertTrailerCriterionText 断言错误里打印了守卫 5 的判据原文（§20.4 行 5 修订版：
 // 判定全落 parse 输出上，不再声明「逐字匹配」——空白整族属 parse 归一）。
-// 首两段是 spec 核句的**连续子串**（T6 若按 spec 整句断言，子串面仍成立），
-// 末段是「含」字的操作口径澄清。
+// 首段与 spec 核句是**散文句层面的连续子串**：spec 原文该处夹着 markdown 强调符
+// （`提交消息**末段 trailer 块**含 \`Template-Upstream: yes\`（判定全落 …输出上）`），
+// 去掉 `**` 强调符后逐字一致，对 raw markdown 字符串则**不**连续。T6 若做端到端断言，
+// 请以去掉强调符的散文句（或本断言的两段）为准，勿直接对 raw markdown 取子串。
+// 末段（「——键大小写须逐字；空白与 CRLF 属 parse 归一」）是「含」字的操作口径澄清。
 func assertTrailerCriterionText(t *testing.T, err error) {
 	t.Helper()
 	assertContainsAll(t, err, "判据",

@@ -211,7 +211,13 @@ func runGit(dir string, stdin []byte, args ...string) ([]byte, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("跑 git %s 失败：%w（%s）", strings.Join(args, " "), err, firstLine(stderr.String()))
+		// stderr 为空（进程根本没起来，如 git 不在 PATH）时不拼括号，否则用户会看到
+		// 一对空括号「（）」。%w 保留错误链（errors.Is 可用）。
+		suffix := ""
+		if detail := firstLine(stderr.String()); detail != "" {
+			suffix = "（" + detail + "）"
+		}
+		return nil, fmt.Errorf("跑 git %s 失败：%w%s", strings.Join(args, " "), err, suffix)
 	}
 	return stdout.Bytes(), nil
 }

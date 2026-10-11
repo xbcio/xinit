@@ -1,6 +1,7 @@
 package backflow
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,9 +83,13 @@ func hashObjectT(t *testing.T, dir, kind, content string) string {
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e")
 	cmd.Stdin = strings.NewReader(content)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("git hash-object -t %s: %v", kind, err)
+		// 失败带 stderr（调试可读性）。不用 CombinedOutput：stdout 是机器解析的
+		// sha，混入 stderr 会让成功路径也解析出脏值。
+		t.Fatalf("git hash-object -t %s: %v\n%s", kind, err, stderr.String())
 	}
 	return strings.TrimSpace(string(out))
 }
