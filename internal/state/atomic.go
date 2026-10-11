@@ -8,6 +8,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
+)
+
+// 两个注入接缝（§22.18 #8）：单测覆写以模拟 Windows 瞬态/只读目标语义
+// （defer 恢复纪律）。
+var (
+	renameFile      = os.Rename
+	renameRetryable = renameRetryableErr
 )
 
 // WriteFileAtomic 原子地写一个文件。
@@ -52,9 +60,46 @@ func WriteFileAtomic(path string, data []byte, mode fs.FileMode) error {
 		return fmt.Errorf("关闭临时文件: %w", err)
 	}
 
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := renameWithRetry(tmpName, path); err != nil {
 		return fmt.Errorf("rename: %w", err)
 	}
 	tmpName = "" // 已改名，defer 不要再删
 	return nil
+}
+
+// 瞬态 rename 失败的有界重试（§22.8）：Windows 上杀软/索引器会持句柄
+// 数十 ms；最坏 ~270ms 后放弃。unix 分类器恒 false ⇒ 零重试。
+const (
+	renameAttempts = 10
+	renameBackoff  = 30 * time.Millisecond
+)
+
+// renameWithRetry：瞬态错误有界重试；ACCESS_DENIED 且目标只读 → 清目标
+// 只读位 → 重试一次；仍失败 → fail-closed 专用文案（§22.8）。
+func renameWithRetry(tmp, target string) error {
+	var lastErr error
+	for attempt := 0; attempt < renameAttempts; attempt++ {
+		lastErr = renameFile(tmp, target)
+		if lastErr == nil {
+			return nil
+		}
+		if !renameRetryable(lastErr) {
+			break
+		}
+		if attempt < renameAttempts-1 {
+			time.Sleep(renameBackoff)
+		}
+	}
+	if os.IsPermission(lastErr) {
+		if fi, err := os.Lstat(target); err == nil && fi.Mode().IsRegular() &&
+			fi.Mode().Perm()&0o200 == 0 {
+			if cerr := os.Chmod(target, fi.Mode().Perm()|0o200); cerr == nil {
+				if err := renameFile(tmp, target); err == nil {
+					return nil
+				}
+				return fmt.Errorf("%w（目标只读位已清除、写入仍失败）", lastErr)
+			}
+		}
+	}
+	return lastErr
 }
