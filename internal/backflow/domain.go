@@ -22,6 +22,12 @@ const (
 	noteFromBoth     = "来源：清单 upstream.paths、--paths"
 )
 
+// noteMapTargetMissing 是「来源消失」的 `--map` 救援命中失败点子类（§20.5 句 2，M9 注）：
+// 用户给了 `--map A=B` 而 B 不在记录 commit 的模板树中——不再回指 `--map`（循环指引）。
+func noteMapTargetMissing(src string) string {
+	return fmt.Sprintf("`--map` 给出的模板路径 %q 不在记录 commit 的模板树中；请给出正确的模板路径，或人工判断", src)
+}
+
 // BuildItems 把枚举结果 + 状态装配为候选 Items（域判定前）。
 //
 // 装配规则：
@@ -97,11 +103,14 @@ func ResolveDomain(items []Item, tmplFS fs.FS, compiled *manifest.Compiled, flag
 		if it.Exit != ExitExport {
 			continue // 前序阶段已定出口
 		}
+		fromMap := false
 		if s, ok := flagMap[it.Dst]; ok && it.Class == ClassManaged {
 			// --map 对受管路径的救援（§20.5 句 2 文案点名它）。新增文件的
 			// --map 归 §20.7 规则 4（T3 的 ApplyMap，带「P 不得已存在于
-			// 模板树」统一闸门），这里不越俎代庖。
+			// 模板树」统一闸门），这里不越俎代庖。命中失败点（映射目标不在
+			// 模板树）的文案见 noteMapTargetMissing——不再回指 `--map`。
 			it.Src = s
+			fromMap = true
 		}
 		if it.Src == "" {
 			if it.Class == ClassNewFile {
@@ -117,7 +126,11 @@ func ResolveDomain(items []Item, tmplFS fs.FS, compiled *manifest.Compiled, flag
 			case statErr == nil:
 				// 在树中，继续域判定。
 			case errors.Is(statErr, fs.ErrNotExist):
-				it.Exit, it.ExitNote = ExitSourceGone, noteSourceGone
+				if fromMap {
+					it.Exit, it.ExitNote = ExitSourceGone, noteMapTargetMissing(it.Src)
+				} else {
+					it.Exit, it.ExitNote = ExitSourceGone, noteSourceGone
+				}
 				continue
 			default:
 				return false, fmt.Errorf(

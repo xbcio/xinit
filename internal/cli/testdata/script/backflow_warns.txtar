@@ -104,6 +104,12 @@ xinit-code backflow HEAD --map keep/myapp2.txt=keep/k.txt
 stdout 'exit=1'
 stderr '该路径在模板中已存在，不是新增文件'
 
+# ── 观察-3（M9）：`--map` 救援命中失败点单独措辞，非循环指引 ──
+xinit-code backflow --map keep/k.txt=keep/nope.txt HEAD
+stdout 'backflow-excluded keep/k\.txt: `--map` 给出的模板路径 "keep/nope\.txt" 不在记录 commit 的模板树中'
+stdout 'backflow-excluded gone/g\.txt: 该路径的模板来源已不存在'
+stdout 'exit=0'
+
 # ── 扫描 ≤40 截断（§20.5 / §20.10 行 12）：命中 >40 → 逐条只打 40 + 「≥40」──
 exec sh -c 'i=0; while [ $i -lt 45 ]; do echo "line myapp"; i=$((i+1)); done > keep/many.txt'
 exec git add -A

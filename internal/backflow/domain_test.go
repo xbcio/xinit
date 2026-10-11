@@ -369,6 +369,40 @@ func TestResolveDomainMapOnNewFileNotApplied(t *testing.T) {
 	}
 }
 
+func TestResolveDomainMapTargetMissingNote(t *testing.T) {
+	// `--map` 救援命中失败点单独措辞（M8 观察-3）：不再回指 `--map`（循环指引）。
+	c := mkCompiledT(t, upstreamDocT([]string{"**"}))
+	items := []Item{{
+		Dst: "keep/k.txt", Src: "keep/k.txt",
+		Class: ClassManaged, Exit: ExitExport,
+	}}
+	mp := map[string]string{"keep/k.txt": "keep/nope.txt"}
+	if _, err := ResolveDomain(items, mkTreeT(t, "keep/k.txt"), c, nil, mp); err != nil {
+		t.Fatalf("ResolveDomain: %v", err)
+	}
+	if items[0].Exit != ExitSourceGone {
+		t.Fatalf("--map 目标不在模板树 ⇒ ExitSourceGone，got %v", items[0].Exit)
+	}
+	if want := noteMapTargetMissing("keep/nope.txt"); items[0].ExitNote != want {
+		t.Errorf("ExitNote = %q, want %q（逐字）", items[0].ExitNote, want)
+	}
+}
+
+func TestResolveDomainSourceGoneKeepsNoteWithoutMap(t *testing.T) {
+	// 非 `--map` 来源的 ErrNotExist 仍是既有 noteSourceGone（逐字不动），防误伤。
+	c := mkCompiledT(t, upstreamDocT([]string{"**"}))
+	items := []Item{{
+		Dst: "keep/k.txt", Src: "keep/k.txt",
+		Class: ClassManaged, Exit: ExitExport,
+	}}
+	if _, err := ResolveDomain(items, mkTreeT(t), c, nil, nil); err != nil {
+		t.Fatalf("ResolveDomain: %v", err)
+	}
+	if items[0].Exit != ExitSourceGone || items[0].ExitNote != noteSourceGone {
+		t.Errorf("非 --map 来源消失应保持既有文案，got %+v", items[0])
+	}
+}
+
 func TestResolveDomainManagedWithoutSrc(t *testing.T) {
 	// 受管却没有 Src 映射（state 损坏面）：按来源已消失 fail-closed 不导出。
 	c := mkCompiledT(t, upstreamDocT([]string{"**"}))
