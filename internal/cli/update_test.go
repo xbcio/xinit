@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/xbcio/xinit/internal/plan"
 	"github.com/xbcio/xinit/internal/render"
 	"github.com/xbcio/xinit/internal/state"
+	"github.com/xbcio/xinit/internal/template"
 )
 
 // genYAML 是带 generated 声明的清单（生成物跳过的夹具用）。
@@ -822,5 +824,62 @@ func TestOverwrittenPaths(t *testing.T) {
 				t.Errorf("overwrittenPaths = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// §10.2 第 9 步的 M9 C-1 分支（update.go:1132-1141）：base✗ 的 --accept 干净
+// 路径下 files[P] 条目缺失（hadOld=false），保持旧 base 时 Src 必须取本轮模板
+// 映射 newSrc[P]。夹具特意让「模板原路径 ≠ 目标路径」——误把 Dst 当 Src
+// （srcPath = a.Path）在此必红；源名与 dst 同名的 txtar 夹具区分不出这一变异
+// （M9 T4-M1 park 项）。
+func TestAdvanceStateSrcFromNewSrcWithoutFilesEntry(t *testing.T) {
+	const (
+		dst     = "p.txt"
+		srcPath = "src/p.txt.tmpl" // 与 dst 必须不同：同名夹具对本变异无区分力
+	)
+	baseBytes := []byte("old base\n")
+	bin := fsutil.IsBinary(baseBytes)
+	meta := plan.FileMeta{
+		Kind:     render.KindRegular,
+		Binary:   bin,
+		MixedEOL: fsutil.DetectEOL(baseBytes) == fsutil.EOLMixed,
+		Hash:     fsutil.CompareHash(baseBytes, bin),
+	}
+	// st.Files 为空 = files 条目缺失；NewBase == Metas[P] ⇒ advanced=false
+	// （走「保持旧 base」分支，而非推进分支）。
+	st := state.New(EngineVersion)
+	baseSnap := &baseSnapshot{
+		Metas: map[string]plan.FileMeta{dst: meta},
+		Bytes: map[string][]byte{dst: baseBytes},
+	}
+	actions := []plan.Action{{Path: dst, Kind: plan.WriteTheirs, NewBase: &meta}}
+
+	proj := t.TempDir()
+	err := advanceState(proj, st, baseSnap, actions,
+		map[string][]byte{dst: []byte("theirs\n")},
+		map[string]string{dst: srcPath},
+		render.Vars{}, &template.Source{Kind: template.KindDir},
+		false, t.TempDir())
+	if err != nil {
+		t.Fatalf("advanceState: %v", err)
+	}
+
+	fs, ok := st.Files[dst]
+	if !ok {
+		t.Fatalf("state.files[%s] 缺失（保持旧 base 的路径仍须入 files）", dst)
+	}
+	if fs.Src != srcPath {
+		t.Errorf("state.files[%s].Src = %q，want %q（必须取 newSrc[path]，不得用 Dst 顶替）",
+			dst, fs.Src, srcPath)
+	}
+	if fs.Hash != meta.Hash {
+		t.Errorf("state.files[%s].Hash = %q，want %q", dst, fs.Hash, meta.Hash)
+	}
+	got, err := state.ReadBase(proj, dst)
+	if err != nil {
+		t.Fatalf("ReadBase: %v", err)
+	}
+	if !bytes.Equal(got, baseBytes) {
+		t.Errorf("base/%s = %q，want %q（保持旧 base 字节，不写 theirs）", dst, got, baseBytes)
 	}
 }
