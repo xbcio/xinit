@@ -1,0 +1,15 @@
+# O-1（M9）：相对路径模板源 → state 记绝对路径 → 项目内 update 可用。
+# 修复前：update 从项目内按 cwd 解析「tpl」失败 → 落入「本地不存在→git URL」
+# 分支 → `克隆模板仓库 tpl` rc=1。
+
+xinit init --template tpl --yes out
+grep 'source.*/tpl' out/.xinit/state.json
+cd out
+xinit-code update
+stdout 'exit=0'
+cd ..
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+hello

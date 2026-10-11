@@ -676,6 +676,7 @@ $ xinit update
 
    **重试语义**：`fallback` 与非拒绝类的 `skip` 之后该对**不再自动重试**；拒绝类 `skip` 看拒绝落在哪一侧——落在**新路径**（如磁盘上已有同名目录、大小写折叠冲突）时，**本轮新路径不写入（退出码 2）**，移走障碍后重跑会再次配对并完成迁移；落在**旧路径**（删除路径解析逃逸）时，新路径照常写入模板版、该对不再重试，按 `fallback` 的人工去向处理。认不出的情况仍按删除 + 新增处理（本地改过的旧路径保留并告警，报告里没有迁移行）：模板**物理改名的同时改了内容**，以及多个旧路径与新路径无法一一对应的歧义配对。
 5. **`git ≥ 2.38` 是硬依赖**：启动时检查，不满足即退出。
+6. **M9 之前 init 的存量项目**：若当时以相对路径给出模板源，`state.template.source` 记录的是相对路径——在项目目录内 `update` 会落入 git URL 分支而失败（历史行为）。把 `.xinit/state.json` 里的 `template.source` 改成绝对路径即可恢复；M9 起 `init`/`adopt` 对本地路径源一律记绝对路径。
 
 ## 12. 开发
 
@@ -696,4 +697,4 @@ make check     # fmt + vet + test，提交前跑这个
 测试结构：
 
 - **单元测试**在各 `internal/*` 包里（渲染、清单、决策表、合并、状态、模板获取等）。
-- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（53 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt`/`backflow` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
+- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（54 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt`/`backflow` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。

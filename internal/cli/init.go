@@ -256,7 +256,7 @@ func Init(
 	// 7. 写 state.json
 	st := state.New(EngineVersion)
 	st.Template = state.TemplateRef{
-		Source:   templateSrc,
+		Source:   recordTemplateSource(templateSrc),
 		Kind:     src.Kind.String(),
 		Revision: src.Revision,
 		Commit:   src.Commit,
@@ -431,6 +431,19 @@ func checkDestUsable(dest string, force bool) error {
 func gitExcludeReady(dir string) bool {
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--git-path", "info/exclude").Output()
 	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
+// recordTemplateSource 把「本地路径」形态的模板源记为绝对路径（URL 原样）——
+// 否则项目内 update 会把相对路径当 git URL 克隆失败（M9 O-1）。判据与
+// template.Open 的本地分支同口径：os.Stat 得到目录即本地源（git 仓/裸仓
+// 交由 Open 自行分流）。
+func recordTemplateSource(src string) string {
+	if info, err := os.Stat(src); err == nil && info.IsDir() {
+		if abs, err := filepath.Abs(src); err == nil {
+			return abs
+		}
+	}
+	return src
 }
 
 // writeTree 写派生树，返回 (本次创建的路径, 被跳过的路径, 错误)。

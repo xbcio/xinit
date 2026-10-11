@@ -169,7 +169,7 @@ func Adopt(o AdoptOptions) error {
 	// state：base = 渲染结果（不是磁盘内容，§5.3）。
 	st := state.New(EngineVersion)
 	st.Template = state.TemplateRef{
-		Source:   o.Template,
+		Source:   recordTemplateSource(o.Template),
 		Kind:     src.Kind.String(),
 		Revision: src.Revision,
 		Commit:   src.Commit,
