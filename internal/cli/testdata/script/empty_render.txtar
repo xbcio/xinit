@@ -5,11 +5,17 @@
 # ③ 报告照旧打 `accept?` 命令，但它指向的 conflicts/ 条目不存在（照抄必失败）；
 # ④ 无条目 ⇒ 下轮不阻塞 ⇒ 冲突每轮重新提问。
 #
-# 触发条件（唯一途径）：文件整内容经 Go template 渲染为空。夹具里的
-# `{{- "" -}}` 两个 trim 标记吃掉 txtar 正文必然带的尾换行 ⇒ RenderTemplate
-# 的输出恰为 0 字节、bytes.Buffer.Bytes() 返回 nil。纯 0 字节文件（无 `{{`）
-# 不走内容渲染路径，不触发本缺陷。三个模板都要 `render.paths` 声明——
-# 否则 `{{ … }}` 按 ModeSubst 原样透传（§7.1 阶段 5）。
+# 触发条件（**两条途径**，殊途同归到 nil——(a)–(d) 走 ①、(e) 走 ②）：
+#   ① 文件整内容经 Go template 渲染为空（ModeTemplate）：夹具里的 `{{- "" -}}`
+#      两个 trim 标记吃掉 txtar 正文必然带的尾换行 ⇒ RenderTemplate 的输出恰为
+#      0 字节、bytes.Buffer.Bytes() 返回 nil。此途径要求模板声明 `render.paths`
+#      （否则 `{{ … }}` 按 ModeSubst 原样透传，§7.1 阶段 5，根本不会渲染）。
+#   ② 模板文件本身是 0 字节（ModeSubst，无需任何声明）：render.Content 的
+#      ModeSubst 分支里 fsutil.ToLF(raw) 对空输入走 bytes.ReplaceAll 的
+#      append([]byte(nil), s...) ⇒ 同样得到 nil。
+# 两条途径在 BASE（5336a66）上都出 `内部错误：Merge 路径 … 缺三方内容` rc=1，
+# 由同一处归一修复收口；除此之外没有第三条途径（含 `{{` 的非空文件走 ①、
+# 0 字节文件走 ②，二者是全部入口）。
 
 # ════ (a) 症状 1：Merge 空渲染 = 判冲突，不是内部错误 ════
 xinit init --template $WORK/tpl1 --yes p1
@@ -87,6 +93,23 @@ stdout 'exit=2'
 cmp .xinit/conflicts/u.txt $WORK/empty.txt
 cd ..
 
+# ════ (e) 0 字节途径（ModeSubst）：模板文件本身截断为 0 字节 ════
+# 与 (a) 同根、不同途径（头注释 ②）：不声明 render.paths 时内容走 ModeSubst，
+# fsutil.ToLF(空输入) → bytes.ReplaceAll 的 append([]byte(nil), s...) → nil。
+# BASE（5336a66）实测：`内部错误：Merge 路径 "z.txt" 缺三方内容` rc=1；
+# 归一后与 (a) 同一结论：判冲突、条目落 0 字节、rc=2。
+xinit init --template $WORK/tpl4 --yes p4
+cp $WORK/empty.txt $WORK/tpl4/z.txt
+cp $WORK/local-z.txt $WORK/p4/z.txt
+cd p4
+xinit-code update
+! stderr '内部错误'
+stdout 'merge-conflict\s+z\.txt'
+stdout 'exit=2'
+cmp .xinit/conflicts/z.txt $WORK/empty.txt
+cmp z.txt $WORK/local-z.txt
+cd ..
+
 -- tpl1/xinit.yml --
 manifest_version: 1
 render:
@@ -103,6 +126,10 @@ a1
 manifest_version: 1
 render:
   - paths: ["u.txt"]
+-- tpl4/xinit.yml --
+manifest_version: 1
+-- tpl4/z.txt --
+z1
 -- new-a.txt --
 {{- "" -}}
 -- empty-u.txt --
@@ -111,4 +138,6 @@ render:
 local
 -- local-u.txt --
 u-local
+-- local-z.txt --
+local-z
 -- empty.txt --
