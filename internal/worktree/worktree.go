@@ -167,7 +167,9 @@ func WithinResolvedRoot(root, rel string) (bool, error) {
 			return false, fmt.Errorf("非法路径段 %q（%s）", p, rel)
 		}
 		if fsutil.CheckForbiddenChars(p) != nil {
-			return false, fmt.Errorf("非法路径段 %q（%s）", p, rel)
+			// 成因与上面的空/`.`/`..` 段不同，必须带 §22.4 的统一理由句
+			// （M11 终审 M5：Windows 分隔符 / 盘符与 ADS 语义不可辨）。
+			return false, fmt.Errorf("非法路径段 %q（%s）：%s", p, rel, fsutil.ForbidCharsReason)
 		}
 	}
 	cur, deepest := rootAbs, rootAbs

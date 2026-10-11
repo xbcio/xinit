@@ -183,5 +183,8 @@ func TestWithinResolvedRootForbiddenChars(t *testing.T) {
 		if !strings.Contains(err.Error(), "非法路径段") {
 			t.Errorf("错误文案应为「非法路径段」口径：%q", err.Error())
 		}
+		if !strings.Contains(err.Error(), fsutil.ForbidCharsReason) {
+			t.Errorf("错误文案应携带 §22.4 统一理由句：%q", err.Error())
+		}
 	}
 }
