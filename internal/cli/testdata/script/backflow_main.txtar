@@ -1,0 +1,144 @@
+# backflow 主 e2e 往返（§20.8 / §20.10 用例 3 正向）：
+# 模板 git 仓 → init 派生 → 预像区修改（第 10 行，离替换点 ≥3 行）+ trailer →
+# --dry-run 零写 → 导出 exit=0 + 产物 + 接收指引 → 模板仓 `git am -3` →
+# 模板文件 == T+delta、subject 逐字取派生提交 → 发新 tag → 派生 update 零冲突
+# （往返闭合）→ 尾部 check 回归（A/B 组零改动，验收 23）。
+
+env GIT_CEILING_DIRECTORIES=$WORK
+env GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=x@x GIT_COMMITTER_NAME=x GIT_COMMITTER_EMAIL=x@x
+env HOME=$WORK/home
+env XDG_CACHE_HOME=$WORK/home/xdg
+mkdir $WORK/home
+
+# ── 模板仓（git 源）：vars + substitute 规则 + upstream.paths ──
+exec git -c init.defaultBranch=main init -q $WORK/tpl
+cp $WORK/xinit.yml $WORK/tpl/xinit.yml
+mkdir $WORK/tpl/pkg
+cp $WORK/tmpl-lib.go $WORK/tpl/pkg/lib.go
+exec git -C $WORK/tpl add -A
+exec git -C $WORK/tpl commit -qm v1
+exec git -C $WORK/tpl tag v1.0.0
+
+# ── init 派生：模板措辞渲染成派生词 ──
+mkdir $WORK/proj
+cd $WORK/proj
+exec git -c init.defaultBranch=main init -q
+xinit init --template $WORK/tpl --yes .
+cmp pkg/lib.go $WORK/rendered-lib.go
+
+# ── 派生仓：root 提交 + 预像区修改（避开替换邻域）+ trailer ──
+exec git add -A
+exec git commit -qm c0
+cp $WORK/mod-lib.go pkg/lib.go
+exec git add -A
+exec git commit -qm 'feat: extend lib' -m 'Template-Upstream: yes'
+
+# ── --dry-run：全链照跑、零写、不加锁 ──
+xinit-code backflow HEAD --dry-run
+stdout 'exit=0'
+stdout 'backflow-ok pkg/lib.go'
+! exists .xinit/backflow
+# 「不加锁」的直接证据：锁文件也不该出现（init 不建、dry-run 不取）
+! exists .xinit/lock
+
+# ── --out：项目外绝对路径（§20.8）；dry-run 只报将写入的位置 ──
+xinit-code backflow HEAD --dry-run --out $WORK/outdir
+stdout 'exit=0'
+stdout '产物（--dry-run 未写盘）: .*outdir'
+! exists $WORK/outdir
+
+# ── 导出：exit=0 + 产物 + 接收指引（四条前置 + am -3 + abort/continue）──
+xinit-code backflow HEAD
+stdout 'exit=0'
+stdout 'backflow-ok pkg/lib.go'
+stdout '产物: \.xinit/backflow/'
+stdout 'git am -3'
+stdout '--keep-cr'
+stdout 'git am --abort'
+stdout 'git am --continue'
+stdout 'git checkout -b backflow/'
+exec sh -c 'test -f .xinit/backflow/*.patch'
+exec sh -c 'cp .xinit/backflow/*.patch $WORK/out.patch'
+# 翻译正确性的强断言：补丁里不得出现派生词（预像区已还原为模板措辞）
+! grep myapp $WORK/out.patch
+
+# ── 接收：模板仓 am -3 → 模板文件 == T+delta，subject 逐字 ──
+cd $WORK/tpl
+exec git am -3 $WORK/out.patch
+cmp pkg/lib.go $WORK/want-lib.go
+exec git log -1 --format=%s
+stdout 'feat: extend lib'
+
+# ── 往返闭合：模板发新 tag → 派生 update 零冲突、hash 一致 ──
+exec git tag v1.1.0
+cd $WORK/proj
+xinit-code update --revision v1.1.0
+stdout 'exit=0'
+stdout '冲突 0'
+cmp pkg/lib.go .xinit/base/pkg/lib.go
+
+# ── check 回归（验收 23）：.xinit/backflow/ 不干扰 A/B 组 ──
+xinit-code check
+stdout '^检查汇总: 通过'
+! stdout 'FAIL'
+stdout 'exit=0'
+
+-- xinit.yml --
+manifest_version: 1
+vars:
+  - name: app
+    default: "myapp"
+substitute:
+  - from: "mytmpl"
+    to: "{{ .app }}"
+    paths: ["pkg/**"]
+upstream:
+  paths: ["pkg/**"]
+-- tmpl-lib.go --
+package mytmpl
+
+// Lib is a helper.
+func Lib() string {
+	return "mytmpl"
+}
+
+// Extra is a placeholder.
+func Extra() string {
+	return ""
+}
+-- rendered-lib.go --
+package myapp
+
+// Lib is a helper.
+func Lib() string {
+	return "myapp"
+}
+
+// Extra is a placeholder.
+func Extra() string {
+	return ""
+}
+-- mod-lib.go --
+package myapp
+
+// Lib is a helper.
+func Lib() string {
+	return "myapp"
+}
+
+// Extra is a placeholder.
+func Extra() string {
+	return "extra"
+}
+-- want-lib.go --
+package mytmpl
+
+// Lib is a helper.
+func Lib() string {
+	return "mytmpl"
+}
+
+// Extra is a placeholder.
+func Extra() string {
+	return "extra"
+}

@@ -45,6 +45,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newCheckCmd())
 	root.AddCommand(newAdoptCmd())
+	root.AddCommand(newBackflowCmd())
 	return root
 }
 

@@ -1,0 +1,233 @@
+# backflow 守卫与错误面（§20.4 八守卫 / §20.7 表末两行 / §20.5 句 4 / §20.6 全 noop）：
+# rc=1 与文案逐条断言（文案基准表第 1–5、8、13 行）。正向主链在 backflow_main.txtar，
+# 警告不导出面在 backflow_warns.txtar。
+# GIT_CEILING_DIRECTORIES：$WORK 之外即使恰好是 git 仓，也不会被向上找到。
+
+env GIT_CEILING_DIRECTORIES=$WORK
+env GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=x@x GIT_COMMITTER_NAME=x GIT_COMMITTER_EMAIL=x@x
+env HOME=$WORK/home
+env XDG_CACHE_HOME=$WORK/home/xdg
+mkdir $WORK/home
+
+# ── 模板仓（git 源，v1.0.0）：upstream.paths 声明共享面 ──
+exec git -c init.defaultBranch=main init -q $WORK/tpl
+mkdir $WORK/tpl/keep
+cp $WORK/xinit.yml $WORK/tpl/xinit.yml
+cp $WORK/k.txt $WORK/tpl/keep/k.txt
+cp $WORK/app.txt $WORK/tpl/app.txt
+exec git -C $WORK/tpl add -A
+exec git -C $WORK/tpl commit -qm v1
+exec git -C $WORK/tpl tag v1.0.0
+
+# ── 守卫 1：非 git 派生 → 点名 README 的 opt-in 说明 ──
+xinit init --template $WORK/tpl --yes nogit
+cd $WORK/nogit
+xinit-code backflow HEAD
+stderr '回流要求派生项目是 git 仓库（opt-in）'
+stderr 'README「3\.2 生成派生项目」'
+stdout 'exit=1'
+
+# ── 守卫 2：进行中操作——两分支（无法判定 ELOOP / merge 标记存在）──
+mkdir $WORK/proj
+cd $WORK/proj
+exec git -c init.defaultBranch=main init -q
+xinit init --template $WORK/tpl --yes .
+exec git add -A
+exec git commit -qm c0
+
+# 无法判定：自指 symlink 让 os.Stat 得 ELOOP → fail-closed
+symlink .git/MERGE_HEAD -> MERGE_HEAD
+xinit-code backflow HEAD
+stderr '无法判定 MERGE_HEAD 是否存在'
+stderr 'fail-closed'
+stdout 'exit=1'
+rm .git/MERGE_HEAD
+
+# merge 进行中：点名状态与出口命令
+cp $WORK/k.txt .git/MERGE_HEAD
+xinit-code backflow HEAD
+stderr '工作树上有进行中的操作：merge（检测到 MERGE_HEAD）'
+stderr 'git merge --abort'
+stdout 'exit=1'
+rm .git/MERGE_HEAD
+
+# ── 守卫 3：已跟踪文件脏 → 列出路径 + commit/stash 出口 ──
+cp $WORK/other-k.txt keep/k.txt
+xinit-code backflow HEAD
+stderr '工作树有未提交的已跟踪文件改动，拒绝回流：keep/k\.txt；请先 commit 或 git stash 后重跑'
+stdout 'exit=1'
+exec git checkout -q -- keep/k.txt
+
+# ── 守卫 4：root 提交 → 判据原文 + 重拆提交 ──
+xinit-code backflow HEAD
+stderr '是 root 提交（无父提交）'
+stderr '词数 == 2'
+stderr '重拆提交'
+stdout 'exit=1'
+
+# ── 守卫 5：缺 trailer / 正文中间（非末段块）──
+exec git commit -q --allow-empty -m 'feat: no trailer'
+xinit-code backflow HEAD
+stderr '提交消息不含合格的 trailer'
+stderr 'Template-Upstream: yes'
+stdout 'exit=1'
+
+exec git commit -q --allow-empty -m 'feat: mid' -m 'Template-Upstream: yes' -m '尾部正文'
+xinit-code backflow HEAD
+stderr '提交消息不含合格的 trailer'
+stdout 'exit=1'
+
+# ── 守卫 6：空变更（trailer 合格）→ 枚举为空即拒 ──
+exec git commit -q --allow-empty -m 'feat: empty' -m 'Template-Upstream: yes'
+xinit-code backflow HEAD
+stderr '改动枚举为空'
+stdout 'exit=1'
+
+# ── 守卫 4：merge 提交 ──
+exec git checkout -q -b side
+exec git commit -q --allow-empty -m side
+exec git checkout -q main
+exec git merge -q --no-ff -m 'merge side' side
+xinit-code backflow HEAD
+stderr '是 merge 提交（2 个父提交）'
+stdout 'exit=1'
+
+# ── 守卫 7 成因①：base 与记录 commit 不同源 → 整体拒绝（先跑 update 收敛）──
+mkdir $WORK/proj2
+cd $WORK/proj2
+exec git -c init.defaultBranch=main init -q
+xinit init --template $WORK/tpl --yes .
+exec git add -A
+exec git commit -qm c0
+cp $WORK/other-k.txt keep/k.txt
+exec git add -A
+exec git commit -qm 'feat: k' -m 'Template-Upstream: yes'
+
+cp .xinit/base/keep/k.txt $WORK/base-k-save.txt
+cp $WORK/app.txt .xinit/base/keep/k.txt
+xinit-code backflow HEAD
+stdout 'base 与记录 commit 不同源（上一轮 pending 推进过 base）'
+stdout 'keep/k\.txt'
+stdout '先跑 `xinit update` 收敛'
+stdout 'exit=1'
+cp $WORK/base-k-save.txt .xinit/base/keep/k.txt
+
+# ── 守卫 8：全部路径被出口过滤（域外）→ rc=1「nothing to export」语义 ──
+cp $WORK/other.txt other.txt
+exec git add -A
+exec git commit -qm 'feat: other' -m 'Template-Upstream: yes'
+xinit-code backflow HEAD
+stdout 'backflow-excluded other\.txt'
+stdout '不属于共享面（upstream\.paths）'
+stdout '全部路径被出口过滤'
+stdout 'exit=1'
+
+# ── 全 noop：改动在模板坐标系下为空 → rc=1（哨兵原文，无计数后缀）──
+cp $WORK/app.txt app.txt
+exec git add -A
+exec git commit -qm 'feat: back to template' -m 'Template-Upstream: yes'
+xinit-code backflow HEAD
+stdout 'backflow-noop app\.txt'
+stdout '该提交的改动在模板坐标系下为空'
+# 哨兵原文打印：不得拼 err.Error() 的计数后缀（§20.10 行 13）
+! stdout 'noop 剔除'
+stdout 'exit=1'
+
+# ── 清单缺 upstream.paths 且未给 --paths → rc=1（不得静默「全域外」）──
+cd $WORK
+exec git -c init.defaultBranch=main init -q $WORK/tpl2
+mkdir $WORK/tpl2/keep
+cp $WORK/xinit-noup.yml $WORK/tpl2/xinit.yml
+cp $WORK/k.txt $WORK/tpl2/keep/k.txt
+exec git -C $WORK/tpl2 add -A
+exec git -C $WORK/tpl2 commit -qm v1
+exec git -C $WORK/tpl2 tag v1.0.0
+
+mkdir $WORK/proj3
+cd $WORK/proj3
+exec git -c init.defaultBranch=main init -q
+xinit init --template $WORK/tpl2 --yes .
+exec git add -A
+exec git commit -qm c0
+cp $WORK/other-k.txt keep/k.txt
+exec git add -A
+exec git commit -qm 'feat: k' -m 'Template-Upstream: yes'
+xinit-code backflow HEAD
+stdout '模板未声明 upstream\.paths'
+stdout '`--paths`'
+stdout 'exit=1'
+
+# ── dir 模板源 → 拒绝（无 git blob 可作 pre-image）──
+mkdir $WORK/proj4
+cd $WORK/proj4
+exec git -c init.defaultBranch=main init -q
+xinit init --template $WORK/dirtpl --yes .
+exec git add -A
+exec git commit -qm c0
+cp $WORK/other-k.txt a.txt
+exec git add -A
+exec git commit -qm 'feat: a' -m 'Template-Upstream: yes'
+xinit-code backflow HEAD
+stderr '回流要求模板源是 git 源'
+stdout 'exit=1'
+
+# ── --paths 旗标：清单缺键时的显式出口（§20.5 句 4；来源标注逐字）──
+mkdir $WORK/proj5
+cd $WORK/proj5
+exec git -c init.defaultBranch=main init -q
+xinit init --template $WORK/tpl2 --yes .
+exec git add -A
+exec git commit -qm c0
+cp $WORK/other-k.txt keep/k.txt
+exec git add -A
+exec git commit -qm 'feat: k' -m 'Template-Upstream: yes'
+xinit-code backflow HEAD --paths 'keep/**'
+stdout 'exit=0'
+stdout 'backflow-ok keep/k\.txt（来源：--paths）'
+
+# ── 翻译冲突（§20.3 fail-closed）：改动落在替换点行（半径内）→ 冲突、
+#    整体不产补丁、打印三侧冲突块（文案基准表第 11 条）──
+mkdir $WORK/proj6
+cd $WORK/proj6
+exec git -c init.defaultBranch=main init -q
+xinit init --template $WORK/tpl --yes .
+exec git add -A
+exec git commit -qm c0
+exec sh -c 'printf "name: myapp2\n" > app.txt'
+exec git add -A
+exec git commit -qm 'feat: touch token line' -m 'Template-Upstream: yes'
+xinit-code backflow HEAD
+stdout 'exit=1'
+stdout 'conflict app\.txt:1'
+stdout '<<<<<<< ours'
+stdout '>>>>>>> theirs'
+stdout '改回模板措辞后重导出'
+stdout '整体 fail-closed 不产补丁'
+! stdout 'backflow-ok'
+! exists .xinit/backflow
+
+-- xinit.yml --
+manifest_version: 1
+vars:
+  - name: app
+    default: "myapp"
+substitute:
+  - from: "mytmpl"
+    to: "{{ .app }}"
+    paths: ["app.txt"]
+upstream:
+  paths: ["keep/**", "app.txt"]
+-- xinit-noup.yml --
+manifest_version: 1
+-- k.txt --
+k1
+-- other-k.txt --
+k2
+-- app.txt --
+name: mytmpl
+-- other.txt --
+other
+-- dirtpl/xinit.yml --
+manifest_version: 1
+-- dirtpl/a.txt --
+a1
