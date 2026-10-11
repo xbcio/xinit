@@ -206,6 +206,12 @@ func TestAdoptWritesRenderSnapshot(t *testing.T) {
 
 // ④ update 跳过：pending 轮（冲突）commit 不推进，快照一个字节都不许动
 // （写了会覆写掉当下唯一 anchor 相符的有效条目）；收敛轮再重写、anchor 更新。
+//
+// 夹具：本轮除 a.txt 同点冲突（pending）外，模板还新增 b.txt（干净
+// WriteTheirs）。dst 集因此在 pending 轮发生变化（{a.txt} → {a.txt, b.txt}）——
+// 这正是「漏挂 pending 门」唯一可观测的路径：dst 集不变时误写恰好命中写侧
+// 跳过判据（条目与旧 anchor 全匹配）而不可见；变了则整条重写，把 tree/a.txt
+// 覆写成新一轮渲染原文、anchor 却停在旧 commit（条目从此撒谎）。
 func TestUpdatePendingRoundSkipsSnapshot(t *testing.T) {
 	cacheRoot := isolateCacheT(t)
 	repo, proj := initProjectT(t, map[string]string{
@@ -218,9 +224,12 @@ func TestUpdatePendingRoundSkipsSnapshot(t *testing.T) {
 		t.Fatalf("init 轮清单 anchor = %q，want %q", got, initAnchor)
 	}
 
-	// 同点修改 → 冲突轮（pending）。
+	// 同点修改 → 冲突轮（pending）；b.txt 为模板新增。
 	writeFilesT(t, proj, map[string]string{"a.txt": "a\nB_ours\nc\n"})
-	commitT(t, repo, map[string]string{"a.txt": "a\nB_theirs\nc\n"}, "v1.1.0")
+	commitT(t, repo, map[string]string{
+		"a.txt": "a\nB_theirs\nc\n",
+		"b.txt": "new-b\n",
+	}, "v1.1.0")
 	renderDir := filepath.Join(cacheRoot, "render")
 	before := readTreeT(t, renderDir)
 
@@ -231,8 +240,11 @@ func TestUpdatePendingRoundSkipsSnapshot(t *testing.T) {
 	if rep.ExitCode != CodePending {
 		t.Fatalf("同点修改应入冲突轮（退出码 2）: %+v", rep)
 	}
+	if got := mustContent(t, proj, "b.txt"); got != "new-b\n" {
+		t.Fatalf("夹具前提不成立：pending 轮的非冲突路径应照常落盘: %q", got)
+	}
 	if after := readTreeT(t, renderDir); !reflect.DeepEqual(before, after) {
-		t.Error("pending 轮不得触碰 render/ 快照（anchor 未推进，写了会覆掉有效条目）")
+		t.Error("pending 轮不得触碰 render/ 快照（dst 集已变，写了会把旧 anchor 的条目覆写成本轮渲染）")
 	}
 
 	// 收敛轮：本地对齐到 theirs → 非 pending → 条目重写、anchor 更新。
@@ -250,6 +262,9 @@ func TestUpdatePendingRoundSkipsSnapshot(t *testing.T) {
 	}
 	if got := mustContent(t, entry, "tree/a.txt"); got != "a\nB_theirs\nc\n" {
 		t.Errorf("tree/a.txt = %q，want 本轮渲染原文", got)
+	}
+	if got := mustContent(t, entry, "tree/b.txt"); got != "new-b\n" {
+		t.Errorf("tree/b.txt = %q，want 本轮渲染原文", got)
 	}
 }
 
