@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -213,8 +212,8 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 		if acceptSet[p] {
 			continue
 		}
-		if p == "" || path.IsAbs(p) || path.Clean(p) != p || p == ".." || strings.HasPrefix(p, "../") {
-			return nil, fmt.Errorf("--accept %s：必须是 .xinit/conflicts/ 下的规范相对路径（不接受空串、绝对路径、.. 段或未规范化写法，§10.3）", p)
+		if !fsutil.ValidRelPath(p) {
+			return nil, fmt.Errorf("--accept %s：必须是 .xinit/conflicts/ 下的规范相对路径（不接受空串、绝对路径、.. 段、含 `\\` 或 `:` 或未规范化写法，§10.3）", p)
 		}
 		if prunedWithAccept[p] {
 			return nil, fmt.Errorf("--accept %s：该路径已在 .xinit/prune.txt 中，已脱离管理、无需 accept（§10.3）", p)
