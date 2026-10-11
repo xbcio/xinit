@@ -196,6 +196,10 @@ func Adopt(o AdoptOptions) error {
 		return fmt.Errorf("写 .git/info/exclude: %w", err)
 	}
 
+	// 快照写侧挂点（§21.5）：SyncBase 与 st.Save 之后；EnsureGitExcluded 失败
+	// 即整命令失败，不写快照是正确取舍。字节源 = rendered（全量渲染结果）。
+	writeSnapshotBestEffort(cacheRoot, st, rendered)
+
 	// 磁盘 vs 渲染：差异即「本地改动」（§5.3 输出的一部分）。
 	all := make([]string, 0, len(entries))
 	theirs := make(plan.Snap, len(entries))

@@ -487,7 +487,7 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	rep.Pending = pending
 
 	// 16. 第 9 步：推进 state 与 .xinit/base/（先 base 后 state，含写入自检）
-	if err := advanceState(projectDir, st, baseSnap, actions, theirsRendered, newSrc, vars, src, pending); err != nil {
+	if err := advanceState(projectDir, st, baseSnap, actions, theirsRendered, newSrc, vars, src, pending, cacheRoot); err != nil {
 		return nil, err
 	}
 
@@ -1093,6 +1093,7 @@ func joinNote(note, extra string) string {
 func advanceState(projectDir string, st *state.State, baseSnap *baseSnapshot,
 	actions []plan.Action, theirsRendered map[string][]byte,
 	newSrc map[string]string, vars render.Vars, src *template.Source, pending bool,
+	cacheRoot string,
 ) error {
 	newFiles := make(map[string]state.FileState, len(actions))
 	entries := make([]render.Entry, 0, len(actions))
@@ -1189,7 +1190,19 @@ func advanceState(projectDir string, st *state.State, baseSnap *baseSnapshot,
 		st.Template.Revision = src.Revision
 		st.Template.Commit = src.Commit
 	}
-	return st.Save(projectDir)
+	if err := st.Save(projectDir); err != nil {
+		return err
+	}
+
+	// 快照写侧挂点（§21.5）：必须在 st.Save 成功之后（键的 vars 分量 =
+	// 停盘值）；pending 轮 commit 不推进，写了不仅 anchor ≠ st.Template.Commit，
+	// 更会覆写掉当下唯一 anchor 相符的有效条目——跳过。字节源 =
+	// theirsRendered（全量渲染原文；不得取 blobs 混合体——保持旧值路径装的
+	// 是旧 base 字节）。best-effort：失败只警告，不影响命令。
+	if !pending {
+		writeSnapshotBestEffort(cacheRoot, st, theirsRendered)
+	}
+	return nil
 }
 
 // hasConfirmed 报告 trusted 里是否存在任何已确认记录（非空版本值）。
