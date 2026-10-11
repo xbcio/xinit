@@ -9,6 +9,8 @@ cd proj
 xinit-code adopt --template $WORK/tpl --config $WORK/vars.yml
 stdout '基线已重建：3 个文件'
 stdout '本地改动 2 个文件'
+stdout '本地版本与模板新内容已一致时行 4 静默收敛'
+stdout '模板之后也改到它时保留删除并告警'
 stdout 'local-diff\s+a\.txt'
 stdout 'local-diff\s+c\.txt'
 stdout '选错版本'

@@ -423,7 +423,8 @@ func checkDestUsable(dest string, force bool) error {
 // state.EnsureGitExcluded 能真正落地 .git/info/exclude 的情形。判据与
 // state 包内 GitExcludePath 是同一条查询（git rev-parse --git-path，
 // worktree/submodule 下 .git 是文件，直接拼路径会写错地方）。返回 false
-// 时调用点按「不在 git 仓库内」提示：这是唯一可达的失败原因——git 可执行
+// 时调用点按「不在 git 仓库内」提示：实际可达的失败原因即「非 git 仓/仓库不可用」
+// （safe.directory/dubious ownership、`.git` 损坏等同样落此）；git 可执行
 // 文件缺失/不可用会先被 Execute 的 RequireGit 拦下（rc=1，到不了这里）。
 // v1.0.1 评审 Nit-2 的「git 缺失时 init 本可成功、提示原因略失真」前提经
 // 实测不成立（PATH 去掉 git：rc=1、报「未找到 git」），故不增设「未找到 git」

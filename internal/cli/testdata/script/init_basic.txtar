@@ -1,6 +1,8 @@
 # init 一个最小模板，核对派生树、state 与 base 三处产物一致
 
 xinit init --template tpl --yes out
+stderr '提示: 当前目录不在 git 仓库内'
+stderr '建仓后 update 会自动补写该 exclude'
 cmp out/xdesk/main.go want/main.go
 cmp out/.xinit/base/xdesk/main.go want/main.go
 exists out/.xinit/state.json

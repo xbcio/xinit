@@ -571,7 +571,7 @@ func openTarget(st *state.State, rev, cacheRoot string, fetch bool) (*template.S
 	// 警告但不阻止——模板发了坏版本时用户需要能回退。回退不是「模板改动不出
 	// 现」那么轻：磁盘上已有的内容会被改写或删除、回退到目标版本的旧内容
 	//（未被本地改过的路径走行 2 覆盖／行 8 删除，原内容在 .xinit/backup/
-	// 保留），本地改过的路径走合并/冲突（行 6/7，不会被静默回退）。发布批次
+	// 保留），本地改动走合并/冲突、本地删除保留删除（行 6/7/10/11，不会被静默回退）。发布批次
 	// O2/场景 7.5 实测：模板 HEAD 领先 tag 时 init 带入的未发布改动正是这样
 	// 被写回 tag 内容的。
 	if rev != "" && st.Template.Revision != "" && rev != st.Template.Revision {
@@ -581,7 +581,7 @@ func openTarget(st *state.State, rev, cacheRoot string, fetch bool) (*template.S
 			fmt.Fprintf(os.Stderr, "xinit: 警告: 无法判断 %s 是否为 %s 的后代: %v\n", rev, st.Template.Revision, err)
 		case !anc:
 			fmt.Fprintf(os.Stderr,
-				"xinit: 警告: 目标版本 %s 不是当前版本 %s 的后代（降级/回退）：磁盘上已有的内容会被改写或删除、回退到 %s 的版本（原内容在 .xinit/backup/ 保留；本地改过的路径走合并/冲突）；两版之间模板的改动不会出现在本项目里，之后可能被误判为本地改动（§11.3）\n",
+				"xinit: 警告: 目标版本 %s 不是当前版本 %s 的后代（降级/回退）：磁盘上已有的内容会被改写或删除、回退到 %s 的版本（原内容在 .xinit/backup/ 保留；本地改动走合并/冲突或保留删除、均不会被静默回退）；两版之间模板的改动不会出现在本项目里，之后可能被误判为本地改动（§11.3）\n",
 				rev, st.Template.Revision, rev)
 		}
 	}
