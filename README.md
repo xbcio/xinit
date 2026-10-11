@@ -596,7 +596,7 @@ $ xinit update
 
 ### 用户缓存目录与渲染快照缓存
 
-`init` / `adopt` 成功、`update` **收敛轮**（无未解决冲突）成功后（均在项目状态成功落盘之后），会把本轮**渲染原文**顺手写一份到用户级缓存目录（best-effort：写失败只在 stderr 警告，命令照常成功、项目状态零影响；§21）。它**只用于**在项目内 `.xinit/base/`（基线树）丢失或损坏时作恢复来源——覆盖「dir 源 base 丢失」与「git 源记录的 commit 在模板源中取不到」这两个原本只能 `adopt`（或硬错）的口子；**恢复链**在 base 健康时不读快照（零命中也不创建缓存根）。
+`init` / `adopt` 成功、`update` **收敛轮**（无未解决冲突、折叠拒绝或障碍物）成功后（均在项目状态成功落盘之后），会把本轮**渲染原文**顺手写一份到用户级缓存目录（best-effort：写失败只在 stderr 警告，命令照常成功、项目状态零影响；§21）。它**只用于**在项目内 `.xinit/base/`（基线树）丢失或损坏时作恢复来源——覆盖「dir 源 base 丢失」与「git 源记录的 commit 在模板源中取不到」这两个原本只能 `adopt`（或硬错）的口子；**恢复链**在 base 健康时不读快照（零命中也不创建缓存根）。
 
 - **位置**：`<UserCacheDir>/xinit/render/<familyKey>/`——darwin 为 `~/Library/Caches/xinit/render/`，Linux 为 `$XDG_CACHE_HOME/xinit/render/`；条目内是 `manifest.json`（清单）与 `tree/<Dst>`（逐路径的渲染原文）。
 - **可整体删除**：`rm -rf <cacheRoot>/render`（`<cacheRoot>` 即 `<UserCacheDir>/xinit`）——删掉后行为与没有快照一致，这也是快照损坏时的维修指引。

@@ -1196,10 +1196,12 @@ func advanceState(projectDir string, st *state.State, baseSnap *baseSnapshot,
 	}
 
 	// 快照写侧挂点（§21.5）：必须在 st.Save 成功之后（键的 vars 分量 =
-	// 停盘值）；pending 轮 commit 不推进，写了不仅 anchor ≠ st.Template.Commit，
-	// 更会覆写掉当下唯一 anchor 相符的有效条目——跳过。字节源 =
-	// theirsRendered（全量渲染原文；不得取 blobs 混合体——保持旧值路径装的
-	// 是旧 base 字节）。best-effort：失败只警告，不影响命令。
+	// 停盘值）；pending 轮 commit 不推进，写了 anchor 由 st.Template.Commit
+	// 派生即等于它，tree 装的却是本轮（新目标 commit）渲染原文——会把当下
+	// 唯一对该 anchor 有效的条目覆写成与旧 commit 原文不一致的内容（旧原文
+	// 从此不可恢复），故跳过。字节源 = theirsRendered（全量渲染原文；不得取
+	// blobs 混合体——保持旧值路径装的是旧 base 字节）。best-effort：失败只
+	// 警告，不影响命令。
 	if !pending {
 		writeSnapshotBestEffort(cacheRoot, st, theirsRendered)
 	}
