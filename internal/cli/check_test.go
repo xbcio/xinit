@@ -665,7 +665,7 @@ func TestGroupDDirSource(t *testing.T) {
 	texts := lineTexts(lines)
 	want := []string{
 		"skip dir 源：无版本概念（§11.4）",
-		"skip dir 源无历史版本：base 一旦丢失只能 adopt（§5.2）",
+		"skip dir 源无历史版本：base 丢失时仅当渲染快照可用时可自动恢复，否则只能 adopt（§5.2、§21）",
 	}
 	if !slices.Equal(texts, want) {
 		t.Errorf("D 组 = %v, want %v", texts, want)
@@ -794,7 +794,7 @@ func TestGroupDCommitMissing(t *testing.T) {
 	texts := lineTexts(lines)
 	want := []string{
 		fmt.Sprintf("warn engine_version 记录 v0，当前 %s——渲染结果可能有漂移（§7.6）", EngineVersion),
-		"warn 记录的 commit " + missing + " 在模板源中取不到：base 一旦损坏将无法自动重建（§5.2）",
+		"warn 记录的 commit " + missing + " 在模板源中取不到：base 损坏时仅当渲染快照可用时可自动重建，否则无法自动重建（§5.2、§21）",
 	}
 	if !slices.Equal(texts, want) {
 		t.Errorf("D 组 = %v, want %v（D2 须在 D3 之前）", texts, want)
@@ -842,7 +842,7 @@ func TestGroupDFetchRefreshesMirror(t *testing.T) {
 		d1 := `skip 记录的 revision "main" 不是 vX.Y.Z 格式，无法做版本比较（§11.4）`
 
 		_, lines := runGroupD(t, dir, st, false)
-		want := []string{d1, "warn 记录的 commit " + newer + " 在模板源中取不到：base 一旦损坏将无法自动重建（§5.2）"}
+		want := []string{d1, "warn 记录的 commit " + newer + " 在模板源中取不到：base 损坏时仅当渲染快照可用时可自动重建，否则无法自动重建（§5.2、§21）"}
 		if texts := lineTexts(lines); !slices.Equal(texts, want) {
 			t.Errorf("fetch=false（陈旧镜像）D 组 = %v, want %v", texts, want)
 		}

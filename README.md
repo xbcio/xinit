@@ -594,6 +594,16 @@ $ xinit update
 | `lock` | 项目锁，防止并发 `update`（`diff` / `status` / `check` 只读不加锁） |
 | `prune.txt` | 一行一个路径：这些路径脱离管理、不再同步 |
 
+### 用户缓存目录与渲染快照缓存
+
+`init` / `update` / `adopt` 在项目状态成功落盘后，会把本轮**渲染原文**顺手写一份到用户级缓存目录（best-effort：写失败只在 stderr 警告，命令照常成功、项目状态零影响；§21）。它**只用于**在项目内 `.xinit/base/`（基线树）丢失或损坏时作恢复来源——覆盖「dir 源 base 丢失」与「git 源记录的 commit 在模板源中取不到」这两个原本只能 `adopt`（或硬错）的口子；base 健康时不读快照、不触缓存。
+
+- **位置**：`<UserCacheDir>/xinit/render/<familyKey>/`——darwin 为 `~/Library/Caches/xinit/render/`，Linux 为 `$XDG_CACHE_HOME/xinit/render/`；条目内是 `manifest.json`（清单）与 `tree/<Dst>`（逐路径的渲染原文）。
+- **可整体删除**：`rm -rf <cacheRoot>/render`（`<cacheRoot>` 即 `<UserCacheDir>/xinit`）——删掉后行为与没有快照一致，这也是快照损坏时的维修指引。
+- **无 GC**：每族（= 一个「输入元组」：引擎版本、模板来源、种类、变量）至多一份条目，写入即整条覆写轮转；总量 = 去重后的输入元组数，随使用缓慢增长、**无自动清理**。
+- **已知限制（跨项目同族边界）**：同 (engine, source, kind, vars) 的两个项目钉在不同 commit 时，后写者覆写前者的条目（last-manifest-wins）——前者此后 base 丢失只能走 git 重渲染回退 / dir 硬错。
+- **引擎升级后**：旧条目自然失效（校验不过即静默 miss），可手工删除。
+
 ## 8. 退出码表
 
 | 码 | 含义 |

@@ -501,7 +501,9 @@ func checkTemplateSide(r *checkReport, st *state.State, fetch bool) (func(), err
 	// 分支二：dir 源。
 	if tpl.Kind == template.KindDir.String() {
 		r.skip(secD, "dir 源：无版本概念（§11.4）")
-		return func() { r.skip(secD, "dir 源无历史版本：base 一旦丢失只能 adopt（§5.2）") }, nil
+		return func() {
+			r.skip(secD, "dir 源无历史版本：base 丢失时仅当渲染快照可用时可自动恢复，否则只能 adopt（§5.2、§21）")
+		}, nil
 	}
 
 	// 分支三：git 源。
@@ -540,7 +542,7 @@ func checkTemplateSide(r *checkReport, st *state.State, fetch bool) (func(), err
 	// D3：只读 ls-tree 判可取（不用 NewGitFS——其 loadBlobs 全量读内容）。
 	if _, err := template.ListTree(repoDir, tpl.Commit); err != nil {
 		return func() {
-			r.warn(secD, "记录的 commit %s 在模板源中取不到：base 一旦损坏将无法自动重建（§5.2）",
+			r.warn(secD, "记录的 commit %s 在模板源中取不到：base 损坏时仅当渲染快照可用时可自动重建，否则无法自动重建（§5.2、§21）",
 				checkEscapePath(tpl.Commit))
 		}, nil
 	}

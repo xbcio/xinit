@@ -97,7 +97,7 @@ exec sed -e 's|"commit": "[0-9a-f]*"|"commit": "0123456789abcdef0123456789abcdef
 cp stdout .xinit/state.json
 xinit-code check
 stdout '^  warn  本地镜像中有 2 个更高的 semver tag'
-stdout '^  warn  记录的 commit 0123456789abcdef0123456789abcdef01234567 在模板源中取不到：base 一旦损坏将无法自动重建（§5\.2）$'
+stdout '^  warn  记录的 commit 0123456789abcdef0123456789abcdef01234567 在模板源中取不到：base 损坏时仅当渲染快照可用时可自动重建，否则无法自动重建（§5\.2、§21）$'
 stdout '^检查汇总: 通过（0 项失败、2 项警告、0 项跳过）$'
 stdout 'exit=0'
 cp $WORK/pristine.json .xinit/state.json
