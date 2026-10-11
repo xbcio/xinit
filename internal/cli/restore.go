@@ -134,7 +134,9 @@ func restoreBase(projectDir string, st *state.State, cacheRoot string, need []st
 		}
 		if !readOnly {
 			if err := state.WriteFileAtomic(filepath.Join(base, filepath.FromSlash(dst)), content, mode); err != nil {
-				return fmt.Errorf("从渲染快照恢复 base/%s: %w%s", dst, err, adoptHint)
+				// 尾注含**此前**已成功写回项（失败项未 append）——与既有硬
+				// 错误点的 note 规则一致；无已恢复项时文本逐字不变。
+				return fmt.Errorf("从渲染快照恢复 base/%s: %w%s%s", dst, err, adoptHint, snapshotNote(snap.Restored))
 			}
 		}
 		snap.Metas[dst] = metaFromFileState(fst, content)

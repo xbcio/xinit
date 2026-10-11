@@ -59,7 +59,7 @@ const conflictExitsAccept = "        若解决结果与模板不同，用上面�
 // conflictExitsPrune 是出路二。
 const conflictExitsPrune = "出路二：把路径写进 .xinit/prune.txt，使其脱离管理（模板对它的改动不再同步）。\n"
 
-// restoredLineFmt 是「base 恢复」行（§21.6-4 / §21.8 判据 18）——restore.go
+// restoredLineFmt 是「base 恢复」行（§21.6-4 / §21.11 项 18）——restore.go
 // 的硬错误尾注（snapshotNote，判据 10）共用同一串，文案单一来源。
 const restoredLineFmt = "base 恢复（来自渲染快照，不依赖模板源，§5.2、§21）：%d 条"
 

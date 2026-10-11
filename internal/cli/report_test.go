@@ -123,7 +123,7 @@ func TestShellQuoteRoundTrip(t *testing.T) {
 	}
 }
 
-// 快照恢复行（§21.6-4 / §21.8 判据 18）：文案逐字、位置在「base 降级」块
+// 快照恢复行（§21.6-4 / §21.11 项 18）：文案逐字、位置在「base 降级」块
 // 之前、仅 Restored > 0 时输出。
 func TestUpdateReportPrintRestoredLine(t *testing.T) {
 	rep := &UpdateReport{

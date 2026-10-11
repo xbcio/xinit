@@ -443,3 +443,83 @@ func TestRestoreBaseRecoveredExecMode(t *testing.T) {
 		t.Errorf("恢复的 base/run.sh 权限 = %v，应为 0755", info.Mode().Perm())
 	}
 }
+
+// Minor-1（评审 fix 轮）：前置级的写回失败同样尾附**此前**成功恢复项的
+// 恢复行（与既有硬错误点的 note 规则一致）——3 文件、快照含 a.txt/b.txt、
+// b.txt 的写回注入失败（base 下 b.txt 位置预放目录 → 原子写的 rename
+// 文件→目录必败）；此时 snap.Restored 已含 a.txt，尾注应为「1 条」。
+func TestRestoreBaseSnapshotWriteFailureCarriesRecoveryLine(t *testing.T) {
+	cacheRoot := t.TempDir()
+	dir := projectWithState(t, state.TemplateRef{Source: "/nonexistent", Kind: "dir", Commit: "treehash-v1"},
+		map[string]state.FileState{
+			"a.txt": textState("a.txt", "A\n"),
+			"b.txt": textState("b.txt", "B\n"),
+			"c.txt": textState("c.txt", "C\n"),
+		})
+	seedSnapshotT(t, dir, cacheRoot, map[string][]byte{
+		"a.txt": []byte("A\n"),
+		"b.txt": []byte("B\n"),
+	})
+	if err := os.MkdirAll(filepath.Join(state.BaseDir(dir), "b.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+	if err == nil {
+		t.Fatal("b.txt 写回失败应报错（rc=1 半写回）")
+	}
+	if !strings.Contains(err.Error(), "从渲染快照恢复 base/b.txt") {
+		t.Errorf("错误应指向快照恢复写回点：%v", err)
+	}
+	if !strings.Contains(err.Error(), "adopt") {
+		t.Errorf("错误应保持 adopt 指引：%v", err)
+	}
+	want := "base 恢复（来自渲染快照，不依赖模板源，§5.2、§21）：1 条"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("写失败尾注应含此前成功恢复项的恢复行：\n got %q\nwant 含 %q", err.Error(), want)
+	}
+	if !strings.HasSuffix(err.Error(), want) {
+		t.Errorf("恢复行应在错误文本尾部：%v", err)
+	}
+	// 半写回：错误发生前已恢复的 a.txt 已落盘。
+	if got := mustContent(t, state.BaseDir(dir), "a.txt"); got != "A\n" {
+		t.Errorf("base/a.txt = %q，want 已写回 %q", got, "A\n")
+	}
+}
+
+// Minor-2（评审 fix 轮）：git 源零命中（条目在、anchor 与 state 不符 → 整体
+// miss，§21.3 anchor 不进键）时的硬错文本与无快照运行**逐字全等**——
+// restored == 0 时尾注为空串的正面锚（既有用例只做 contains）。
+func TestRestoreBaseGitZeroHitErrorTextVerbatim(t *testing.T) {
+	cacheRoot := t.TempDir()
+	repo, commit := mkTemplateRepoT(t, map[string]string{"xinit.yml": tmplYAML, "a.txt": "hello\n"})
+	// 项目 state 记录的 commit 取不回来（硬错面）。
+	dir := projectWithState(t, state.TemplateRef{
+		Source: repo, Kind: "git", Revision: "main",
+		Commit: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+	}, map[string]state.FileState{"a.txt": textState("a.txt", "hello\n")})
+	// 快照条目在（同键：engine/source/kind/vars 全同），但 anchor = 真实
+	// commit ≠ state.Commit → 整体 miss（零命中且条目确实存在）。
+	stSnap := mustLoadState(t, dir)
+	stSnap.Template.Commit = commit
+	if err := renderstore.Write(stSnap, cacheRoot, map[string][]byte{"a.txt": []byte("hello\n")}); err != nil {
+		t.Fatalf("造快照夹具: %v", err)
+	}
+
+	// 对照组：无快照（cacheRoot 不存在）跑同一 state。
+	ctrl := filepath.Join(t.TempDir(), "no-cache")
+	_, ctrlErr := loadBase(dir, mustLoadState(t, dir), ctrl, false)
+	_, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+	if err == nil || ctrlErr == nil {
+		t.Fatalf("旧 commit 不可取应硬错：err=%v ctrlErr=%v", err, ctrlErr)
+	}
+	if !strings.Contains(err.Error(), "已不可取到") {
+		t.Errorf("应保持现行「已不可取到」逐字句：%v", err)
+	}
+	if err.Error() != ctrlErr.Error() {
+		t.Errorf("零命中硬错文本必须与无快照逐字全等：\n got %q\nwant %q", err.Error(), ctrlErr.Error())
+	}
+	if strings.Contains(err.Error(), "base 恢复") {
+		t.Errorf("零命中不得出现恢复行（restored==0 文本逐字不变）：%v", err)
+	}
+}
