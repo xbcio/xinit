@@ -496,6 +496,25 @@ func TestApplyMapRejectsExistingTemplatePath(t *testing.T) {
 	}
 }
 
+// ---------------- 空值变量（T6 评审 M-4 / T3 评审 M-1）----------------
+
+// TestResolveNewEmptyVarValueProducesNoCandidate 钉 segmentOptions 的
+// `val == ""` 剥离判据（resolve.go：空串在任何段里都「命中」，不剥离会按
+// strings.ReplaceAll(seg, "", …) 产出「每字符间插占位符」的病态候选）。
+//
+// 该候选并非无害：它在正向重放里同样落回同一 Dst（`{{ .opt }}` 渲染为空串），
+// 与恒等候选构成二义 —— 本可自动解析的新增文件会被推给 `--map` 人工出口
+// （变异 M-D：删该判据后本用例翻红，包内其余测试与三条 e2e 全部存活）。
+func TestResolveNewEmptyVarValueProducesNoCandidate(t *testing.T) {
+	const emptyVarDocT = `
+manifest_version: 1
+vars:
+  - name: opt
+    default: ""
+`
+	hitsOf(t, mkResolverT(t, emptyVarDocT, nil, 0), "new.txt", "new.txt")
+}
+
 func TestApplyMapRejectsIllegalShape(t *testing.T) {
 	// 统一闸门的路径合法性面：`..` 穿越 / 绝对路径 / 中间 `../..` / 空路径 /
 	// 不规范路径全 fail-closed（T2 评审 O-4 的探针形态组；与 T2 `ResolveDomain`

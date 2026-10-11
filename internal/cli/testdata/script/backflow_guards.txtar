@@ -215,6 +215,22 @@ stdout '整体 fail-closed 不产补丁'
 ! stdout '夹带扫描'
 ! exists .xinit/backflow
 
+# ── --map 形状非法 / 重复 Dst：fail-closed（stderr + rc=1；T6 评审 M-5）──
+# 闸门在 state.Load 之前（parseMapFlags 是 runBackflow 的第一步）：形状错误不
+# 依赖项目状态即可判；同一 Dst 给两次不得静默取后者（长命令行的笔误面）。
+xinit-code backflow HEAD --map =keep/k.txt
+stderr '--map "=keep/k\.txt" 形状非法'
+stdout 'exit=1'
+xinit-code backflow HEAD --map keep/k.txt=
+stderr '形状非法'
+stdout 'exit=1'
+xinit-code backflow HEAD --map keep/k.txt
+stderr '形状非法'
+stdout 'exit=1'
+xinit-code backflow HEAD --map keep/k.txt=keep/a.txt --map keep/k.txt=keep/b.txt
+stderr 'Dst keep/k\.txt 重复给出'
+stdout 'exit=1'
+
 -- xinit.yml --
 manifest_version: 1
 vars:

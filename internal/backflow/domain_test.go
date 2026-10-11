@@ -199,6 +199,30 @@ func TestResolveDomainUnionAndProvenance(t *testing.T) {
 	}
 }
 
+func TestResolveDomainUnionNegationScopedPerGroup(t *testing.T) {
+	// 并集是**两组独立编译**的 matcher（T2 评审 Minor-1 的护栏缺口）：每组的
+	// `!` 只作用于自己那组 —— 旗标组的排除不得把清单组命中的路径判成域外。
+	c := mkCompiledT(t, upstreamDocT([]string{"a/**"}))
+	filesys := mkTreeT(t, "a/x.go")
+	byFlag := []Item{{Dst: "a/x.go", Src: "a/x.go", Class: ClassManaged, Exit: ExitExport}}
+	if _, err := ResolveDomain(byFlag, filesys, c, []string{"!a/x.go"}, nil); err != nil {
+		t.Fatalf("ResolveDomain: %v", err)
+	}
+	if byFlag[0].Exit != ExitExport || byFlag[0].ExitNote != "来源：清单 upstream.paths" {
+		t.Errorf("旗标组的 ! 只作用于旗标组，清单命中不得被排除: %+v", byFlag[0])
+	}
+
+	// 反向：清单组的 `!` 同样只作用于清单组，旗标命中照常域内。
+	c2 := mkCompiledT(t, upstreamDocT([]string{"a/**", "!a/x.go"}))
+	byManifest := []Item{{Dst: "a/x.go", Src: "a/x.go", Class: ClassManaged, Exit: ExitExport}}
+	if _, err := ResolveDomain(byManifest, filesys, c2, []string{"a/**"}, nil); err != nil {
+		t.Fatalf("ResolveDomain: %v", err)
+	}
+	if byManifest[0].Exit != ExitExport || byManifest[0].ExitNote != "来源：--paths" {
+		t.Errorf("清单组的 ! 只作用于清单组，旗标命中不得被排除: %+v", byManifest[0])
+	}
+}
+
 func TestResolveDomainMissingKey(t *testing.T) {
 	c := mkCompiledT(t, upstreamDocT(nil))
 	items := []Item{{

@@ -1,0 +1,190 @@
+# backflow 反向 e2e 与接收演练（§20.10 用例 3 反向 / 用例 2 CRLF / 用例 9 确定性）：
+# ① 反向：新增行含派生 token（翻译不覆盖新增行）→ 导出成功 + 扫描命中 →
+#    模板作者改回模板措辞后 am → 往返闭合（后续 update 零冲突、hash 一致）；
+# ② CRLF 端到端：CRLF 模板 → 导出 → 接收仓默认 am rc=128 反例（留中断态）→
+#    am -3 --keep-cr 落盘字节 == T+delta；
+# ③ 确定性 + 只读面：同提交两次导出字节与文件名均相同；--dry-run 后
+#    .xinit/backflow/ 不存在、state 与 base 零变化、锁文件零出现。
+# 正向主链在 backflow_main.txtar，警告与守卫面在 backflow_warns/guards.txtar。
+
+env GIT_CEILING_DIRECTORIES=$WORK
+env GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=x@x GIT_COMMITTER_NAME=x GIT_COMMITTER_EMAIL=x@x
+env HOME=$WORK/home
+env XDG_CACHE_HOME=$WORK/home/xdg
+mkdir $WORK/home
+
+# ══ ① 反向用例：派生 token 落在新增行（无预像即无翻译，靠扫描点名）══
+
+# ── 模板仓（git 源）：substitute 规则 + upstream.paths ──
+exec git -c init.defaultBranch=main init -q $WORK/tpl
+cp $WORK/xinit.yml $WORK/tpl/xinit.yml
+mkdir $WORK/tpl/pkg
+cp $WORK/tmpl-lib.go $WORK/tpl/pkg/lib.go
+exec git -C $WORK/tpl add -A
+exec git -C $WORK/tpl commit -qm v1
+exec git -C $WORK/tpl tag v1.0.0
+
+# ── init 派生 → root 提交 → 共享面提交（预像区改动 + 新增行含派生 token）──
+mkdir $WORK/proj
+cd $WORK/proj
+exec git -c init.defaultBranch=main init -q
+xinit init --template $WORK/tpl --yes .
+exec git add -A
+exec git commit -qm c0
+cp $WORK/mod-lib.go pkg/lib.go
+exec git add -A
+exec git commit -qm 'feat: extend lib' -m 'Template-Upstream: yes'
+
+# ── ③ --dry-run：全链照跑、零写、不加锁；state 与 base 零变化（验收 19）──
+exec sh -c 'cp .xinit/state.json $WORK/state-before.json; cp .xinit/base/pkg/lib.go $WORK/base-before.go'
+xinit-code backflow HEAD --dry-run
+stdout 'exit=0'
+stdout 'backflow-ok pkg/lib\.go'
+stdout '产物（--dry-run 未写盘）'
+! exists .xinit/backflow
+! exists .xinit/lock
+exec sh -c 'cmp .xinit/state.json $WORK/state-before.json; cmp .xinit/base/pkg/lib.go $WORK/base-before.go'
+
+# ── ① 导出：exit=0 + 扫描命中新增行的派生 token（未经硬闸门自陈）──
+xinit-code backflow HEAD
+stdout 'exit=0'
+stdout 'backflow-ok pkg/lib\.go'
+stdout 'backflow-warn pkg/lib\.go:\d+: myapp — // note: myapp helper'
+stdout '未经硬闸门'
+exec sh -c 'cp .xinit/backflow/*.patch $WORK/out-rev.patch'
+
+# ── ③ 确定性：同提交两次导出，补丁字节与文件名均相同（§20.10 用例 9）──
+exec sh -c 'ls .xinit/backflow/ > $WORK/ls-1.txt'
+xinit-code backflow HEAD
+stdout 'exit=0'
+exec sh -c 'cmp .xinit/backflow/*.patch $WORK/out-rev.patch'
+exec sh -c 'ls .xinit/backflow/ > $WORK/ls-2.txt'
+cmp $WORK/ls-1.txt $WORK/ls-2.txt
+
+# ── ① 接收：模板仓 am -3 → 模板文件 == T+delta（新增行逐字保留派生词）──
+cd $WORK/tpl
+exec git am -3 $WORK/out-rev.patch
+cmp pkg/lib.go $WORK/want-lib.go
+exec git log -1 --format=%s
+stdout 'feat: extend lib'
+
+# ── ① 夹具内模板作者改写扫描命中处 → 提交并打新 tag ──
+cp $WORK/fixed-lib.go pkg/lib.go
+exec git add -A
+exec git commit -qm 'docs: 把回流夹带的派生词改回模板措辞'
+exec git tag v1.1.0
+
+# ── ① 往返闭合：派生 update 零冲突、hash 一致（到达这里无冲突文案即闭合）──
+cd $WORK/proj
+xinit-code update --revision v1.1.0
+stdout 'exit=0'
+stdout '冲突 0'
+cmp pkg/lib.go .xinit/base/pkg/lib.go
+
+# ══ ② CRLF 端到端（§20.10 用例 2 / §20.6 规则⑥）：T=CRLF、无替换规则 ══
+exec git -c init.defaultBranch=main init -q $WORK/tplc
+cp $WORK/xinit-crlf.yml $WORK/tplc/xinit.yml
+exec sh -c 'printf "a1\r\nc2\r\nc3\r\nc4\r\n" > $WORK/tplc/win.txt'
+exec git -C $WORK/tplc add -A
+exec git -C $WORK/tplc commit -qm v1
+exec git -C $WORK/tplc tag v1.0.0
+
+mkdir $WORK/projc
+cd $WORK/projc
+exec git -c init.defaultBranch=main init -q
+xinit init --template $WORK/tplc --yes .
+# init 不改 EOL：派生文件与模板原文逐字节相同（CRLF 原样）
+cmp win.txt $WORK/tplc/win.txt
+exec git add -A
+exec git commit -qm c0
+exec sh -c 'printf "a1\r\nC2\r\nc3\r\nc4\r\n" > win.txt'
+exec git add -A
+exec git commit -qm 'fix: 改第二行' -m 'Template-Upstream: yes'
+
+xinit-code backflow HEAD
+stdout 'exit=0'
+stdout 'backflow-ok win\.txt'
+exec sh -c 'cp .xinit/backflow/*.patch $WORK/out-crlf.patch'
+
+# 接收仓 = 模板仓的克隆（含记录的模板 commit ⇒ pre-image blob 可解析）
+exec git clone -q $WORK/tplc $WORK/recv
+
+# 反例：默认 am 剥掉补丁内容行的 CR → rc=128 硬失败并留 am 中断态
+exec sh -c 'git -C $WORK/recv -c am.keepcr=false am -3 $WORK/out-crlf.patch; test $? -eq 128'
+exists $WORK/recv/.git/rebase-apply
+exec git -C $WORK/recv am --abort
+
+# 正例：--keep-cr → 落盘字节逐字 == T+delta
+exec git -C $WORK/recv am -3 --keep-cr $WORK/out-crlf.patch
+exec sh -c 'printf "a1\r\nC2\r\nc3\r\nc4\r\n" > $WORK/want-crlf.txt'
+cmp $WORK/recv/win.txt $WORK/want-crlf.txt
+
+-- xinit.yml --
+manifest_version: 1
+vars:
+  - name: app
+    default: "myapp"
+substitute:
+  - from: "mytmpl"
+    to: "{{ .app }}"
+    paths: ["pkg/**"]
+upstream:
+  paths: ["pkg/**"]
+-- xinit-crlf.yml --
+manifest_version: 1
+upstream:
+  paths: ["win.txt"]
+-- tmpl-lib.go --
+package mytmpl
+
+// Lib is a helper.
+func Lib() string {
+	return "mytmpl"
+}
+
+// Extra is a placeholder.
+func Extra() string {
+	return ""
+}
+-- mod-lib.go --
+package myapp
+
+// Lib is a helper.
+func Lib() string {
+	return "myapp"
+}
+
+// Extra is a placeholder.
+func Extra() string {
+	return "extra"
+}
+
+// note: myapp helper
+-- want-lib.go --
+package mytmpl
+
+// Lib is a helper.
+func Lib() string {
+	return "mytmpl"
+}
+
+// Extra is a placeholder.
+func Extra() string {
+	return "extra"
+}
+
+// note: myapp helper
+-- fixed-lib.go --
+package mytmpl
+
+// Lib is a helper.
+func Lib() string {
+	return "mytmpl"
+}
+
+// Extra is a placeholder.
+func Extra() string {
+	return "extra"
+}
+
+// note: mytmpl helper

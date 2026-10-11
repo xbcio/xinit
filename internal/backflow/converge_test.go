@@ -1,6 +1,7 @@
 package backflow
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -254,5 +255,29 @@ func TestCheckConvergedRejectsMissingManifest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "xinit.yml") {
 		t.Errorf("错误信息应点名 xinit.yml: %v", err)
+	}
+}
+
+// TestCheckConvergedIsReadOnly 钉住 §20.8 的「收敛校验 = restore.go 重建判据的
+// 只读版」（T2 评审 O-5：防未来把只读重实现换成带写回副作用的版本）。
+// 判据 = 跑前后 .xinit/base 与 .xinit/state.json 逐字节不变。
+func TestCheckConvergedIsReadOnly(t *testing.T) {
+	repo, commit := mkConvergeRepoT(t, map[string]string{
+		"xinit.yml": convergeTmplYAML,
+		"a.txt":     "hello\n",
+	})
+	proj, st := mkConvergedProjectT(t, repo, commit, map[string]string{"a.txt": "hello\n"})
+	basePath := basePathT(proj, "a.txt")
+	statePath := filepath.Join(proj, state.DirName, "state.json")
+	beforeBase, beforeState := fileBytesT(t, basePath), fileBytesT(t, statePath)
+
+	if _, err := CheckConverged(proj, st, t.TempDir(), map[string]string{"a.txt": "a.txt"}); err != nil {
+		t.Fatalf("CheckConverged: %v", err)
+	}
+	if got := fileBytesT(t, basePath); !bytes.Equal(got, beforeBase) {
+		t.Errorf("CheckConverged 写回了 .xinit/base：%q → %q", beforeBase, got)
+	}
+	if got := fileBytesT(t, statePath); !bytes.Equal(got, beforeState) {
+		t.Errorf("CheckConverged 改写了 state.json：%q → %q", beforeState, got)
 	}
 }
