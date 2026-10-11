@@ -1,4 +1,4 @@
-[windows] skip '缓存接线为 darwin/Linux 形态；Windows 变体待真机'
+[windows] skip 'symlink 与 sh 接线为 darwin/Linux 形态；Windows 变体待真机'
 # backflow 警告不导出面（§20.7 边界总表 / §20.5 域与扫描 / §20.4 守卫 3 未跟踪警告）：
 # 域外 / prune / 来源消失（update keep-warned 后记录 commit 里已无）/ binary / generated /
 # render / symlink / 改名 / 新增路径多命中 → 全部 exit=0 + 文案断言（文案基准表第 6、7、9、10、12 行）；

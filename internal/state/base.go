@@ -119,11 +119,14 @@ func ReadBase(projectDir, dst string) ([]byte, error) {
 	return data, nil
 }
 
-// CheckWithinBase 拒绝绝对路径与 .. 段（原 checkWithinBase 导出；renderstore
-// 读侧写回不经过 SyncBase 通道，必须复用同一实现，§21.9）。
+// CheckWithinBase 拒绝非「规范相对路径」（§22.4 单点谓词 fsutil.CheckRelPath：
+// 空 / 绝对 / 任一段含 `\` 或 `:` / 空段或 `.`、`..` 段 / 未规范化，一律
+// fail-closed。原 checkWithinBase 导出；renderstore 读侧写回不经过 SyncBase
+// 通道，必须复用同一实现，§21.9）。
 //
-// 模板路径可以引用 vars，而变量未必有 pattern —— 值为 "../../x" 时
-// 写入会穿出项目根。
+// 安全判据不止防穿越：`\` 在 Windows 上亦为分隔符、`:` 承载盘符/ADS 语义，
+// 含此二者的段同样拒绝——模板路径可以引用 vars，而变量未必有 pattern，
+// 值为 "../../x" 时写入会穿出项目根。
 func CheckWithinBase(dst string) error {
 	if err := fsutil.CheckRelPath(dst); err != nil {
 		return fmt.Errorf("base 路径%s", err)

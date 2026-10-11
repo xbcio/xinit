@@ -303,9 +303,10 @@ func (r *Resolver) ApplyMap(dst, src string) (string, error) {
 
 // validateTemplatePath 校验模板态路径的形状（§20.7 规则 4 的「路径合法性」）。
 //
-// 判据与正向 render.validateDstPath 同口径（非空 / 非绝对 / 无空段 / 无 `.`
-// 与 `..` 段 / Clean 不变），但作用对象是**模板侧**路径：`--map` 的显式值与
-// 自动候选。`..` 段必须挡在这里 —— 补丁路径最终写进模板仓，穿越段会把目标
+// 判据即 §22.4 的单点谓词 fsutil.CheckRelPath（非空 / 非绝对 / 任一段不含
+// `\` 与 `:` / 无空段与 `.`、`..` 段 / Clean 不变），与正向
+// render.validateDstPath 同口径，但作用对象是**模板侧**路径：`--map` 的显式值
+// 与自动候选。`..` 段必须挡在这里 —— 补丁路径最终写进模板仓，穿越段会把目标
 // 带出仓库（fail-closed）。
 func validateTemplatePath(p string) error {
 	return fsutil.CheckRelPath(p)

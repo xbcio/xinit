@@ -66,9 +66,9 @@ type PatchResult struct {
 //     同样保留）；全部路径 noop ⇒ 返回 ErrAllNoop（error 与 PatchResult 同时
 //     返回：Kept 空、Noops 完整）。
 //   - 配方 = §20.6 步骤 1–4：T/F_new 写进临时目录的 a/、b/ 两侧（**按各自 exec
-//     位显式 chmod**——mode 行来自临时文件权限位，不 chmod 则纯 mode 变更空输出、
-//     exec 位静默丢失）、逐文件 `git diff --no-index --full-index --no-prefix`、
-//     手工拼 mailbox 头 + diff + 尾。
+//     位显式 chmod**——chmod 让 unix 的 git 直接产出正确形态；**权威来源是 exec
+//     记账**，Windows 侧 mode 由 correctModeLines 校正/合成，§22.7 R4b）、逐文件
+//     `git diff --no-index --full-index --no-prefix`、手工拼 mailbox 头 + diff + 尾。
 //   - 确定性：author/date/Subject/正文取派生提交；`From <sha>` 行固定；
 //     Subject/作者名非 ASCII 时按规则⑤ 用 RFC 2047（Q 编码）承载，正文原样
 //     UTF-8；不产 Message-Id/version 行。

@@ -1,9 +1,9 @@
 # 快照零命中回退 · dir 源硬错逐字 + 读侧零建根（§21.10「读侧零建根」「零命中
 # 行为与现状逐字节同」/ 判据 5、8）：init → 删缓存（darwin/Linux 双路径）→ 删
-# base → update：现行硬错文案逐字、退 1、无恢复行；读路径不得建缓存根 → 两处
-# `! exists` 双覆盖（循 check_template.txtar:46-47 先例）。
-# 不加 preamble：这里要的正是「$WORK/home 下默认双路径」都不得被创建
-# （darwin 走 HOME/Library/Caches、Linux 走 XDG_CACHE_HOME）。
+# base → update：现行硬错文案逐字、退 1、无恢复行；读路径不得建缓存根 →
+# darwin/Linux 侧两处 `! exists` 双覆盖（循 check_template.txtar:46-47 先例）。
+# 不加 preamble：这里要的正是「$WORK/home 下 darwin/Linux 侧默认双路径」都不得
+# 被创建（darwin 走 HOME/Library/Caches、Linux 走 XDG_CACHE_HOME）。
 # Windows 变体（§22.13 P5）：LocalAppData 条件接线（默认 Setup 已设 $WORK/home/AppData/Local）。
 
 xinit init --template $WORK/tpl --yes out

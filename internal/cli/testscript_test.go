@@ -86,10 +86,10 @@ func TestMain(m *testing.M) {
 }
 
 func TestScripts(t *testing.T) {
-	// 每条脚本统一隔离用户缓存（M10 前置）：HOME/XDG_CACHE_HOME 都指到
-	// $WORK 下。注意 Env.Setenv 不做 $ 展开（实测）——必须用
-	// env.Getenv("WORK") 拼绝对路径；脚本级 env HOME=… 在 Setup 之后
-	// 追加，os/exec dedupEnv 后者胜，既有脚本的自设值仍生效覆盖。
+	// 每条脚本统一隔离用户缓存（M10 前置）：HOME/XDG_CACHE_HOME/LocalAppData
+	// 都指到 $WORK 下（三变量，§22.13）。注意 Env.Setenv 不做 $ 展开（实测）
+	// ——必须用 env.Getenv("WORK") 拼绝对路径；脚本级 env HOME=… 在 Setup
+	// 之后追加，os/exec dedupEnv 后者胜，既有脚本的自设值仍生效覆盖。
 	testscript.Run(t, testscript.Params{
 		Dir: "testdata/script",
 		Setup: func(env *testscript.Env) error {

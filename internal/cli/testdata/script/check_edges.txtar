@@ -1,4 +1,4 @@
-[windows] skip '缓存接线为 darwin/Linux 形态；Windows 变体待真机'
+[windows] skip 'symlink 接线为 darwin/Linux 形态；Windows 变体待真机'
 # check 端到端（§18.9 验收 4–8/10/14/17）：A 组逐项注入（A1/A2/A3/A5/A6/A7–A10）、
 # C1 非法 prune glob、D2 engine_version 漂移。每个场景从同一份干净 state.json
 # 起步（cp 复原），FAIL 场景断言退 6、仅 warn 场景断言退 0。
