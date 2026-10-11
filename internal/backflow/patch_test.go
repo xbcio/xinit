@@ -666,6 +666,39 @@ func TestCorrectModeLinesContentAndMode(t *testing.T) {
 	}
 }
 
+// TestCorrectModeLinesSameModeWrongSuffix 覆盖 §22.7 R4b 的 O==N 写面错值路径
+// （四态中唯一没有「改写断言」的一态）：两侧 exec 记账同值（无模式差异）时 index
+// 行的 mode 后缀须等于记账映射——Windows 上 git 双侧 644 只会追加错值 ` 100644`
+// （记账 100755），校正面按 setIndexModeSuffix 改写为记账值；canonical 形态
+// （unix 实测本就带正确后缀）经校正逐字节不变。
+func TestCorrectModeLinesSameModeWrongSuffix(t *testing.T) {
+	const (
+		rel = "src/tool.sh"
+		T   = "l1\n"
+		F   = "l2\n"
+	)
+	left, right := gitBlobHash([]byte(T)), gitBlobHash([]byte(F))
+	head := "diff --git a/" + rel + " b/" + rel + "\n"
+	hunks := "--- a/" + rel + "\n+++ b/" + rel + "\n@@ -1 +1 @@\n-l1\n+l2\n"
+	f := PatchFile{Src: rel, T: []byte(T), FNew: []byte(F), OldExec: true, NewExec: true}
+
+	winSeg := head + "index " + left + ".." + right + " 100644\n" + hunks
+	if err := verifySegment([]byte(winSeg), f); err == nil {
+		t.Fatalf("未校正的错值后缀必须 fail-closed：\n%s", winSeg)
+	}
+	want := head + "index " + left + ".." + right + " 100755\n" + hunks
+	if got := string(correctModeLines([]byte(winSeg), f)); got != want {
+		t.Fatalf("Windows 形态应校正为 canonical：\n%q\nwant\n%q", got, want)
+	}
+	if err := verifySegment([]byte(want), f); err != nil {
+		t.Fatalf("校正后必须过 verifySegment：%v", err)
+	}
+	// 幂等：canonical 形态逐字节不变（unix 上原值本就正确，走恒等分支）。
+	if again := string(correctModeLines([]byte(want), f)); again != want {
+		t.Fatalf("canonical 形态应逐字节不变：%q vs %q", again, want)
+	}
+}
+
 // TestVerifySegmentModeValueFailClosed 覆盖 §22.7 R4b 的值校验面：mode 行值被篡改、
 // index 行 mode 后缀缺失或错值时一律 fail-closed，且文案逐字冻结（三个 fail-closed
 // 钉项）——校验全在本层，无需 Windows 真实 git。

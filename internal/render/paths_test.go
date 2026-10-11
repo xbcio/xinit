@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
@@ -409,6 +410,12 @@ func TestPathsPathVariableValueForbiddenChars(t *testing.T) {
 		if err == nil {
 			t.Fatalf("路径段渲染为 %q 必须硬错（§22.4）", val)
 		}
+		// 站点钉住：错误必须产自 renderPathVars（paths.go:274），而不是被下游
+		// validateDstPath 的兜底拒绝掩盖——后缀断言单独不足以防站点回归失守。
+		wantPrefix := fmt.Sprintf("路径段 %q 渲染为 %q", "{{ .slug }}", val)
+		if !strings.Contains(err.Error(), wantPrefix) {
+			t.Errorf("渲染值 %q 的错误必须产自 renderPathVars 站点（前缀 %q）：got %q", val, wantPrefix, err.Error())
+		}
 		if !strings.Contains(err.Error(), fsutil.ForbidCharsReason) {
 			t.Errorf("渲染值 %q 的错误文本必须含冻结理由句：got %q", val, err.Error())
 		}
@@ -428,6 +435,11 @@ rename:
 	_, _, err := Paths(fsys, c, Vars{})
 	if err == nil {
 		t.Fatal("rename 替换值含 `\\` 必须硬错（§22.4）")
+	}
+	// 站点钉住：错误必须产自 applyRenames（paths.go:327），而不是被下游
+	// validateDstPath 的兜底拒绝掩盖。
+	if want := "rename 的替换值"; !strings.Contains(err.Error(), want) {
+		t.Errorf("错误必须产自 applyRenames 站点（前缀 %q）：got %q", want, err.Error())
 	}
 	if !strings.Contains(err.Error(), fsutil.ForbidCharsReason) {
 		t.Errorf("错误文本必须含冻结理由句：got %q", err.Error())
