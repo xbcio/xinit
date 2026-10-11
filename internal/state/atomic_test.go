@@ -107,8 +107,11 @@ func TestRenameReadOnlyTargetClearBit(t *testing.T) {
 	origFile, origRetryable := renameFile, renameRetryable
 	defer func() { renameFile, renameRetryable = origFile, origRetryable }()
 
-	// renameRetryable 保持默认分类器（unix 恒 false）——本例覆盖
-	// 「分类器不认、但属权限类」的只读清位路径。
+	// 显式覆写恒 false，不吃默认分类器：默认恒 false 仅 unix 档成立，
+	// Windows 档会把 EACCES（Errno 5 = ERROR_ACCESS_DENIED）认作可重试，
+	// 用例会结构性必败。显式覆写使(a)用例平台无关、(b)语义完好保留
+	// 「分类器不认、但属权限类」的只读清位路径、(c)交叉编译面完整。
+	renameRetryable = func(error) bool { return false }
 	calls := 0
 	renameFile = func(oldpath, newpath string) error {
 		calls++
@@ -157,6 +160,9 @@ func TestRenameReadOnlyFailClosed(t *testing.T) {
 	origFile, origRetryable := renameFile, renameRetryable
 	defer func() { renameFile, renameRetryable = origFile, origRetryable }()
 
+	// 显式覆写恒 false（理由同 TestRenameReadOnlyTargetClearBit：默认恒 false
+	// 仅 unix 档成立，Windows 档会重试 EACCES 致计数断言必败）。
+	renameRetryable = func(error) bool { return false }
 	calls := 0
 	renameFile = func(oldpath, newpath string) error {
 		calls++
