@@ -140,6 +140,17 @@ func runGroupA(t *testing.T, dir string, st *state.State) (*checkReport, []strin
 	return r, texts
 }
 
+// runGroupALines 跑 A 组并返回全部行（含 skip），供 §22.6 平台 skip 场景断言；
+// runGroupA 保持「A 组只出 FAIL」的既有不变量不动。
+func runGroupALines(t *testing.T, dir string, st *state.State) (*checkReport, []*checkLine) {
+	t.Helper()
+	r := newCheckReport(st.Template.Source)
+	if err := checkGroupA(r, dir, st); err != nil {
+		t.Fatal(err)
+	}
+	return r, r.Sections[secA].Lines
+}
+
 // wantLines 断言恰有 n 行、且每个锚都被某一行包含。
 func wantLines(t *testing.T, lines []string, n int, anchors ...string) {
 	t.Helper()
@@ -424,6 +435,42 @@ func TestGroupAExecBitFromMode(t *testing.T) {
 	}
 	_, lines := runGroupA(t, dir, st)
 	wantLines(t, lines, 1, `files["run.sh"].exec=false 但 base 文件有可执行位`)
+}
+
+// §22.6：无 x 位语义平台（Windows）——A9（exec 对照）输出一条 skip（文案逐字
+// 钉项），不产 FAIL；恢复 true 后原 FAIL 行为两侧对照。
+func TestGroupAExecSkipWhenUnsupported(t *testing.T) {
+	dir, st := writeStateAndBase(t, map[string][]byte{"run.sh": []byte("#!/bin/sh\n")}, func(s *state.State) {
+		f := s.Files["run.sh"]
+		f.Exec = true // base 写的是 0644：记录 exec=true 时 A9 本应 FAIL
+		s.Files["run.sh"] = f
+	})
+
+	old := fsutil.ExecSupported
+	defer func() { fsutil.ExecSupported = old }()
+
+	fsutil.ExecSupported = false
+	rep, lines := runGroupALines(t, dir, st)
+	if rep.Fails != 0 {
+		t.Errorf("无 x 位语义平台不应有 FAIL 行；got Fails=%d", rep.Fails)
+	}
+	if rep.Skips != 1 {
+		t.Errorf("Skips = %d, want 1", rep.Skips)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("A 组行数 %d, want 1", len(lines))
+	}
+	if lines[0].Kind != kindSkip {
+		t.Fatalf("级别 = %s, want skip：%s", lines[0].Kind, lines[0].Text)
+	}
+	if want := "exec 位检查按平台跳过（本平台无 x 位语义，§22.6）"; lines[0].Text != want {
+		t.Errorf("skip 文案逐字钉项不符：\n got %q\nwant %q", lines[0].Text, want)
+	}
+
+	// 对照：恢复 true → 原 FAIL 行为原样。
+	fsutil.ExecSupported = true
+	_, failLines := runGroupA(t, dir, st)
+	wantLines(t, failLines, 1, `files["run.sh"].exec=true 但 base 文件无可执行位`)
 }
 
 func TestGroupATemplateFields(t *testing.T) {

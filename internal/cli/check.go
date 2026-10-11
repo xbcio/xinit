@@ -367,6 +367,10 @@ func checkBaseTables(r *checkReport, base string, st *state.State, legal []strin
 	}
 
 	// A7–A9：记录位与 base 内容/mode 对照，仅对 regular 中的键。
+	// §22.6：无 x 位语义平台（Windows）——A9（exec 对照）输出 skip，A7/A8 照常。
+	if !fsutil.ExecSupported {
+		r.skip(secA, "exec 位检查按平台跳过（本平台无 x 位语义，§22.6）")
+	}
 	for _, p := range legal {
 		f, ok := regular[p]
 		if !ok {
@@ -379,7 +383,7 @@ func checkBaseTables(r *checkReport, base string, st *state.State, legal []strin
 		if mixed := fsutil.DetectEOL(f.content) == fsutil.EOLMixed; fst.MixedEOL != mixed {
 			r.fail(secA, "files[%q].mixed_eol=%v 但 base 内容是 %v", p, fst.MixedEOL, mixed)
 		}
-		if fst.Exec != f.exec {
+		if fsutil.ExecSupported && fst.Exec != f.exec {
 			has := "无"
 			if f.exec {
 				has = "有"

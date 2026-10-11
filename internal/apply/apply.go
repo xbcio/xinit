@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/state"
 	"github.com/xbcio/xinit/internal/worktree"
 )
@@ -170,6 +171,11 @@ func writeMode(projectDir, rel string, wantExec, hasExec bool, umask uint32) (os
 // adjustExec 只调整 exec 位、保持其余权限位（R7），返回是否发生了改动。
 // 磁盘上已不存在或已非普通文件 → 跳过（下一轮按新磁盘状态重新判定）。
 func adjustExec(projectDir, rel string, wantExec bool) (bool, error) {
+	// §22.6：无 x 位语义平台真实现 no-op——ExecBits 恒空后本不可达，
+	// 保留为纵深防御。
+	if !fsutil.ExecSupported {
+		return false, nil
+	}
 	full := filepath.Join(projectDir, filepath.FromSlash(rel))
 	fi, err := os.Lstat(full)
 	if err != nil {

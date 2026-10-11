@@ -694,6 +694,81 @@ func TestHookDiffAgainstBaseDirSourceReturnsEmpty(t *testing.T) {
 	}
 }
 
+// §22.6：无 x 位语义平台（Windows）时 execConclusion 入口短路——Noop/
+// WriteTheirs（行 13 模板新增）/Merge/Merge 迁移态四型一律无结论；dry-run 的
+// chmodPredictions 与真跑 res.Chmodded 同源本函数 ⇒ 两径同口径（均 0）。
+func TestExecConclusionUnsupportedShortCircuit(t *testing.T) {
+	meta := func(h string, x bool) plan.FileMeta {
+		return plan.FileMeta{Kind: render.KindRegular, Hash: h, Exec: x}
+	}
+	base := plan.Snap{
+		"a.txt":     meta("h1", false),
+		"m.txt":     meta("h1", false),
+		"old/a.txt": meta("ho", false),
+	}
+	ours := plan.Snap{
+		"a.txt":     meta("h2", false),
+		"m.txt":     meta("h2", false),
+		"old/a.txt": meta("ho", true), // 本地改过权限：迁移态判据
+	}
+	theirs := plan.Snap{
+		"a.txt":   meta("h3", true),
+		"new.txt": meta("h3", true),
+		"m.txt":   meta("h3", true),
+		"q.txt":   meta("h3", true),
+	}
+	nb := meta("h3", true)
+	cases := []struct {
+		name string
+		a    plan.Action
+	}{
+		{"Noop", plan.Action{Path: "a.txt", Kind: plan.Noop, NewBase: &nb}},
+		{"WriteTheirs 行 13（模板新增）", plan.Action{Path: "new.txt", Kind: plan.WriteTheirs, NewBase: &nb}},
+		{"Merge（干净合并）", plan.Action{Path: "m.txt", Kind: plan.Merge, NewBase: &nb}},
+		{"Merge 迁移态（MigratedFrom ≠ \"\"）", plan.Action{Path: "q.txt", Kind: plan.Merge, NewBase: &nb, MigratedFrom: "old/a.txt"}},
+	}
+
+	// 对照前置：ExecSupported=true 时四型皆有结论——夹具失效时立即暴露，
+	// 防「短路测试」因夹具恒 false 而假阳性。
+	for _, tc := range cases {
+		if _, ok := execConclusion(tc.a, base, ours, theirs); !ok {
+			t.Fatalf("%s：夹具应有 exec 结论（对照前置）", tc.name)
+		}
+	}
+
+	old := fsutil.ExecSupported
+	defer func() { fsutil.ExecSupported = old }()
+	fsutil.ExecSupported = false
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := execConclusion(tc.a, base, ours, theirs)
+			if got || ok {
+				t.Errorf("execConclusion = %v,%v，want false,false（平台无 x 位语义）", got, ok)
+			}
+		})
+	}
+
+	// 同源链：buildChanges 产出的 ExecBits 必空 ⇒ dry-run 预测（chmodPredictions）
+	// 与真跑 Chmodded 两径同口径（均 0）。
+	actions := make([]plan.Action, 0, len(cases))
+	for _, tc := range cases {
+		actions = append(actions, tc.a)
+	}
+	c, err := buildChanges(base, ours, theirs, actions,
+		map[string][]byte{"new.txt": []byte("n\n")},
+		map[string][]byte{"m.txt": []byte("m\n"), "q.txt": []byte("q\n")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.ExecBits) != 0 {
+		t.Errorf("ExecBits 必空；got %v", c.ExecBits)
+	}
+	if got := chmodPredictions(c, nil); len(got) != 0 {
+		t.Errorf("chmodPredictions 必空；got %v", got)
+	}
+}
+
 // overwrittenPaths 是行 5 另存清单的唯一出处（13b 落盘与 dry-run 预测共用）：
 // 只有「行 5 ∧ 未被写前检查拒绝」的路径在列——被拒绝的路径没有被覆盖，
 // §8.2 的另存义务不触发（T8 fix round 1，评审 C1）。

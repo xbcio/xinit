@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/render"
 )
 
@@ -172,6 +173,36 @@ func TestExecDivergenceWarnsInsteadOfChmod(t *testing.T) {
 	}
 	if !strings.Contains(got[0].Note, "执行位") {
 		t.Errorf("应打印 exec 不一致的警告；got %q", got[0].Note)
+	}
+}
+
+// §22.6：!ExecSupported（无 x 位语义平台，如 Windows）时 mode 步整块不生效——
+// 不比较、不产假 Note；NewBase.Exec 保持 advance 拷贝的 theirs 值，记账无需动作。
+func TestSettleExecNoteUnsupported(t *testing.T) {
+	base := Snap{"s.sh": reg("h1")}     // exec=false
+	ours := Snap{"s.sh": execm("h1")}   // 用户 +x：与 base 不一致
+	theirs := Snap{"s.sh": execm("h1")} // 模板也 +x：t.Exec ≠ b.Exec
+
+	old := fsutil.ExecSupported
+	defer func() { fsutil.ExecSupported = old }()
+
+	fsutil.ExecSupported = false
+	got := Plan(base, ours, theirs, nil, false)
+	if len(got) != 1 {
+		t.Fatalf("动作数 %d：%v", len(got), got)
+	}
+	if strings.Contains(got[0].Note, "执行位与 base 不一致") {
+		t.Errorf("无 x 位语义平台不得产假 Note；got %q", got[0].Note)
+	}
+	if !got[0].NewBase.Exec {
+		t.Error("NewBase.Exec 应保持 advance 整表拷贝的 theirs 值（true）")
+	}
+
+	// 对照：恢复 true → 既有警告行为原样（mode 步第二分支）。
+	fsutil.ExecSupported = true
+	got = Plan(base, ours, theirs, nil, false)
+	if len(got) != 1 || !strings.Contains(got[0].Note, "执行位与 base 不一致") {
+		t.Fatalf("恢复 ExecSupported 后应回到既有警告行为；got %v", got)
 	}
 }
 

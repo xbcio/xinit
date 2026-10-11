@@ -844,6 +844,11 @@ func execConclusion(a plan.Action, base, ours, theirs plan.Snap) (bool, bool) {
 	if a.NewBase == nil {
 		return false, false
 	}
+	// §22.6：无 x 位语义平台（Windows）入口短路——不产 ExecBits/chmod 结论。
+	// dry-run 的 chmodPredictions 与真跑 res.Chmodded 同源本函数 ⇒ 两径同口径（均 0）。
+	if !fsutil.ExecSupported {
+		return false, false
+	}
 	switch a.Kind {
 	case plan.Noop, plan.WriteTheirs, plan.Merge:
 	default:

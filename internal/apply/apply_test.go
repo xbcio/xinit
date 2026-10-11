@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/xbcio/xinit/internal/fsutil"
 )
 
 func mustPerm(t *testing.T, dir, rel string) os.FileMode {
@@ -149,6 +151,38 @@ func TestExecuteChmodOnly(t *testing.T) {
 	}
 	if got := mustPerm(t, dir, "m.txt"); got != 0o644 {
 		t.Errorf("got %v, want 0644", got)
+	}
+}
+
+// §22.6：无 x 位语义平台（Windows）adjustExec 真实现 no-op——ExecBits 恒空后
+// 本不可达，保留为纵深防御：不触磁盘、mode 原样。
+func TestAdjustExecUnsupportedNoop(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "m.txt", "same", 0o644)
+
+	old := fsutil.ExecSupported
+	defer func() { fsutil.ExecSupported = old }()
+	fsutil.ExecSupported = false
+
+	changed, err := adjustExec(dir, "m.txt", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Error("无 x 位语义平台必须 no-op（changed=false）")
+	}
+	if got := mustPerm(t, dir, "m.txt"); got != 0o644 {
+		t.Errorf("mode 不得变：got %v, want 0644", got)
+	}
+
+	// 对照：恢复 true 后同一调用真实调整（确认夹具与调用面到位）。
+	fsutil.ExecSupported = true
+	changed, err = adjustExec(dir, "m.txt", true)
+	if err != nil || !changed {
+		t.Fatalf("对照：adjustExec = %v,%v want true,nil", changed, err)
+	}
+	if got := mustPerm(t, dir, "m.txt"); got != 0o755 {
+		t.Errorf("对照：got %v, want 0755", got)
 	}
 }
 

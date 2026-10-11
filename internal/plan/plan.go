@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/render"
 )
 
@@ -67,7 +68,10 @@ func settle(a *Action, base, ours, theirs Snap) {
 	}
 	a.NewBase.Generated = nextGenerated(bok && b.Generated, t.Generated,
 		promoteAllowed(base, ours, theirs, a.Path))
-	if bok && ook && (a.Kind == Noop || a.Kind == WriteTheirs || a.Kind == Merge) {
+	// §22.6：!ExecSupported（无 x 位语义平台，如 Windows）时整块不生效——
+	// 不比较、不产 Note；NewBase.Exec 已由 advance 的整表拷贝取 theirs 值，
+	// 记账无需动作（消除每轮假 Note）。
+	if fsutil.ExecSupported && bok && ook && (a.Kind == Noop || a.Kind == WriteTheirs || a.Kind == Merge) {
 		if o.Exec == b.Exec {
 			a.NewBase.Exec = t.Exec // R7 在 apply 侧据此 chmod
 		} else {
