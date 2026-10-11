@@ -5,7 +5,7 @@
 # ③ 报告照旧打 `accept?` 命令，但它指向的 conflicts/ 条目不存在（照抄必失败）；
 # ④ 无条目 ⇒ 下轮不阻塞 ⇒ 冲突每轮重新提问。
 #
-# 触发条件（**两条途径**，殊途同归到 nil——(a)–(d) 走 ①、(e) 走 ②）：
+# 触发条件（**本夹具覆盖两条途径**，殊途同归到 nil——(a)–(d) 走 ①、(e) 走 ②）：
 #   ① 文件整内容经 Go template 渲染为空（ModeTemplate）：夹具里的 `{{- "" -}}`
 #      两个 trim 标记吃掉 txtar 正文必然带的尾换行 ⇒ RenderTemplate 的输出恰为
 #      0 字节、bytes.Buffer.Bytes() 返回 nil。此途径要求模板声明 `render.paths`
@@ -13,9 +13,10 @@
 #   ② 模板文件本身是 0 字节（ModeSubst，无需任何声明）：render.Content 的
 #      ModeSubst 分支里 fsutil.ToLF(raw) 对空输入走 bytes.ReplaceAll 的
 #      append([]byte(nil), s...) ⇒ 同样得到 nil。
-# 两条途径在 BASE（5336a66）上都出 `内部错误：Merge 路径 … 缺三方内容` rc=1，
-# 由同一处归一修复收口；除此之外没有第三条途径（含 `{{` 的非空文件走 ①、
-# 0 字节文件走 ②，二者是全部入口）。
+# 两条途径在 BASE（5336a66）上都出 `内部错误：Merge 路径 … 缺三方内容` rc=1。
+# nil 可来自多条途径（整文件渲染为空 / 源文件 0 字节 / 替换规则把整文件吃空且
+# 替换值为空，…），本批只锁前两条；不变式是「任何来源的 nil 都由 renderTheirs
+# 同一处归一收口 ⇒ 键存在即非 nil」，故不枚举全部入口。
 
 # ════ (a) 症状 1：Merge 空渲染 = 判冲突，不是内部错误 ════
 xinit init --template $WORK/tpl1 --yes p1
