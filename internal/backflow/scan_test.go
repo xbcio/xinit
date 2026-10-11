@@ -434,6 +434,32 @@ index 1111111111111111111111111111111111111111..22222222222222222222222222222222
 	}
 }
 
+func TestAddedLinesFromPatchIgnoresDiffShapeInBody(t *testing.T) {
+	// 消息正文引用的整段 diff 形状文本（`+++ b/…` + `@@` + `+`）不得被当作 hunk：
+	// 非 hunk 态的 `+++ ` 只在已见 `diff --git ` 段头之后才生效（M8 观察-1）。
+	patch := `From 1111111111111111111111111111111111111111 Mon Sep 17 00:00:00 2001
+From: t <t@e>
+Date: Thu, 1 Jan 2026 00:00:00 +0000
+Subject: [PATCH] demo
+
+正文引用了一段 diff 形状：
++++ b/phantom.go
+@@ -1 +1 @@
++myapp ghost line
+diff --git a/internal/util/x.go b/internal/util/x.go
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+--- a/internal/util/x.go
++++ b/internal/util/x.go
+@@ -1 +1,2 @@
+ a
++b
+`
+	got := AddedLinesFromPatch([]byte(patch))
+	if len(got) != 1 || got[0] != (AddedLine{File: "internal/util/x.go", Line: 2, Text: "b"}) {
+		t.Fatalf("got = %+v, want 只取真 diff 段的一条（正文幽灵段不得进入）", got)
+	}
+}
+
 func TestAddedLinesFromPatchRecipeDiff(t *testing.T) {
 	// 直喂 §20.6 配方真实产出的 diff 字节（防 git 输出形态漂移）。
 	tmp := t.TempDir()

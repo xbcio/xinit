@@ -221,8 +221,10 @@ func foldASCIIByte(b byte) byte {
 // AddedLinesFromPatch 解析配方 diff（§20.6 配方第 2 步的
 // `git diff --no-index --full-index --no-prefix` 输出）里的 `+` 行。
 //
-// 可以直接喂整份 mailbox 补丁：**只有见过 `+++ ` 段头之后才按 `@@` 进入 hunk**，
-// 所以提交消息正文与 diffstat 段里的 `@@`/`+`/`---` 形状不会被误读。
+// 可以直接喂整份 mailbox 补丁：**只有见过 `diff --git ` 段头、继而 `+++ ` 行之后
+// 才按 `@@` 进入 hunk**，所以提交消息正文与 diffstat 段里的 `@@`/`+`/`---` 形状
+// 不会被误读 —— 正文即使整段引用 diff 形状文本（`+++ b/…` + `@@` + `+`），
+// 其 `+` 行也不会产生幽灵文件归属。
 //
 // 其余判据：
 //   - 新文件侧路径取 `+++ ` 行（配方把 T 与 F_new 分别写在 `<tmp>/a/<Src>` 与
@@ -236,6 +238,7 @@ func foldASCIIByte(b byte) byte {
 func AddedLinesFromPatch(patch []byte) []AddedLine {
 	var out []AddedLine
 	file := ""
+	sawDiffGit := false
 	inHunk := false
 	line := 0
 
@@ -264,12 +267,13 @@ func AddedLinesFromPatch(patch []byte) []AddedLine {
 
 		switch {
 		case strings.HasPrefix(l, "diff --git "):
+			sawDiffGit = true
 			file = ""
-		case strings.HasPrefix(l, "+++ "):
+		case sawDiffGit && strings.HasPrefix(l, "+++ "):
 			file = diffNewPath(l[len("+++ "):])
 		case strings.HasPrefix(l, "@@"):
 			if file == "" {
-				break // 没有 +++ 段头：不是真 hunk
+				break // 没有 diff --git/+++ 段头：不是真 hunk
 			}
 			if start, ok := hunkNewStart(l); ok {
 				line, inHunk = start, true
