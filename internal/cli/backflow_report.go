@@ -23,9 +23,10 @@ const (
 	// noteConflictHold 是「本轮有冲突、其余路径随整单不导出」的文案（§20.3
 	// fail-closed 是全链整体拒绝，不是逐路径跳过）。
 	noteConflictHold = "本轮存在翻译冲突：整体 fail-closed 不产补丁（§20.3）——该路径本身翻译通过，但随整单未导出"
-	// noteSourceGone 与 internal/backflow 的 noteSourceGone（domain.go）逐字同形
-	// （T2 评审 Minor-2 方案①：双源同形由 backflow_warns.txtar 钉住两面）。
-	noteSourceGone = "该路径的模板来源已不存在（模板已移除或改名）；如需回送请用 `--map` 显式给出模板路径，或人工判断"
+	// noteOffTemplate 是守卫 7 成因②（Dst 不在记录 commit 的渲染集 = 路径已脱离模板）
+	// 的出口文案（M9）：判据按 Dst（converge.go 的 byDst 查询不消费映射后的 Src），
+	// `--map` 不改变该判定——不得回指 `--map`（M8 观察-3 同族）。
+	noteOffTemplate = "该路径已脱离模板（模板已移除或改名；`update` 无法推进其 base）：本路径不导出，出口：人工判断（`--map` 不改变本判定）"
 )
 
 // noteResolveAmbiguous 是新增文件路径解析零/多命中的出口文案（§20.10 行 10：

@@ -264,9 +264,10 @@ func runBackflow(o BackflowOptions) (*BackflowReport, error) {
 	for i := range items {
 		it := &items[i]
 		if it.Exit == backflow.ExitExport && it.Class == backflow.ClassManaged && gone[it.Dst] {
-			// 成因②：与 §20.5 句 2 的出口同列、同文案（按 Dst 去重，
-			// 同路径在 domain.go 已定出口时本分支不再进入）。
-			it.Exit, it.ExitNote = backflow.ExitSourceGone, noteSourceGone
+			// 成因②：与 §20.5 句 2 同列（均「来源不存在」出口），文案独立——
+			// 判据按 Dst，`--map` 不改变本判定（M9 修复轮 1）；按 Dst 去重，
+			// 同路径在 domain.go 已定出口时本分支不再进入。
+			it.Exit, it.ExitNote = backflow.ExitSourceGone, noteOffTemplate
 		}
 	}
 	if len(conv.Unconverged) > 0 {

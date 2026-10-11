@@ -110,6 +110,11 @@ stdout 'backflow-excluded keep/k\.txt: `--map` 给出的模板路径 "keep/nope\
 stdout 'backflow-excluded gone/g\.txt: 该路径的模板来源已不存在'
 stdout 'exit=0'
 
+# ── M9 扩展：守卫 7 成因②（Dst 已脱离模板渲染集）专用文案；--map 不改判定 ──
+xinit-code backflow --map gone/g.txt=keep/k.txt HEAD
+stdout 'exit=0'
+stdout 'backflow-excluded gone/g\.txt: 该路径已脱离模板'
+
 # ── 扫描 ≤40 截断（§20.5 / §20.10 行 12）：命中 >40 → 逐条只打 40 + 「≥40」──
 exec sh -c 'i=0; while [ $i -lt 45 ]; do echo "line myapp"; i=$((i+1)); done > keep/many.txt'
 exec git add -A
