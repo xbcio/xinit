@@ -212,7 +212,7 @@ func decide(p string, base, ours, theirs Snap, hooksRun bool) (Action, bool) {
 		if sameContent(o, t) {
 			return Action{Path: p, Kind: Noop, NewBase: advance(t)}, true
 		}
-		return Action{Path: p, Kind: ConflictBothAdded, NewBase: nil, Note: conflictNote(p)}, true
+		return Action{Path: p, Kind: ConflictBothAdded, NewBase: nil, Note: bothAddedNote(p)}, true
 	}
 	// 到此只剩 ✗✗✗——不在并集内，不可达；静默返回会把 bug 藏起来。
 	panic(fmt.Sprintf("plan: %q 的存在性组合不可达（base=%v ours=%v theirs=%v）", p, bok, ook, tok))
@@ -308,6 +308,13 @@ func generatedNote(p string) string {
 
 func conflictNote(p string) string {
 	return fmt.Sprintf("二进制或混合 EOL，不能三方合并；theirs 的内容写入 .xinit/conflicts/%s，请手工处理（改到与模板一致）后重跑", p)
+}
+
+// bothAddedNote 是行 15（ConflictBothAdded）的专属说明（M9 观察②）：两侧都是
+// 新增、没有 base，与行 6 的二进制/混合 EOL 无关——沿用 conflictNote 会误报
+// 成因。出口要素与 conflictNote 同款：theirs 进 conflicts/，手工处理后重跑。
+func bothAddedNote(p string) string {
+	return fmt.Sprintf("模板新增了该路径，本地已有同名内容且两者不同，无法自动合并；theirs 的内容写入 .xinit/conflicts/%s，请手工处理（改到与模板一致）后重跑", p)
 }
 
 func keepWarnedNote(p string) string {

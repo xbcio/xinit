@@ -209,7 +209,9 @@ func TestPlanRows(t *testing.T) {
 			base:   Snap{},
 			ours:   Snap{"new.txt": reg("h1")},
 			theirs: Snap{"new.txt": reg("h2")},
-			want:   []Action{{Path: "new.txt", Kind: ConflictBothAdded, NewBase: nil, Note: "conflicts/"}},
+			// Note 锚住行 15 专属句（含旧断言子串 conflicts/；M9 观察②：不得
+			// 复用行 6 的「二进制或混合 EOL」成因句）。
+			want: []Action{{Path: "new.txt", Kind: ConflictBothAdded, NewBase: nil, Note: "两者不同，无法自动合并；theirs 的内容写入 .xinit/conflicts/new.txt"}},
 		},
 		{
 			name:   "行16 纯本地新增不在并集 → 不产出 Action、不进 files（R18）",
@@ -292,5 +294,29 @@ func TestPlanNewBaseIsDetachedCopy(t *testing.T) {
 	}
 	if !base["gen.txt"].Generated || ours["gen.txt"].Hash != "h2" {
 		t.Fatal("输入快照被修改")
+	}
+}
+
+// TestBothAddedNoteNotBinaryEOL 钉住行 15 与行 6 的文案分野（M9 观察② /
+// park 清理批项 9）：BothAdded 是两侧新增的内容级冲突，说明不得声称「二进制
+// 或混合 EOL」；行 6（ConflictBinary）继续用 conflictNote，成因句原样。
+func TestBothAddedNoteNotBinaryEOL(t *testing.T) {
+	bothAdded := Plan(Snap{}, Snap{"new.txt": reg("h1")}, Snap{"new.txt": reg("h2")}, nil, false)
+	if len(bothAdded) != 1 || bothAdded[0].Kind != ConflictBothAdded {
+		t.Fatalf("行 15 夹具不对：%v", bothAdded)
+	}
+	if strings.Contains(bothAdded[0].Note, "二进制或混合 EOL") {
+		t.Errorf("行 15 的说明不得复用二进制/EOL 句：%q", bothAdded[0].Note)
+	}
+	if !strings.Contains(bothAdded[0].Note, "conflicts/") {
+		t.Errorf("行 15 的说明保留 conflicts/ 出口要素：%q", bothAdded[0].Note)
+	}
+
+	bin := Plan(Snap{"a.bin": binm("h1")}, Snap{"a.bin": binm("h2")}, Snap{"a.bin": binm("h3")}, nil, false)
+	if len(bin) != 1 || bin[0].Kind != ConflictBinary {
+		t.Fatalf("行 6 夹具不对：%v", bin)
+	}
+	if !strings.Contains(bin[0].Note, "二进制或混合 EOL") {
+		t.Errorf("行 6 应继续用 conflictNote 原句：%q", bin[0].Note)
 	}
 }
