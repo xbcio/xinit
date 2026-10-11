@@ -69,7 +69,7 @@ stdout 'backflow-ok keep/new\.txt'
 stdout 'backflow-excluded out/o\.txt: 不属于共享面（upstream\.paths）'
 # prune（§20.5）：判据 = .xinit/prune.txt
 stdout 'backflow-excluded prune/p\.txt: 该路径已脱离管理，无法确定模板路径'
-# 来源消失（§20.5 句 2 / 守卫 7 成因②）
+# 来源消失（§20.5 句 2 半面；守卫 7 成因② 半面见下方 M9 扩展块）
 stdout 'backflow-excluded gone/g\.txt: 该路径的模板来源已不存在'
 stdout '`--map` 显式给出模板路径'
 # binary（§20.7）
