@@ -67,7 +67,9 @@ func TranslateFile(in TranslateInput) (TranslateResult, error) {
 	case merge.Conflicts:
 		return TranslateResult{Conflict: true, Blocks: res.Conflicts}, nil
 	default: // merge.Error：冲突之外的结构性失败，调用方必须能区分（fail-closed）
+		// 口径照 merge.Outcome 的分类：rc ≥128（如二进制被拒的 255）与进程被信号
+		// 终止都落这里，故文案不把成因写死成 NUL。
 		return TranslateResult{}, errors.New(
-			"三方合并失败：git merge-file 拒绝该输入（三方中任一方含 NUL，如二进制文件）")
+			"三方合并失败：git merge-file 未正常完成（rc≥128 或进程被信号终止；常见成因是三方之一含 NUL 而被拒）")
 	}
 }
