@@ -1,0 +1,141 @@
+# backup prune 端到端（§21.12 backup 保留策略收口）：真链（init → update ×2 →
+# prune --keep 1 → 幂等）+ 保留方向锚 + 手工多份 / 严格命名 + dry-run 零删 +
+# 用法错误（rc=1、零磁盘动作）+ 非项目零建根（R6）+ backup/ 不存在不建目录。
+# 纯内置命令（mkdir/cp/cmp/exists，无 exec sh）⇒ 可全平台跑；各场景用独立
+# 目录，互不影响。
+
+# ── 场景 1：真链——两次 update 各产生一份备份 → --keep 1 只删最旧的一份 ──
+xinit init --template tpl --yes out
+stderr '提示: 当前目录不在 git 仓库内'
+cd out
+
+# 模板 a.txt v1→v2：update 改写工作树，改写前的 v1 进备份
+cp $WORK/v2.txt $WORK/tpl/a.txt
+xinit-code update
+stdout 'write\s+a\.txt'
+stdout '备份: \.xinit/backup/'
+stdout 'exit=0'
+# 再推进一次（v2→v3）→ 第二份备份（改写前的 v2）
+cp $WORK/v3.txt $WORK/tpl/a.txt
+xinit-code update
+stdout '备份: \.xinit/backup/'
+stdout 'exit=0'
+
+xinit-code backup prune --keep 1
+stdout '已删除：\.xinit/backup/\d{8}-\d{6}'
+stdout -count=1 '已删除：'
+stdout '已删除 1 份（保留最近 1 份）'
+stdout 'exit=0'
+cmp a.txt $WORK/v3.txt
+
+# 幂等：只剩最近 1 份（M=1）→ K=0 单行、rc=0，再跑不发生任何删除
+xinit-code backup prune --keep 1
+stdout '无删除项（备份共 1 份，保留数 1 份）'
+stdout 'exit=0'
+! stdout '已删除'
+
+# 保留方向锚：真链的备份目录名是墙钟时间戳（脚本无法枚举），故加一个名字已知的
+# 旧份哨兵 + 第三轮 update（M=3）→ --keep 2 只删更旧的哨兵、留给最新两份
+mkdir .xinit/backup/00000001-000000
+cp $WORK/v1.txt .xinit/backup/00000001-000000/f.txt
+cp $WORK/v4.txt $WORK/tpl/a.txt
+xinit-code update
+stdout '备份: \.xinit/backup/'
+stdout 'exit=0'
+xinit-code backup prune --keep 2
+stdout '已删除：\.xinit/backup/00000001-000000'
+stdout '已删除 1 份（保留最近 2 份）'
+stdout 'exit=0'
+! exists .xinit/backup/00000001-000000
+cd $WORK
+
+# ── 场景 2：手工 3 份 + 杂项 → --keep 1 只删旧两份、留最新份；杂项一律不动 ──
+mkdir manual/.xinit/backup/20200101-000000
+mkdir manual/.xinit/backup/20200102-000000
+mkdir manual/.xinit/backup/20200103-000000
+mkdir manual/.xinit/backup/not-a-stamp
+cp $WORK/v1.txt manual/.xinit/backup/20200101-000000/a.txt
+cp $WORK/v2.txt manual/.xinit/backup/20200102-000000/a.txt
+cp $WORK/v3.txt manual/.xinit/backup/20200103-000000/a.txt
+# 杂项三连：乱名目录 / 乱名普通文件 / 名字匹配但不是目录 → 都不算份、都不动
+cp $WORK/v1.txt manual/.xinit/backup/plainfile.txt
+cp $WORK/v1.txt manual/.xinit/backup/20191231-000000
+cd manual
+xinit-code backup prune --keep 1
+stdout '已删除：\.xinit/backup/20200101-000000'
+stdout '已删除：\.xinit/backup/20200102-000000'
+stdout -count=2 '已删除：\.xinit/backup/\d{8}-\d{6}'
+stdout '已删除 2 份（保留最近 1 份）'
+stdout 'exit=0'
+! exists .xinit/backup/20200101-000000
+! exists .xinit/backup/20200102-000000
+exists .xinit/backup/20200103-000000
+cmp .xinit/backup/20200103-000000/a.txt $WORK/v3.txt
+exists .xinit/backup/not-a-stamp
+exists .xinit/backup/plainfile.txt
+cmp .xinit/backup/plainfile.txt $WORK/v1.txt
+exists .xinit/backup/20191231-000000
+cmp .xinit/backup/20191231-000000 $WORK/v1.txt
+cd $WORK
+
+# ── 场景 3：--dry-run 零删（同场景 2 的前置，另一份拷贝）──
+mkdir dry/.xinit/backup/20200101-000000
+mkdir dry/.xinit/backup/20200102-000000
+mkdir dry/.xinit/backup/20200103-000000
+cp $WORK/v1.txt dry/.xinit/backup/20200101-000000/a.txt
+cp $WORK/v2.txt dry/.xinit/backup/20200102-000000/a.txt
+cp $WORK/v3.txt dry/.xinit/backup/20200103-000000/a.txt
+cd dry
+xinit-code backup prune --keep 1 --dry-run
+stdout '将删除：\.xinit/backup/20200101-000000'
+stdout '将删除：\.xinit/backup/20200102-000000'
+stdout '将删除 2 份（保留最近 1 份；--dry-run，未执行）'
+stdout 'exit=0'
+! stdout '已删除'
+exists .xinit/backup/20200101-000000
+exists .xinit/backup/20200102-000000
+exists .xinit/backup/20200103-000000
+cmp .xinit/backup/20200101-000000/a.txt $WORK/v1.txt
+cd $WORK
+
+# ── 场景 4：用法错误（缺 --keep / --keep 0）→ rc=1，且不碰磁盘 ──
+mkdir empty
+cd empty
+xinit-code backup prune
+stdout 'exit=1'
+stderr 'required flag\(s\) "keep" not set'
+xinit-code backup prune --keep 0
+stdout 'exit=1'
+stderr '--keep 必须 ≥ 1'
+stderr 'rm -rf \.xinit/backup'
+! exists .xinit
+
+# ── 场景 5：非 xinit 项目（空目录）→ rc=1 + 零建根（R6）──
+xinit-code backup prune --keep 1
+stdout 'exit=1'
+stderr '不是 xinit 项目（未找到 \.xinit/ 目录）'
+! exists .xinit
+cd $WORK
+
+# ── 场景 6：backup/ 不存在（从未 update 过）→ K=0 单行、rc=0、不建目录 ──
+mkdir nobackup/.xinit
+cd nobackup
+xinit-code backup prune --keep 3
+stdout '无删除项（备份共 0 份，保留数 3 份）'
+stdout 'exit=0'
+! exists .xinit/backup
+! exists .xinit/state.json
+cd $WORK
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+v1
+-- v1.txt --
+v1
+-- v2.txt --
+v2
+-- v3.txt --
+v3
+-- v4.txt --
+v4
