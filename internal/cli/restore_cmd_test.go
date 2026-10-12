@@ -6,10 +6,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/state"
 )
+
+// snapT 取「内容 + mtime」快照（R6 零状态写入断言用）：字节对照之外，mtime
+// 还能逮到「用相同内容重写」这类字节看不见的写——st.Save 对同一 state 是
+// 确定性输出（state.go:111-123），只有 mtime 能看见它。
+func snapT(t *testing.T, dir, rel string) (string, time.Time) {
+	t.Helper()
+	fi, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mustContent(t, dir, rel), fi.ModTime()
+}
 
 // fileStateT 造一条记账项（hash 按内容现算；restore 不读 hash，但夹具保持真实）。
 func fileStateT(rel, content string, exec bool) state.FileState {
@@ -40,11 +53,16 @@ func restoreProjectT(t *testing.T, files map[string]state.FileState, base map[st
 
 // 用例 1（R1/R5/R13）：找回被删路径——字节恢复、父目录建出、exec 位按记账
 // 置 0755（base 文件自己是 0644，实现若从 base 读 mode 即红）。
+// 写路径同样钉零状态写入（R6）：state.json 与 base 树在写前后逐字节一致、
+// mtime 也不得变（用例 2 只覆盖 no-op 路径，写路径此前是判别缺口）。
 func TestRestoreBringsBackDeletedFile(t *testing.T) {
 	const content = "#!/bin/sh\necho hi\n"
 	proj := restoreProjectT(t,
 		map[string]state.FileState{"scripts/run.sh": fileStateT("scripts/run.sh", content, true)},
 		map[string]string{"scripts/run.sh": content})
+
+	stateBefore, stateMtimeBefore := snapT(t, proj, ".xinit/state.json")
+	baseBefore, baseMtimeBefore := snapT(t, proj, ".xinit/base/scripts/run.sh")
 
 	out := captureStdoutT(t, func() {
 		if err := Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"scripts/run.sh"}}); err != nil {
@@ -63,6 +81,21 @@ func TestRestoreBringsBackDeletedFile(t *testing.T) {
 	}
 	if out != "已恢复：scripts/run.sh\n" {
 		t.Errorf("stdout = %q，want %q", out, "已恢复：scripts/run.sh\n")
+	}
+	stateAfter, stateMtimeAfter := snapT(t, proj, ".xinit/state.json")
+	if stateAfter != stateBefore {
+		t.Error("写路径也不得改 state.json（R6）")
+	}
+	if !stateMtimeAfter.Equal(stateMtimeBefore) {
+		t.Errorf("写路径也不得重写 state.json（R6；内容相同也不许——st.Save 的确定性输出下字节对照看不见）mtime %v → %v",
+			stateMtimeBefore, stateMtimeAfter)
+	}
+	baseAfter, baseMtimeAfter := snapT(t, proj, ".xinit/base/scripts/run.sh")
+	if baseAfter != baseBefore {
+		t.Error("写路径也不得改 base 树（R6）")
+	}
+	if !baseMtimeAfter.Equal(baseMtimeBefore) {
+		t.Errorf("写路径也不得重写 base 树（R6）mtime %v → %v", baseMtimeBefore, baseMtimeAfter)
 	}
 }
 
@@ -137,6 +170,70 @@ func TestRestoreAlignsExecBit(t *testing.T) {
 				t.Errorf("内容被改动：%q", got)
 			}
 		})
+	}
+}
+
+// §22.6 注入用例（Minor-2；导出 var 先例 check_test.go:449 / update_test.go:739）：
+// 无 x 位语义平台（Windows）——记账 exec=true 而磁盘没有可执行位时不判「不符」，
+// 否则该路径每轮都判「待恢复」→ 反复重写、幂等性破坏（execAligned 的短路）。
+//
+// 两段结构：**对照前置**（本平台有 x 位语义时同一夹具必判「不符」并重写——防
+// 注入段因夹具恒真而假阳性）+ **注入段**（ExecSupported=false 时同夹具判
+// 「无变化」、不重写、不 exec 位、mtime 不变）。
+func TestRestoreSkipsExecAlignmentWithoutExecSemantics(t *testing.T) {
+	const content = "x\n"
+	// 夹具：内容一致、记账 exec=true、磁盘无可执行位（0644）。
+	mk := func(t *testing.T) string {
+		t.Helper()
+		proj := restoreProjectT(t,
+			map[string]state.FileState{"p.sh": fileStateT("p.sh", content, true)},
+			map[string]string{"p.sh": content})
+		writeFilesT(t, proj, map[string]string{"p.sh": content})
+		return proj
+	}
+
+	// 对照前置：本平台（darwin/linux，exec_unix.go）有 x 位语义。
+	if !fsutil.ExecSupported {
+		t.Fatal("对照前置要求本平台有 x 位语义；夹具前提不成立")
+	}
+	proj := mk(t)
+	var err error
+	// t.Fatal 不进闭包（captureStdoutT 靠闭包返回后还原 os.Stdout）。
+	out := captureStdoutT(t, func() { err = Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"p.sh"}}) })
+	if err != nil {
+		t.Fatalf("对照前置 Restore: %v", err)
+	}
+	if out != "已恢复：p.sh\n" {
+		t.Fatalf("对照前置：同夹具在本平台必判 exec 不符并重写；stdout = %q", out)
+	}
+
+	old := fsutil.ExecSupported
+	defer func() { fsutil.ExecSupported = old }() // 精确还原（defer 纪律）
+	fsutil.ExecSupported = false
+
+	proj2 := mk(t)
+	before, mtimeBefore := snapT(t, proj2, "p.sh")
+	out2 := captureStdoutT(t, func() { err = Restore(RestoreOptions{ProjectDir: proj2, Paths: []string{"p.sh"}}) })
+	if err != nil {
+		t.Fatalf("Restore（注入）: %v", err)
+	}
+	if out2 != "无变化：p.sh\n" {
+		t.Errorf("无 x 位语义平台不应判 exec 不符：stdout = %q", out2)
+	}
+	after, mtimeAfter := snapT(t, proj2, "p.sh")
+	if after != before {
+		t.Errorf("内容被改动：%q", after)
+	}
+	if !mtimeAfter.Equal(mtimeBefore) {
+		t.Errorf("无 x 位语义平台不得重写该路径（否则每轮都写、幂等性破坏）：mtime %v → %v",
+			mtimeBefore, mtimeAfter)
+	}
+	fi, err := os.Stat(filepath.Join(proj2, "p.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&0o111 != 0 {
+		t.Errorf("无 x 位语义平台不得动 exec 位：mode = %v", fi.Mode())
 	}
 }
 
