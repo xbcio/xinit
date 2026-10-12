@@ -1,18 +1,23 @@
 # state.json 恢复面（评审 I-1）：Save 写新内容前把上一版逐字节保留到
 # .xinit/state.json.prev（首次写入不产生）；载入失败时「缺失 / 损坏」两条
 # 指引分流——损坏点出 .prev 人工复制恢复，且没有任何自动回退（Load 不读
-# .prev）。status 与 update 两条命令各测其一（损坏文案全覆盖）。
+# .prev）。status 与 update 两条命令各测其一（损坏文案全覆盖）。update 前
+# 改动模板使 state.json 真实改写（新版 ≠ 旧版）⇒ .prev 逐字节断言可判别
+# （评审 W-1）。
 
 xinit init --template $WORK/tpl --yes out
 ! exists out/.xinit/state.json.prev
 
 cd out
 cp .xinit/state.json $WORK/state-after-init.json
+# 改动模板 ⇒ 本轮 update 真实改写 state.json（新版 ≠ 旧版）
+cp $WORK/tpl-changed/a.txt $WORK/tpl/a.txt
 xinit-code update
 stdout 'exit=0'
-# .prev = 上一版（init 落的那一份），逐字节
+# .prev = 上一版（init 落的那一份），逐字节；且确与新版不同（场景非退化）
 exists .xinit/state.json.prev
 cmp .xinit/state.json.prev $WORK/state-after-init.json
+! cmp .xinit/state.json.prev .xinit/state.json
 
 # ── 损坏：status / update 都给「解析失败（文件可能已损坏）」+ .prev 指引，
 # 旧泛化句（缺失口径）不得出现 ──
@@ -48,5 +53,7 @@ stderr '这不是 xinit 项目，或 \.xinit/state\.json 缺失；请从模板 i
 manifest_version: 1
 -- tpl/a.txt --
 a1
+-- tpl-changed/a.txt --
+a2
 -- garbage.json --
 { 这不是 JSON
