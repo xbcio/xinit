@@ -267,7 +267,7 @@ xinit adopt: /path/to/minimal-template@v1.1.0
 | --- | --- |
 | `--template <source>` | 模板来源（本地路径或 git URL），**必填** |
 | `--config <file>` | 变量文件（扁平 YAML） |
-| `--offline` | 不联网，只用本地模板镜像缓存 |
+| `--offline` | 不联网，只读本地模板镜像缓存；镜像缺失即报错（不会克隆） |
 | `--no-hooks` | 跳过 `post_init` 执行（仍记录本次内容，下次带钩子运行仍需确认） |
 | `--force` | 允许在非空目录执行（仍不覆盖同名文件） |
 | `--yes` | 跳过钩子信任确认（等同于在交互终端回答 y） |
