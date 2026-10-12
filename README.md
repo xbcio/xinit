@@ -367,6 +367,20 @@ xinit adopt: /path/to/minimal-template@v1.1.0
 
 > 根命令还带有 cobra 自带的 `completion` 与 `help` 两个辅助命令，与上面的业务命令无关。
 
+### `xinit backup prune --keep <N>` — 清理 `.xinit/backup/` 旧份
+
+删除 `.xinit/backup/` 里**较旧**的备份目录、只保留最近 `N` 份——`update` 每次改写前都先备份（见第 7 节），长期运行会让 `backup/` 无界增长。清理因此是**显式的手工动作**：`update` / `init` / `adopt` / `restore` / `backflow` 的行为都不受影响，**绝不自动清理**。
+
+- **「份」= 一个备份目录**：只认 `update` 的备份命名（`<yyyyMMdd-HHmmss>`，同一秒的第二次起追加 `-2`、`-3`……，各自算一份），按时间升序保留最新 `N` 份、删除其余；别的名字、普通文件、符号链接一律不动（匹配名字但不是目录的也忽略）。
+- **默认执行删除**（删除不可恢复——确认这些份无需回滚后再删）；`backup/` 不存在或份数不足 `N` 时不删任何东西（rc=0），**也不会新建 `backup/`**。
+
+| 旗标 | 语义 |
+| --- | --- |
+| `--keep <N>` | 保留最近 N 份（**必填**；`N ≥ 1`，`N < 1` 报错退 1） |
+| `--dry-run` | 只列出将删除的份，不实际删除 |
+
+**零联网、零状态写入**：不联网、不写 `.xinit/state.json`、不写工作树（只会多出项目锁 `.xinit/lock`）；不是 xinit 项目（没有 `.xinit/`）时报错退 1、不会替你建出 `.xinit/`。退出码 0 / 1（见第 8 节）。要清空全部备份就手工 `rm -rf .xinit/backup`（删除范围由 `--keep` 显式指定，没有 `--force`）。
+
 ### 交互提问
 
 `init` 与 `update` 在**真终端**上会向你提问；`--interactive` 让 stdin 不是终端时也按可交互处理——**所有提问（含信任确认）都从 stdin 逐行读取**，供脚本与 CI 驱动。它只打开读入通道、不改任何判据：信任确认仍须显式回答 `y` / `yes`（或用 `--yes`），钩子全文照旧**先打印**、不跳过、也不代答；`--yes` 只跳过信任确认，**不代答** vars 与冲突提问。反方向的逃生口也不变：不带 `--interactive` 且 stdin 不是终端时信任门不提问——`xinit update < /dev/null` 只报告（需要确认时即以退 4、零写结束），不打印提问行。
@@ -607,7 +621,7 @@ $ xinit update
 | `base/` | 渲染后的**基线树**（普通目录副本），三方比较的 base 侧 |
 | `conflicts/` | 未解决的冲突路径 → 模板版本；目录存在即「有冲突待处理」 |
 | `overwritten/` | 被模板覆盖掉的你的内容（`generated` 路径），持久保留 |
-| `backup/` | 每次 `update` 改写前的原内容 + exec 位，按运行开始时刻分目录（同名时追加 `-2`、`-3`），**不覆盖、不自动清理** |
+| `backup/` | 每次 `update` 改写前的原内容 + exec 位，按运行开始时刻分目录（同名时追加 `-2`、`-3`），**不覆盖、不自动清理**（清理旧份：`xinit backup prune --keep N`） |
 | `backflow/` | 回流产物（`backflow` 生成的 `.patch`；文件名含派生与模板两个短 sha）。有它在 `.xinit/` 里就已进 `.git/info/exclude` 的整目录条目，不用单独登记 |
 | `lock` | 项目锁，防止并发 `update`（`diff` / `status` / `check` 只读不加锁）；unix 用 flock、Windows 用 LockFileEx；锁文件常驻不删；Windows 上持锁期间被共享模式占用，外部工具删不掉（§22.3） |
 | `prune.txt` | 一行一个路径：这些路径脱离管理、不再同步 |
@@ -639,6 +653,8 @@ $ xinit update
 `backflow` **只用 0 / 1（不新增码）**：0 = 导出成功（**含警告**）；1 = 错误（资格、未收敛、全部路径被出口过滤、全 noop、IO）。「有警告」不是 2——2 是 `update` 的「有待处理冲突」语义，回流没有它（冲突一律 fail-closed 退 1）。
 
 `restore` **只用 0 / 1（不新增码）**：0 = 全部恢复或无变化；1 = 错误（含拒绝覆盖——预检不过即零写入）。
+
+`backup prune` **只用 0 / 1（不新增码）**：0 = 完成（含无删除项）；1 = 错误（`--keep < 1`、不是 xinit 项目——这两者都零磁盘动作；以及删除失败）。
 
 交互回答不引入新退出码：vars 采集中止（EOF）= 1、冲突默认回答 = 现状（2）、改用模板版 = 正常写入通道（收敛轮 0）、信任拒绝 = 4。
 
@@ -732,4 +748,4 @@ make check     # fmt + vet + test，提交前跑这个
 测试结构：
 
 - **单元测试**在各 `internal/*` 包里（渲染、清单、决策表、合并、状态、模板获取等）。
-- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（66 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt`/`restore`/`backflow` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
+- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（67 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt`/`restore`/`backflow`/`backup prune` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
