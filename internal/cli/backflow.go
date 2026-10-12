@@ -37,7 +37,8 @@ func newBackflowCmd() *cobra.Command {
 		Use:   "backflow <commit>",
 		Short: "把派生项目对共享面的改动回送给模板（§20）",
 		Long: "把派生项目某个提交对共享面（清单 upstream.paths ∪ --paths）的改动翻译回模板坐标系，" +
-			"生成可 `git am -3` 接收的补丁产物（默认 .xinit/backflow/），不推送、不联网。\n\n" +
+			"生成可 `git am -3` 接收的补丁产物（默认 .xinit/backflow/），不推送；模板源只读——" +
+			"本地镜像缺失时按需首次克隆一次建立缓存（已有镜像不刷新）。\n\n" +
 			"提交消息末段 trailer 块须含 `Template-Upstream: yes`（opt-in）。\n" +
 			"退出码：0 = 导出成功（含警告）；1 = 错误（资格/收敛/全部路径被过滤/全 noop/IO）。" +
 			"警告（域外、prune、来源消失、render/binary/symlink、夹带扫描命中、未跟踪文件）不改变退出码。",
