@@ -1,0 +1,69 @@
+# restore 端到端（§21.12 v2 候选收口）：三态（恢复 / 无变化 / 拒绝覆盖）+ --force
+# 覆盖 + 多路径 all-or-nothing + 非法路径 + 未记账 + base 缺失指引。
+# 纯内置命令（无 exec sh）⇒ 可全平台跑；exec 位语义不在脚本断言（T1 单测覆盖）。
+# 场景在同一个项目上递进：每段的初始态即上段终态。
+
+xinit init --template tpl --yes out
+stderr '提示: 当前目录不在 git 仓库内'
+cd out
+
+# ── 场景 1：找回被删（rm 工作树里的记账文件 → 从 base 写回）──
+rm a.txt
+xinit restore a.txt
+stdout '已恢复：a\.txt'
+exists a.txt
+cmp a.txt .xinit/base/a.txt
+
+# ── 场景 2：幂等（目标已与 base 一致 → 无变化、rc=0）──
+xinit-code restore a.txt
+stdout '无变化：a\.txt'
+stdout 'exit=0'
+
+# ── 场景 3：目标存在且内容不同 → 默认拒绝（rc=1、目标原封不动、提示 --force）──
+cp $WORK/local-a.txt a.txt
+xinit-code restore a.txt
+stdout 'exit=1'
+stderr '目标已存在且与模板已记录的版本不同：a\.txt'
+stderr '确认覆盖请加 --force'
+cmp a.txt $WORK/local-a.txt
+
+# ── 场景 4：--force 覆盖（把该路径重置回 base 记录的版本）──
+xinit-code restore --force a.txt
+stdout '已恢复：a\.txt'
+stdout 'exit=0'
+cmp a.txt .xinit/base/a.txt
+
+# ── 场景 5：多路径 all-or-nothing（一个未记账 ⇒ 另一个也不写）──
+rm a.txt
+xinit-code restore a.txt nope.txt
+stdout 'exit=1'
+stderr 'nope\.txt'
+! exists a.txt
+! exists nope.txt
+
+# ── 场景 6：非法路径（`..` 段 / 绝对路径）→ 预检拒绝，rc=1 ──
+xinit-code restore ../x
+stdout 'exit=1'
+stderr '路径 "\.\./x" 非法'
+xinit-code restore /abs.txt
+stdout 'exit=1'
+stderr '是绝对路径'
+
+# ── 场景 7：未记账（文案逐字）──
+xinit-code restore nope.txt
+stdout 'exit=1'
+stderr '路径 "nope\.txt" 不在记账路径里：restore 只能恢复记账路径（\.xinit/state\.json 的 files 键）'
+
+# ── 场景 8：base 缺失 → rc=1，指引先 update 重建（restore 不重建 base）──
+rm .xinit/base/a.txt
+xinit-code restore a.txt
+stdout 'exit=1'
+stderr '\.xinit/base/a\.txt 缺失（记账里有、base 树里没有）'
+stderr '重建 base 后再 restore'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+v1
+-- local-a.txt --
+local-a
