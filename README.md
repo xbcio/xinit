@@ -257,7 +257,7 @@ xinit adopt: /path/to/minimal-template@v1.1.0
 
 ## 4. 命令面
 
-`init` 与 `backflow <commit>` 以外，所有命令都作用于**当前目录**、没有位置参数。
+`init` 与 `backflow <commit>` 以外，所有命令都作用于**当前目录**、没有位置参数（`restore <path>...` 除外——它的位置参数是项目内的记账相对路径）。
 
 > 下表是旗标速查；**权威说明以 `xinit <命令> --help` 为准**。为便于阅读，表格里省略了 `--help` 原文中的内部章节号（如 `（§10.3）`，本 README 后面引用到的输出里也保留了这类编号——它们只是工具内部的文档索引，不影响使用）。
 
@@ -333,6 +333,24 @@ xinit adopt: /path/to/minimal-template@v1.1.0
 | `--template <source>` | 模板来源（本地路径或 git URL），**必填** |
 | `--revision <ref>` | 目标版本（默认取模板最新的 semver tag） |
 | `--config <file>` | 变量文件（扁平 YAML），**必填** |
+
+### `xinit restore <path>...` — 把记账路径恢复到工作树
+
+把 1–n 个记账路径（`.xinit/state.json` 里 `files` 的键，即模板已记录的 Dst）从 `.xinit/base/` 恢复到项目工作树——即 `update` 报告里「找回模板已记录的版本：cp .xinit/base/<路径> <路径>」提示的命令化。`update` 负责**推进到新版本**，`restore` 只负责**把 base 记录的版本拿回来**（两者互不调用）；文件被误删、或本地改动想整体退回模板版时用它。
+
+三态语义（每个 `<path>` 都必须是记账路径）：
+
+- **目标不存在** → 从 base 恢复（写入字节与 exec 位）；
+- **目标与 base 逐字节一致** → 无变化（幂等成功，输出「无变化：<路径>」）；
+- **目标存在且内容不同** → **默认拒绝**（退 1、一个字节都不写，报告这些路径并提示 `--force`）；加 `--force` 才覆盖——把该路径重置回模板已记录的版本。
+
+| 旗标 | 语义 |
+| --- | --- |
+| `--force` | 覆盖内容不同的现有文件（默认拒绝覆盖这些路径，退 1、不改动磁盘） |
+
+**预检全过才写（all-or-nothing）**：任一路径非法（绝对路径、`..` 段等）/ 未记账 / base 里缺该文件 / 拒绝覆盖，都会在写任何字节之前以退 1 结束。base 里缺该文件时**不重建 base**（重建需要模板源与 vars）：先 `xinit update` 重建 base 后再 `restore`。
+
+**零联网、零状态写入**：不联网、不写 `.xinit/state.json`、不写 `.xinit/base/`（只会多出项目锁 `.xinit/lock`）——恢复后该路径与 base 一致，下一轮 `update` 自然不再告警。退出码 0 / 1（见第 8 节）。
 
 ### `xinit backflow <commit>` — 把共享面的改动回送给模板
 
@@ -620,6 +638,8 @@ $ xinit update
 
 `backflow` **只用 0 / 1（不新增码）**：0 = 导出成功（**含警告**）；1 = 错误（资格、未收敛、全部路径被出口过滤、全 noop、IO）。「有警告」不是 2——2 是 `update` 的「有待处理冲突」语义，回流没有它（冲突一律 fail-closed 退 1）。
 
+`restore` **只用 0 / 1（不新增码）**：0 = 全部恢复或无变化；1 = 错误（含拒绝覆盖——预检不过即零写入）。
+
 交互回答不引入新退出码：vars 采集中止（EOF）= 1、冲突默认回答 = 现状（2）、改用模板版 = 正常写入通道（收敛轮 0）、信任拒绝 = 4。
 
 ## 9. 回流
@@ -712,4 +732,4 @@ make check     # fmt + vet + test，提交前跑这个
 测试结构：
 
 - **单元测试**在各 `internal/*` 包里（渲染、清单、决策表、合并、状态、模板获取等）。
-- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（65 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt`/`backflow` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
+- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（66 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt`/`restore`/`backflow` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
