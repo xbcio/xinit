@@ -59,6 +59,7 @@ rm .xinit/base/a.txt
 xinit-code restore a.txt
 stdout 'exit=1'
 stderr '\.xinit/base/a\.txt 缺失（记账里有、base 树里没有）'
+stderr '`xinit update`'
 stderr '重建 base 后再 restore'
 
 -- tpl/xinit.yml --
