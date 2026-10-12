@@ -352,7 +352,7 @@ xinit adopt: /path/to/minimal-template@v1.1.0
 
 **零联网、零状态写入**：不联网、不写 `.xinit/state.json`、不写 `.xinit/base/`（只会多出项目锁 `.xinit/lock`）——恢复后该路径与 base 一致，下一轮 `update` 自然不再告警。退出码 0 / 1（见第 8 节）。
 
-**已 prune 的路径不在记账里**：`update` 生效轮连同 `.xinit/base/` 与 `state.json` 记账一并移除，`restore` 不适用——拿回管理见 §7。
+**已 prune 的路径不在记账里**：`update` 生效轮会把该路径从 `.xinit/base/` 与 `state.json` 记账中一并移除，`restore` 不适用——拿回管理见 §7。
 
 ### `xinit backflow <commit>` — 把共享面的改动回送给模板
 
@@ -628,7 +628,7 @@ $ xinit update
 | `lock` | 项目锁，防止并发 `update`（`diff` / `status` / `check` 只读不加锁）；unix 用 flock、Windows 用 LockFileEx；锁文件常驻不删；Windows 上持锁期间被共享模式占用，外部工具删不掉（§22.3） |
 | `prune.txt` | 一行一个路径：这些路径脱离管理、不再同步（单向，见下） |
 
-`prune.txt` 是**单向**的：写入的路径在下一轮 `update`（生效轮）连同 `.xinit/base/` 与 `state.json` 记账一并移除——该轮不会单独提示这些路径的脱管，只并入常规汇总计数。此后 `xinit restore` 对它们不适用（已不在记账路径里），模板对它们的改动也完全无声。要拿回管理：从 `prune.txt` 删掉该行、再跑一次 `update`——模板记录的版本写回并重新纳入管理（本地若已有同名文件，按普通更新规则合并或冲突）。
+`prune.txt` 是**单向**的：写入的路径在下一轮 `update`（生效轮）连同 `.xinit/base/` 与 `state.json` 记账一并移除——该轮不会单独提示这些路径已脱离管理（汇总计数里也看不到这一变化）。此后 `xinit restore` 对它们不适用（已不在记账路径里），模板对它们的改动也完全无声。要拿回管理：从 `prune.txt` 删掉该行、再跑一次 `update`——该路径按「模板新增」重新纳入管理：本地无该文件时写回模板记录的版本；本地已有同名文件时，与模板一致则直接纳入管理，不同则报 `conflict-both-added` 冲突（退 2，模板版写到 `.xinit/conflicts/`，本地文件不动）——手工处理到与模板一致后重跑，或按 §6 用 `--accept` 声明已解决（把 `conflicts/` 里的模板版记为 base，本地内容此后按本地改动处理）。
 
 ### 用户缓存目录与渲染快照缓存
 
