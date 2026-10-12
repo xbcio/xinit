@@ -64,11 +64,13 @@ func TestRestoreBringsBackDeletedFile(t *testing.T) {
 	stateBefore, stateMtimeBefore := snapT(t, proj, ".xinit/state.json")
 	baseBefore, baseMtimeBefore := snapT(t, proj, ".xinit/base/scripts/run.sh")
 
+	var err error
 	out := captureStdoutT(t, func() {
-		if err := Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"scripts/run.sh"}}); err != nil {
-			t.Fatalf("Restore: %v", err)
-		}
+		err = Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"scripts/run.sh"}})
 	})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
 	if got := mustContent(t, proj, "scripts/run.sh"); got != content {
 		t.Errorf("恢复的内容 = %q，want %q", got, content)
 	}
@@ -111,11 +113,13 @@ func TestRestoreIsIdempotentAndWritesNoState(t *testing.T) {
 	stateBefore := mustContent(t, proj, ".xinit/state.json")
 	baseBefore := mustContent(t, proj, ".xinit/base/a.txt")
 
+	var err error
 	out := captureStdoutT(t, func() {
-		if err := Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"a.txt"}}); err != nil {
-			t.Fatalf("Restore: %v", err)
-		}
+		err = Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"a.txt"}})
 	})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
 	if out != "无变化：a.txt\n" {
 		t.Errorf("stdout = %q，want %q", out, "无变化：a.txt\n")
 	}
@@ -151,11 +155,13 @@ func TestRestoreAlignsExecBit(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			var err error
 			out := captureStdoutT(t, func() {
-				if err := Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"p.sh"}}); err != nil {
-					t.Fatalf("Restore: %v", err)
-				}
+				err = Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"p.sh"}})
 			})
+			if err != nil {
+				t.Fatalf("Restore: %v", err)
+			}
 			if out != "已恢复：p.sh\n" {
 				t.Errorf("stdout = %q，want %q（仅 exec 位不符按恢复处理）", out, "已恢复：p.sh\n")
 			}
@@ -244,17 +250,18 @@ func TestRestoreRefusesDifferentContentWithoutForce(t *testing.T) {
 		map[string]string{"a.txt": "base\n"})
 	writeFilesT(t, proj, map[string]string{"a.txt": "local\n"})
 
+	var err error
 	out := captureStdoutT(t, func() {
-		err := Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"a.txt"}})
-		if err == nil {
-			t.Fatal("内容不同的现有目标必须默认拒绝")
-		}
-		for _, want := range []string{"a.txt", "--force"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("拒绝文案 %q 缺 %q", err.Error(), want)
-			}
-		}
+		err = Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"a.txt"}})
 	})
+	if err == nil {
+		t.Fatal("内容不同的现有目标必须默认拒绝")
+	}
+	for _, want := range []string{"a.txt", "--force"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("拒绝文案 %q 缺 %q", err.Error(), want)
+		}
+	}
 	if out != "" {
 		t.Errorf("拒绝时不该有 stdout 输出：%q", out)
 	}
@@ -270,11 +277,13 @@ func TestRestoreForceOverwrites(t *testing.T) {
 		map[string]string{"a.txt": "base\n"})
 	writeFilesT(t, proj, map[string]string{"a.txt": "local\n"})
 
+	var err error
 	out := captureStdoutT(t, func() {
-		if err := Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"a.txt"}, Force: true}); err != nil {
-			t.Fatalf("Restore --force: %v", err)
-		}
+		err = Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"a.txt"}, Force: true})
 	})
+	if err != nil {
+		t.Fatalf("Restore --force: %v", err)
+	}
 	if got := mustContent(t, proj, "a.txt"); got != "base\n" {
 		t.Errorf("--force 后内容 = %q，want %q", got, "base\n")
 	}
@@ -388,11 +397,13 @@ func TestRestoreDedupesKeepingFirstOrder(t *testing.T) {
 		},
 		map[string]string{"a.txt": "a\n", "b.txt": "b\n"})
 
+	var err error
 	out := captureStdoutT(t, func() {
-		if err := Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"a.txt", "a.txt", "b.txt"}}); err != nil {
-			t.Fatalf("Restore: %v", err)
-		}
+		err = Restore(RestoreOptions{ProjectDir: proj, Paths: []string{"a.txt", "a.txt", "b.txt"}})
 	})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
 	if out != "已恢复：a.txt\n已恢复：b.txt\n" {
 		t.Errorf("stdout = %q，want %q", out, "已恢复：a.txt\n已恢复：b.txt\n")
 	}
