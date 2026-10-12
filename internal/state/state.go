@@ -65,6 +65,14 @@ func Path(projectDir string) string {
 	return filepath.Join(projectDir, DirName, "state.json")
 }
 
+// PrevPath 返回上一版状态文件（state.json.prev）的位置：Save 写新内容前
+// 把现有 state.json 的**旧字节**保留到这里。
+//
+// Load 不读它——恢复是**人工复制**（评审 I-1：不引入自动回退）。
+func PrevPath(projectDir string) string {
+	return filepath.Join(projectDir, DirName, "state.json.prev")
+}
+
 // Load 读取状态。
 //
 // 状态缺失或版本不认识时**立刻失败并说明**，绝不猜 —— 猜出来的 base
@@ -100,12 +108,26 @@ func Load(projectDir string) (*State, error) {
 //
 // 输出是确定性的：map 键按字节序排序后写出。否则每次 update 都会产生
 // 无意义的 diff（文件本身也一样，只是内容变了）。
+//
+// 写新内容前先把现有 state.json 的**旧字节**（内容不一定可解析，字节为准）
+// 保留一份到 PrevPath——这是 state.json 损坏时的恢复面（评审 I-1）。
+// 保留失败**不阻断主写**（best-effort）：.prev 是附加保险，写不出它不该
+// 拖垮本轮保存；主写的错误照旧返回、不吞。首次写入（无现有文件）不产生
+// .prev。
+//
+// 两份都走 WriteFileAtomic：任何时刻都不出现半写文件。Load 不读 .prev、
+// 不自动回退——恢复 = 人工复制。
 func (s *State) Save(projectDir string) error {
 	data, err := s.marshal()
 	if err != nil {
 		return err
 	}
-	return WriteFileAtomic(Path(projectDir), data, 0o644)
+	p := Path(projectDir)
+	if old, rerr := os.ReadFile(p); rerr == nil {
+		// best-effort（评审 I-1 明示取舍）：保留失败只影响恢复面，忽略。
+		_ = WriteFileAtomic(PrevPath(projectDir), old, 0o644)
+	}
+	return WriteFileAtomic(p, data, 0o644)
 }
 
 func (s *State) marshal() ([]byte, error) {

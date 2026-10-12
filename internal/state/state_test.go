@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,6 +78,95 @@ func TestSaveIsDeterministic(t *testing.T) {
 		if string(data) != first {
 			t.Fatalf("state.json 序列化不稳定:\n%s\n---\n%s", first, data)
 		}
+	}
+}
+
+func TestSaveKeepsPreviousVersion(t *testing.T) {
+	// 评审 I-1：Save 写新内容前把现有 state.json 的旧字节保留到
+	// state.json.prev（恢复面）；首次写入不得凭空造 .prev。
+	dir := t.TempDir()
+	first := New("0.1.0")
+	first.Vars["k"] = "v1"
+	if err := first.Save(dir); err != nil {
+		t.Fatalf("Save #1: %v", err)
+	}
+	if _, err := os.Stat(PrevPath(dir)); !os.IsNotExist(err) {
+		t.Fatalf("首次 Save 不应产生 .prev: %v", err)
+	}
+	before, err := os.ReadFile(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := New("0.1.0")
+	second.Vars["k"] = "v2"
+	if err := second.Save(dir); err != nil {
+		t.Fatalf("Save #2: %v", err)
+	}
+	prev, err := os.ReadFile(PrevPath(dir))
+	if err != nil {
+		t.Fatalf("第二次 Save 后应保留 .prev: %v", err)
+	}
+	if !bytes.Equal(prev, before) {
+		t.Errorf(".prev 应逐字节等于上一版:\n%q\n---\n%q", before, prev)
+	}
+	now, err := os.ReadFile(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(now, before) {
+		t.Error("主文件应已是新内容，不能与上一版相同")
+	}
+}
+
+func TestSaveKeepsUnparsablePrevAsBytes(t *testing.T) {
+	// 保留判据是「读得动」而非「解得开」：已有 state.json 不可解析时，旧字节
+	// 照样进 .prev（adopt 覆盖损坏文件前，这是唯一的原文件留存）。
+	dir := t.TempDir()
+	p := Path(dir)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	garbage := []byte("{ 不是 JSON\n")
+	if err := os.WriteFile(p, garbage, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := New("0.1.0").Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	prev, err := os.ReadFile(PrevPath(dir))
+	if err != nil {
+		t.Fatalf(".prev 应保留不可解析的旧字节: %v", err)
+	}
+	if !bytes.Equal(prev, garbage) {
+		t.Errorf(".prev = %q，want %q", prev, garbage)
+	}
+	if _, err := Load(dir); err != nil {
+		t.Fatalf("主文件应是可解析的新状态: %v", err)
+	}
+}
+
+func TestSavePrevFailureDoesNotBlockMainWrite(t *testing.T) {
+	// best-effort（评审 I-1 明示取舍）：.prev 写失败不阻断主写。注入方式：
+	// 把 .prev 做成目录占位——WriteFileAtomic 的 rename 必失败（EISDIR 类）。
+	dir := t.TempDir()
+	st := New("0.1.0")
+	if err := st.Save(dir); err != nil {
+		t.Fatalf("Save #1: %v", err)
+	}
+	if err := os.Mkdir(PrevPath(dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st.Vars["k"] = "v2"
+	if err := st.Save(dir); err != nil {
+		t.Fatalf("保留 .prev 失败不得阻断主写（best-effort）: %v", err)
+	}
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatalf("主文件应是可解析的新内容: %v", err)
+	}
+	if got.Vars["k"] != "v2" {
+		t.Errorf("Vars = %+v，want k=v2（主文件未被写入）", got.Vars)
 	}
 }
 
