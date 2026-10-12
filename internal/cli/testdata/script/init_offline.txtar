@@ -1,0 +1,69 @@
+[windows] skip '缓存接线为 darwin/Linux 形态；Windows 变体待真机'
+# init --offline 真离线（§21.12 候选收口）三场景：
+#   A 镜像命中 = 真离线可用：先不带 --offline 建立镜像 → 把裸仓源 mv 走（此后
+#     任何触源行为都会失败：clone 致命、fetch 只打 stderr 警告）→ 对新 dest 加
+#     --offline → 成功 ⇒ 只读镜像。`! stderr 更新模板镜像失败` 把 fetch 侧也锁
+#     住：只看「成功」会对 fetch=true ∧ allowClone=false 的接线假绿——镜像命中
+#     时本来就不会 clone。
+#   B 判别性：镜像缺失（fresh cache）+ 源可达 + --offline → 硬错 rc=1、stderr
+#     单行含补救指引、dest 零产物、缓存根不创建（§11.4 口径）。接线把
+#     allowClone 传回 true 时此场景会 clone 成功 ⇒ 必红（变异实证见任务报告）。
+#   C 对照组：同 B 条件（空缓存 + 源可达）去掉 --offline → 首次 clone 回退
+#     成功（R3：默认路径未越权收紧）。
+# 缓存路径归一 preamble：darwin/Linux 收敛到 $WORK/cache/xinit（fresh cache 用
+# 单路径 rm -rf 覆盖两平台）；符号链接须建在 $WORK/cache 之后——悬挂符号链接
+# 会让 MkdirAll 得 EEXIST。
+
+env XDG_CACHE_HOME=$WORK/cache
+mkdir $WORK/home
+mkdir $WORK/home/Library
+mkdir $WORK/cache
+symlink $WORK/home/Library/Caches -> ../../cache
+
+env GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=x@x GIT_COMMITTER_NAME=x GIT_COMMITTER_EMAIL=x@x
+env GIT_CEILING_DIRECTORIES=$WORK
+
+# 模板：工作仓打一次提交 → 克隆为裸仓。裸仓不是 dir 源（source.go isBareRepo）
+# ⇒ 走镜像缓存；本地 git 工作仓会被 isGitRepo 直用、绕开镜像。
+exec git -c init.defaultBranch=main init -q $WORK/w
+cp $WORK/xinit.yml $WORK/w/xinit.yml
+cp $WORK/a.txt $WORK/w/a.txt
+exec git -C $WORK/w add -A
+exec git -C $WORK/w commit -qm v1
+exec git clone -q --bare $WORK/w $WORK/tpl.git
+
+# ── 场景 A：镜像命中（真离线可用）──
+xinit init --template $WORK/tpl.git --yes seed
+mv $WORK/tpl.git $WORK/tpl.git.away
+# 源字符串不变 ⇒ 镜像键（mirror.go mirrorDirName = sha256(source)）仍命中
+xinit init --template $WORK/tpl.git --offline --yes hit
+stdout '已生成 1 个文件到'
+! stderr '更新模板镜像失败'
+cmp hit/a.txt $WORK/a.txt
+cmp hit/.xinit/base/a.txt $WORK/a.txt
+exists hit/.xinit/state.json
+
+# ── 场景 B：镜像缺失 + 源可达 + --offline → 硬错（不 clone）──
+mv $WORK/tpl.git.away $WORK/tpl.git
+rm -rf $WORK/cache/xinit
+xinit-code init --template $WORK/tpl.git --offline --yes miss
+stdout 'exit=1'
+stderr '^xinit: 离线模式（--offline）：本地没有模板镜像缓存，而该模式不联网、不会克隆；请先不带 --offline 运行一次以建立缓存'
+# R4：单行（前缀 `xinit: 离线模式` 恰一次匹配）
+stderr -count=1 '^xinit: 离线模式'
+! exists miss/a.txt
+! exists miss/.xinit
+! exists $WORK/cache/xinit
+
+# ── 场景 C：对照组（同 B 条件、不带 --offline）→ 首次 clone 回退成功 ──
+xinit init --template $WORK/tpl.git --yes fallback
+stdout '已生成 1 个文件到'
+! stderr '离线模式'
+cmp fallback/a.txt $WORK/a.txt
+exists fallback/.xinit/base/a.txt
+exists $WORK/cache/xinit
+
+-- xinit.yml --
+manifest_version: 1
+-- a.txt --
+v1 content

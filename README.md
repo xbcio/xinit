@@ -712,4 +712,4 @@ make check     # fmt + vet + test，提交前跑这个
 测试结构：
 
 - **单元测试**在各 `internal/*` 包里（渲染、清单、决策表、合并、状态、模板获取等）。
-- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（64 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt`/`backflow` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
+- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（65 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt`/`backflow` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
