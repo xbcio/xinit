@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/xbcio/xinit/internal/state"
+	"github.com/xbcio/xinit/internal/template"
 )
 
 // setupTemplate 建一个最小的模板目录。
@@ -670,5 +672,41 @@ func TestInitRecordsMixedEOL(t *testing.T) {
 		if entry.MixedEOL != want {
 			t.Errorf("%s: MixedEOL = %v, want %v", path, entry.MixedEOL, want)
 		}
+	}
+}
+
+// --offline 是真离线（§21.12 候选收口）：镜像缺失时必须硬错并给出可行动的
+// 指引，而不是退回首次 clone —— 旗标 help 与 README 的「不联网」承诺即此。
+//
+// 夹具用「不存在的本地路径」= git URL 形态（Open 的既有回退分支）：它必然走
+// 镜像路径，且不需要 git 可执行文件。判别力在错误身份上 —— 若 init 把
+// allowClone 传回 true（或 openGit 硬编 true），这里会变成 clone 失败
+// （「克隆模板仓库 …」），errors.Is(…, ErrMirrorMissing) 立刻变红。
+func TestInitOfflineMissingMirrorIsHardError(t *testing.T) {
+	isolateCacheT(t) // 缓存根指向空临时目录（本机既有镜像会让用例失去判别力）
+	dest := t.TempDir()
+	src := filepath.Join(t.TempDir(), "no-such-template") // 不存在 → 当 git URL
+
+	err := Init(dest, src, "", "", true /*offlineReady*/, true, false, true, false)
+	if err == nil {
+		t.Fatal("--offline 且无镜像缓存时应报错（不得退回 clone）")
+	}
+	// 包装保留哨兵错误：调用方（与脚本断言）仍可 errors.Is 到 ErrMirrorMissing。
+	if !errors.Is(err, template.ErrMirrorMissing) {
+		t.Errorf("错误应可由 errors.Is 识别为 ErrMirrorMissing，实际: %v", err)
+	}
+	// 文案要素：旗标名 + 补救动作（先不带 --offline 运行一次建立缓存）。
+	for _, want := range []string{"--offline", "不带 --offline 运行一次"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("错误文案应含 %q，实际: %v", want, err)
+		}
+	}
+	// 硬错发生在任何写入之前：目标目录不得留下产物。
+	ents, rerr := os.ReadDir(dest)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if len(ents) != 0 {
+		t.Errorf("--offline 失败不得留下产物: %v", ents)
 	}
 }

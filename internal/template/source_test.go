@@ -16,7 +16,7 @@ func TestOpenDirSource(t *testing.T) {
 		mode os.FileMode
 	}{"a.go": {"x", 0o644}})
 
-	s, err := Open(dir, "", t.TempDir(), false)
+	s, err := Open(dir, "", t.TempDir(), false, true)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestOpenGitSource(t *testing.T) {
 	}{"a.go": {"x", 0o644}})
 
 	cache := t.TempDir()
-	s, err := Open(dir, "HEAD", cache, true)
+	s, err := Open(dir, "HEAD", cache, true, true)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestOpenGitSourceResolvesTagToCommit(t *testing.T) {
 		t.Fatalf("tag: %v\n%s", err, out)
 	}
 
-	s, err := Open(dir, "v1.0.0", t.TempDir(), true)
+	s, err := Open(dir, "v1.0.0", t.TempDir(), true, true)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestOpenRejectsNonexistentRevision(t *testing.T) {
 		mode os.FileMode
 	}{"a.go": {"x", 0o644}})
 
-	if _, err := Open(dir, "v99.99.99", t.TempDir(), true); err == nil {
+	if _, err := Open(dir, "v99.99.99", t.TempDir(), true, true); err == nil {
 		t.Fatal("不存在的 revision 应报错，绝不能退回到默认分支")
 	}
 }
@@ -98,7 +98,7 @@ func TestOpenRejectsOptionLikeRevision(t *testing.T) {
 		mode os.FileMode
 	}{"a.go": {"x", 0o644}})
 
-	if _, err := Open(dir, "--upload-pack=evil", t.TempDir(), true); err == nil {
+	if _, err := Open(dir, "--upload-pack=evil", t.TempDir(), true, true); err == nil {
 		t.Fatal("以 - 开头的 revision 应被拒绝")
 	}
 }
@@ -109,7 +109,7 @@ func TestOpenRejectsOptionLikeRevision(t *testing.T) {
 // 注意：它**不**覆盖「存在但不是目录」的校验分支 —— 那条由
 // TestOpenRejectsNonDirectoryPath 单独覆盖（评审发现旧名字会误导）。
 func TestOpenFallsBackToGitURLWhenPathMissing(t *testing.T) {
-	if _, err := Open(filepath.Join(t.TempDir(), "nope"), "", t.TempDir(), false); err == nil {
+	if _, err := Open(filepath.Join(t.TempDir(), "nope"), "", t.TempDir(), false, true); err == nil {
 		t.Fatal("不存在的模板路径应报错")
 	}
 }
@@ -121,7 +121,7 @@ func TestOpenRejectsNonDirectoryPath(t *testing.T) {
 	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Open(f, "", t.TempDir(), false)
+	_, err := Open(f, "", t.TempDir(), false, true)
 	if err == nil {
 		t.Fatal("路径存在但不是目录时应报错")
 	}
@@ -139,7 +139,7 @@ func TestOpenDirSourceIgnoresRevision(t *testing.T) {
 		mode os.FileMode
 	}{"a.go": {"x", 0o644}})
 
-	s, err := Open(dir, "v99.9.9-does-not-exist", t.TempDir(), false)
+	s, err := Open(dir, "v99.9.9-does-not-exist", t.TempDir(), false, true)
 	if err != nil {
 		t.Fatalf("dir 源应忽略 revision，实际报错: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestOpenBareRepoGoesThroughMirror(t *testing.T) {
 	}
 
 	cache := t.TempDir()
-	s, err := Open(bare, "HEAD", cache, false)
+	s, err := Open(bare, "HEAD", cache, false, true)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -283,9 +283,57 @@ func TestOpenBareRepoGoesThroughMirror(t *testing.T) {
 	}
 }
 
-// 评审 M-1/F2：allowClone=false（status 默认，§11.4「默认不联网、只读本地
-// 镜像缓存」）时镜像缺失 → 可识别错误 ErrMirrorMissing，且连缓存根目录都不
-// 创建；allowClone=true（update/init）保持「缺失即首次 clone」的现状。
+// Open 层的真离线（init --offline 与 status/check 同口径）：allowClone=false
+// 且镜像缺失 → ErrMirrorMissing 且缓存根不被创建；对照 allowClone=true 照常
+// 首次 clone（update/adopt/restore/backflow 的功能性回退）。
+//
+// 夹具与 TestMirrorNoCloneMissingDoesNotCreateCacheRoot 同族：只有裸仓来源
+// 才走镜像（普通工作副本被 repoDirFor 当本地仓直读，测不到 allowClone）。
+// 判别力在「裸仓 + 空缓存」这一组合：若 Open 内部把 allowClone 硬编回 true，
+// 本用例的第一条断言（ErrMirrorMissing）立刻变红。
+func TestOpenOfflineMissingMirrorFailsWithoutCloning(t *testing.T) {
+	work, _ := newRepo(t, map[string]struct {
+		data string
+		mode os.FileMode
+	}{"a.go": {"x", 0o644}})
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	if out, err := exec.Command("git", "clone", "-q", "--bare", work, bare).CombinedOutput(); err != nil {
+		t.Fatalf("clone --bare: %v\n%s", err, out)
+	}
+
+	parent := t.TempDir()
+	cache := filepath.Join(parent, "cache-root") // 尚不存在
+
+	// 真离线：镜像缺失是可识别错误，不是「先 clone 一下」。
+	if _, err := Open(bare, "HEAD", cache, false, false); !errors.Is(err, ErrMirrorMissing) {
+		t.Fatalf("allowClone=false 且镜像缺失应报 ErrMirrorMissing: %v", err)
+	}
+	// 精确条目判断（比只 stat 缓存根更强）：连缓存根都不创建。
+	ents, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 0 {
+		t.Errorf("allowClone=false 不得创建缓存根或任何条目: %v", ents)
+	}
+
+	// 对照：allowClone=true 照常首次 clone，且打开出的源可读。
+	s, err := Open(bare, "HEAD", cache, false, true)
+	if err != nil {
+		t.Fatalf("allowClone=true 应照常 clone: %v", err)
+	}
+	if s.Kind != KindGit {
+		t.Errorf("Kind = %v, want KindGit", s.Kind)
+	}
+	if _, err := readFileAt(s.FS, "a.go"); err != nil {
+		t.Errorf("clone 出的镜像里模板不可读: %v", err)
+	}
+}
+
+// 评审 M-1/F2：allowClone=false（status/check 默认，§11.4「默认不联网、只读
+// 本地镜像缓存」）时镜像缺失 → 可识别错误 ErrMirrorMissing，且连缓存根目录都
+// 不创建；allowClone=true（status/check 之外的调用面）保持「缺失即首次
+// clone」的现状。
 func TestMirrorNoCloneMissingDoesNotCreateCacheRoot(t *testing.T) {
 	work, _ := newRepo(t, map[string]struct {
 		data string

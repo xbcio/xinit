@@ -160,7 +160,8 @@ func restoreBase(projectDir string, st *state.State, cacheRoot string, need []st
 		sort.Strings(snap.Degraded)
 		return nil
 	}
-	old, err := template.Open(st.Template.Source, st.Template.Commit, cacheRoot, false)
+	// allowClone=true：镜像优先，缺失回退首次 clone（重建 base 的功能性回退）。
+	old, err := template.Open(st.Template.Source, st.Template.Commit, cacheRoot, false, true)
 	if err != nil {
 		return fmt.Errorf("重建 base：模板 %s@%s 已不可取到（commit 被删或强推？）：%v%s%s",
 			st.Template.Source, st.Template.Commit, err, adoptHint, note)

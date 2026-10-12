@@ -20,8 +20,9 @@ import (
 //   - git 源但记录 commit 不可解析（极旧 state / 本地镜像缺失）→ 拒绝：
 //     无 T 则无翻译基线（错误语义同 template.ErrMirrorMissing 系）。
 //
-// 只读、不联网（template.Open 的 fetch=false，与 restore.go 取旧模板同口径），
-// 返回的 Source 供全链复用（FS 重放与 blob 读取的同一坐标系）。
+// 只读（不写模板源）：template.Open 传 fetch=false ∧ allowClone=true——
+// 镜像优先、缺失回退首次 clone（功能性回退，与 restore.go 取旧模板同口径；
+// 已有镜像不刷新），返回的 Source 供全链复用（FS 重放与 blob 读取的同一坐标系）。
 func OpenTemplate(st *state.State, cacheRoot string) (*template.Source, error) {
 	if st.Template.Kind != "git" {
 		return nil, fmt.Errorf(
@@ -29,7 +30,7 @@ func OpenTemplate(st *state.State, cacheRoot string) (*template.Source, error) {
 				"且目录可被随时编辑、无版本锚；请改用 git 模板源后重跑",
 			st.Template.Kind)
 	}
-	old, err := template.Open(st.Template.Source, st.Template.Commit, cacheRoot, false)
+	old, err := template.Open(st.Template.Source, st.Template.Commit, cacheRoot, false, true)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"记录 commit 的模板不可取到（%s@%s）：%v；§20.7：无 T 则无翻译基线——"+

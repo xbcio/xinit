@@ -35,10 +35,11 @@ var ErrMirrorMissing = errors.New("本地镜像未命中（该命令默认不联
 
 // ensureMirror 确保镜像存在并更新到最新，返回镜像目录。
 //
-// allowClone=false（status 默认）时：镜像缺失直接返回 ErrMirrorMissing——
+// allowClone=false（status/check 默认与 init --offline）时：镜像缺失直接返回 ErrMirrorMissing——
 // 联网 clone 与创建缓存根目录都发生在该检查之后，因此两者都不会发生；
 // 镜像存在时 fetch 照常更新（§11.4「--fetch 才更新缓存」）。
-// allowClone=true（update/init）保持「缺失即首次 clone」的现状。
+// allowClone=true（status/check 之外的全部调用面；init 仅在带 --offline 时
+// 传 false）保持「缺失即首次 clone」的现状。
 //
 // 并发安全：用锁文件 + 重试一次。多进程同时 fetch 会撞 git 的 ref 锁。
 func ensureMirror(source, cacheRoot string, fetch, allowClone bool) (string, error) {

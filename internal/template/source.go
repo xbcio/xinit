@@ -40,10 +40,19 @@ type Source struct {
 
 // Open 打开一个模板源。
 //
-// revision 为空时用默认分支的 HEAD；dir 源忽略 revision。
+// revision 为空时用默认分支的 HEAD；dir 源忽略 revision（也不看 fetch/allowClone）。
 //
-// fetch=false 时只读本地镜像缓存，不联网。
-func Open(src, revision, cacheRoot string, fetch bool) (*Source, error) {
+// fetch 与 allowClone 组合决定联网与 clone 行为（两个 bool 都显式传，
+// 调用点即可看出该路径的承诺）：
+//
+//   - fetch=false ∧ allowClone=false → 完全离线：只读本地镜像，镜像缺失
+//     返回 ErrMirrorMissing —— 不 clone、连缓存根都不创建（§11.4；
+//     status/check 默认与 init --offline）；
+//   - fetch=false ∧ allowClone=true → 镜像优先；缺失回退首次 clone
+//     （功能性回退：update/adopt/restore/backflow 取已记录版本时要能用）；
+//   - fetch=true → 已有镜像会更新到最新（联网失败不致命，警告后按本地缓存
+//     继续）；镜像缺失时按 allowClone 定（init 默认 true = 首次 clone）。
+func Open(src, revision, cacheRoot string, fetch, allowClone bool) (*Source, error) {
 	// revision 允许为空（空 = 用默认分支的 HEAD）：为空时不能过
 	// checkRefArg —— 它把空串一律当非法，那条规则是给必填引用名准备的。
 	if revision != "" {
@@ -55,7 +64,7 @@ func Open(src, revision, cacheRoot string, fetch bool) (*Source, error) {
 	info, statErr := os.Stat(src)
 	if statErr == nil && info.IsDir() {
 		if isGitRepo(src) || isBareRepo(src) {
-			return openGit(src, revision, cacheRoot, fetch)
+			return openGit(src, revision, cacheRoot, fetch, allowClone)
 		}
 		return openDirSource(src)
 	}
@@ -64,7 +73,7 @@ func Open(src, revision, cacheRoot string, fetch bool) (*Source, error) {
 	}
 
 	// 本地不存在，当作 git URL
-	return openGit(src, revision, cacheRoot, fetch)
+	return openGit(src, revision, cacheRoot, fetch, allowClone)
 }
 
 // IsDirSource 报告 src 是否会被 Open 当作 dir 源打开：存在的本地目录，
@@ -108,7 +117,8 @@ func openDirSource(dir string) (*Source, error) {
 }
 
 // repoDirFor 返回可执行 git 命令的仓库目录：本地 git 仓直接用，其余走镜像。
-// allowClone 语义见 ensureMirror（status 默认传 false：不联网、不创建缓存）。
+// allowClone 语义见 ensureMirror（status/check 默认与 init --offline 传
+// false：不联网、不创建缓存）。
 func repoDirFor(src, cacheRoot string, fetch, allowClone bool) (string, error) {
 	if isGitRepo(src) {
 		return src, nil
@@ -122,9 +132,11 @@ func RepoDir(src, cacheRoot string, fetch bool) (string, error) {
 	return repoDirFor(src, cacheRoot, fetch, false)
 }
 
-func openGit(src, revision, cacheRoot string, fetch bool) (*Source, error) {
-	// init/update/adopt 的路径：镜像缺失允许首次 clone（现状不变）。
-	repoDir, err := repoDirFor(src, cacheRoot, fetch, true)
+func openGit(src, revision, cacheRoot string, fetch, allowClone bool) (*Source, error) {
+	// 镜像缺失是否允许首次 clone 由调用方定（见 Open doc 的三条组合）：
+	// init 不带 --offline 与 update/adopt/restore/backflow 传 true；init
+	// --offline 传 false（缺失即 ErrMirrorMissing）。
+	repoDir, err := repoDirFor(src, cacheRoot, fetch, allowClone)
 	if err != nil {
 		return nil, err
 	}

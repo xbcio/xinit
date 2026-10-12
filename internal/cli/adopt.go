@@ -116,7 +116,8 @@ func Adopt(o AdoptOptions) error {
 			return fmt.Errorf("未找到符合 vX.Y.Z 格式的 tag；请显式指定 --revision")
 		}
 	}
-	src, err := template.Open(o.Template, target, cacheRoot, false)
+	// allowClone=true：镜像优先，缺失回退首次 clone（adopt 的功能性回退）。
+	src, err := template.Open(o.Template, target, cacheRoot, false, true)
 	if err != nil {
 		return err
 	}

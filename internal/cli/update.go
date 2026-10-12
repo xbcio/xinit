@@ -562,7 +562,9 @@ func openTarget(st *state.State, rev, cacheRoot string, fetch bool) (*template.S
 		target = sel
 	}
 
-	src, err := template.Open(st.Template.Source, target, cacheRoot, fetch)
+	// allowClone=true：镜像优先，缺失回退首次 clone（update 的功能性回退；
+	// 取已记录版本时模板可能尚未镜像）。
+	src, err := template.Open(st.Template.Source, target, cacheRoot, fetch, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1234,7 +1236,9 @@ func hookDiffAgainstBase(st *state.State, cacheRoot, newBlock string) (oldVer, d
 	if !hasConfirmed(st.TrustedHooks) {
 		return "", "" // 首次确认：无基线
 	}
-	src, err := template.Open(st.Template.Source, st.Template.Commit, cacheRoot, false)
+	// allowClone=true：镜像优先，缺失回退首次 clone（取旧版本清单的
+	// 功能性回退；失败本就不阻断确认流程）。
+	src, err := template.Open(st.Template.Source, st.Template.Commit, cacheRoot, false, true)
 	if err != nil {
 		return "", ""
 	}

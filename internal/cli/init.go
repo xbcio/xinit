@@ -55,7 +55,7 @@ func newInitCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&templateSrc, "template", "", "模板来源（本地路径或 git URL，必填）")
 	cmd.Flags().StringVar(&configPath, "config", "", "变量文件（扁平 YAML）")
-	cmd.Flags().BoolVar(&offline, "offline", false, "不联网，只用本地模板镜像缓存")
+	cmd.Flags().BoolVar(&offline, "offline", false, "不联网，只读本地模板镜像缓存；镜像缺失即报错（不会克隆）")
 	cmd.Flags().BoolVar(&noHooks, "no-hooks", false, "跳过 post_init 执行（仍记录本次内容，下次带钩子运行仍需确认）")
 	cmd.Flags().BoolVar(&force, "force", false, "允许在非空目录执行（仍不覆盖同名文件）")
 	cmd.Flags().BoolVar(&yes, "yes", false, "跳过钩子信任确认（等同于在交互终端回答 y）")
@@ -117,9 +117,21 @@ func Init(
 		return err
 	}
 
-	// 1. 取模板
-	src, err := template.Open(templateSrc, revision, cacheRoot, !offlineReady)
+	// 1. 取模板。
+	//
+	// --offline 同时传 fetch 与 allowClone 两处：只关 fetch 时镜像缺失仍会
+	// 走 openGit 的首次 clone（联网），与旗标 help、README 的「不联网」承诺
+	// 不符（§21.12 登记的候选缺口）——两处都传 !offlineReady 才是真离线。
+	src, err := template.Open(templateSrc, revision, cacheRoot, !offlineReady, !offlineReady)
 	if err != nil {
+		// 真离线唯一的行为分叉：镜像缺失时给可行动的指引（旗标名 + 补救动作），
+		// 而不是让 ErrMirrorMissing 的 status 口径文案落在 init 用户面前。
+		// 其余错误原样透传；退出码走既有错误通道（rc=1），不新增 stderr 面。
+		if offlineReady && errors.Is(err, template.ErrMirrorMissing) {
+			return fmt.Errorf(
+				"离线模式（--offline）：本地没有模板镜像缓存，而该模式不联网、不会克隆；"+
+					"请先不带 --offline 运行一次以建立缓存（%w）", err)
+		}
 		return err
 	}
 
