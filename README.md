@@ -44,6 +44,8 @@
 
 需要 **Go 1.25 或更高**（以 `go.mod` 的 `go` 声明为准）。
 
+**运行时依赖**：`git ≥ 2.38`（启动时硬检查，不满足即退出）与 POSIX `sh`（钩子与命令执行；Windows 用 Git for Windows 自带 sh）。详见[已知限制](#11-已知限制)。
+
 ```bash
 # 从源码构建到当前目录
 go build -o xinit .
@@ -620,6 +622,7 @@ $ xinit update
 | 条目 | 职责 |
 | --- | --- |
 | `state.json` | 受管路径清单（每条含 `src`、内容 hash、exec 位、二进制/混合 EOL 标记、`generated` 标记）、模板来源与版本、变量值、已信任的钩子 |
+| `state.json.prev` | 上一版 `state.json` 的备份（每次保存前保留旧字节；首次写入不产生）。`state.json` 损坏时按报错指引人工恢复——把它复制回 `state.json` 后重试；**不自动回退**（`Load` 不读它） |
 | `base/` | 渲染后的**基线树**（普通目录副本），三方比较的 base 侧 |
 | `conflicts/` | 未解决的冲突路径 → 模板版本；目录存在即「有冲突待处理」 |
 | `overwritten/` | 被模板覆盖掉的你的内容（`generated` 路径），持久保留 |
@@ -704,6 +707,7 @@ $ xinit update
 
 - **何时确认**：首次遇到某组命令、或内容相对上次有变化时。工具打印**钩子全文**（内容有变化时还打印行级 diff），然后要求 `--yes` 或交互回答 `y`。diff 的基准是**当前记录的模板版本**，所以刚在 `--no-hooks` 下跳过过一轮时，紧接着的确认可能没有 diff 段（版本已经被推进到含新钩子的那一版了）。
 - **拒绝的代价是零**：不加 `--yes` 直接以退出码 **4** 结束，本轮**不做任何修改**（不写文件、不写备份、不动状态）。确认时机在任何写入之前。
+- **`--yes` 一次性越过信任门**：自动化（CI）中启用它时，**模板源本身即信任根**——必须仅来自可信渠道。
 - **`--no-hooks`**：跳过执行，但仍记录本次内容——所以下一次不带 `--no-hooks` 的运行**仍然需要确认**（跳过不等于信任）。此时：
   - `generated` 路径**整条跳过**（不判冲突、磁盘不动、base 保持旧值），带钩子重跑时再按「模板生成物」正常处理；这不影响退出码。
 - **钩子失败**：退出码 **3**。文件与状态**都已正确落盘并保留**（渲染产物本身没错），工具打印失败的命令与手工重跑方式。
@@ -753,4 +757,4 @@ make check     # fmt + vet + test，提交前跑这个
 测试结构：
 
 - **单元测试**在各 `internal/*` 包里（渲染、清单、决策表、合并、状态、模板获取等）。
-- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（67 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt`/`restore`/`backflow`/`backup prune` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
+- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（68 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt`/`restore`/`backflow`/`backup prune` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。

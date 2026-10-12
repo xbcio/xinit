@@ -1,0 +1,52 @@
+# state.json 恢复面（评审 I-1）：Save 写新内容前把上一版逐字节保留到
+# .xinit/state.json.prev（首次写入不产生）；载入失败时「缺失 / 损坏」两条
+# 指引分流——损坏点出 .prev 人工复制恢复，且没有任何自动回退（Load 不读
+# .prev）。status 与 update 两条命令各测其一（损坏文案全覆盖）。
+
+xinit init --template $WORK/tpl --yes out
+! exists out/.xinit/state.json.prev
+
+cd out
+cp .xinit/state.json $WORK/state-after-init.json
+xinit-code update
+stdout 'exit=0'
+# .prev = 上一版（init 落的那一份），逐字节
+exists .xinit/state.json.prev
+cmp .xinit/state.json.prev $WORK/state-after-init.json
+
+# ── 损坏：status / update 都给「解析失败（文件可能已损坏）」+ .prev 指引，
+# 旧泛化句（缺失口径）不得出现 ──
+cp $WORK/garbage.json .xinit/state.json
+xinit-code status
+stdout 'exit=1'
+stderr '^xinit: 解析 .*\.xinit/state\.json: '
+stderr '解析失败（文件可能已损坏）'
+stderr '如存在 \.xinit/state\.json\.prev，可将其复制为 \.xinit/state\.json 后重试'
+! stderr '这不是 xinit 项目'
+
+xinit-code update
+stdout 'exit=1'
+stderr '解析失败（文件可能已损坏）'
+! stderr '这不是 xinit 项目'
+
+# ── 人工恢复：把 .prev 复制回 state.json 即恢复正常（没有任何自动回退：
+# 上一条 status/update 在 .prev 存在时也照样退 1）──
+cp .xinit/state.json.prev .xinit/state.json
+xinit-code status
+stdout '^xinit status: '
+stdout 'exit=0'
+
+# ── 缺失：现文案逐字（init/adopt 口径），且不出现损坏指引 ──
+rm .xinit/state.json
+xinit-code status
+stdout 'exit=1'
+stderr '^xinit: open .*\.xinit/state\.json: '
+stderr '这不是 xinit 项目，或 \.xinit/state\.json 缺失；请从模板 init 生成，或用 xinit adopt 重建基线（§5\.3）'
+! stderr '解析失败'
+
+-- tpl/xinit.yml --
+manifest_version: 1
+-- tpl/a.txt --
+a1
+-- garbage.json --
+{ 这不是 JSON
