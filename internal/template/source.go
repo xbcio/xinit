@@ -46,8 +46,8 @@ type Source struct {
 // 调用点即可看出该路径的承诺）：
 //
 //   - fetch=false ∧ allowClone=false → 完全离线：只读本地镜像，镜像缺失
-//     返回 ErrMirrorMissing —— 不 clone、连缓存根都不创建（§11.4；
-//     status/check 默认与 init --offline）；
+//     返回 ErrMirrorMissing —— 不 clone、连缓存根都不创建（§11.4 同口径；
+//     Open 的调用面中现为 init --offline 一例）；
 //   - fetch=false ∧ allowClone=true → 镜像优先；缺失回退首次 clone
 //     （功能性回退：update/adopt/restore/backflow 取已记录版本时要能用）；
 //   - fetch=true → 已有镜像会更新到最新（联网失败不致命，警告后按本地缓存
