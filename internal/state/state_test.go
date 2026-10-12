@@ -181,6 +181,59 @@ func TestLoadMissing(t *testing.T) {
 			t.Errorf("应由 os.IsNotExist / fs.ErrNotExist 判定为不存在: %v", err)
 		}
 	}
+	if errors.Is(err, ErrCorrupt) {
+		t.Errorf("缺失不属于损坏类，CLI 的两条指引靠这条界线分流: %v", err)
+	}
+}
+
+func TestLoadHintSplitsMissingAndCorrupt(t *testing.T) {
+	// 指引句唯一来源（评审 I-1）：缺失沿用旧句、损坏点出 .prev 人工恢复
+	// （不自动回退），两句互斥——不得分叉。
+	_, errMissing := Load(t.TempDir())
+	if hint := LoadHint(errMissing); !strings.Contains(hint, "这不是 xinit 项目") ||
+		strings.Contains(hint, "state.json.prev") {
+		t.Errorf("缺失指引 = %q", hint)
+	}
+
+	dir := t.TempDir()
+	p := Path(dir)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("{ 不是 JSON\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errCorrupt := Load(dir)
+	hint := LoadHint(errCorrupt)
+	if !strings.Contains(hint, "解析失败（文件可能已损坏）") ||
+		!strings.Contains(hint, "如存在 .xinit/state.json.prev，可将其复制为 .xinit/state.json 后重试") {
+		t.Errorf("损坏指引 = %q", hint)
+	}
+}
+
+func TestLoadCorruptIsErrCorrupt(t *testing.T) {
+	// 「文件在但不可用」= 损坏类（评审 I-1）：解析失败与截断都归这里，
+	// 且不得被当成缺失。
+	dir := t.TempDir()
+	p := Path(dir)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, payload := range []string{"{ 不是 JSON\n", `{"version": 1, "hash_algo": "`} {
+		if err := os.WriteFile(p, []byte(payload), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(dir)
+		if err == nil {
+			t.Fatalf("损坏状态必须报错，不能猜（payload %q）", payload)
+		}
+		if !errors.Is(err, ErrCorrupt) {
+			t.Errorf("payload %q 应判为 ErrCorrupt: %v", payload, err)
+		}
+		if os.IsNotExist(err) {
+			t.Errorf("损坏不得被当成缺失（payload %q）: %v", payload, err)
+		}
+	}
 }
 
 func TestPathIsDotXinitStateJSON(t *testing.T) {
@@ -213,6 +266,31 @@ func TestLoadRejectsFutureVersion(t *testing.T) {
 		// 前提守卫：文件没写进去时 err 也非 nil，测试会空转通过
 		t.Fatalf("前提不成立：%s 未写入，Load 失败原因不是版本检查: %v", p, err)
 	}
+	if !errors.Is(err, ErrCorrupt) {
+		t.Errorf("版本过高属损坏类（文件在但不可用，评审 I-1）: %v", err)
+	}
+}
+
+func TestLoadRejectsHashAlgoMismatchIsErrCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	payload := `{"version": 1, "hash_algo": "md5", "files": {}}`
+	p := Path(dir)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("hash 算法不匹配应报错")
+	}
+	if os.IsNotExist(err) {
+		t.Fatalf("前提不成立：%s 未写入，Load 失败原因不是 hash 检查: %v", p, err)
+	}
+	if !errors.Is(err, ErrCorrupt) {
+		t.Errorf("hash 不匹配属损坏类（文件在但不可用，评审 I-1）: %v", err)
+	}
 }
 
 func TestLoadRejectsUnknownFields(t *testing.T) {
@@ -234,6 +312,9 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 	if os.IsNotExist(err) {
 		// 前提守卫：文件没写进去时 err 也非 nil，测试会空转通过
 		t.Fatalf("前提不成立：%s 未写入，Load 失败原因不是未知字段: %v", p, err)
+	}
+	if !errors.Is(err, ErrCorrupt) {
+		t.Errorf("未知字段属损坏类（文件在但不可用，评审 I-1）: %v", err)
 	}
 }
 

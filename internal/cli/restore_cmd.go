@@ -63,10 +63,11 @@ func Restore(o RestoreOptions) error {
 	if err != nil {
 		return err
 	}
-	// Load 失败原文透出（非 xinit 项目 / state.json 损坏，与其它命令同口径）。
+	// Load 失败：原文 + 同口径指引（缺失 init/adopt、损坏 .prev 人工恢复；
+	// 评审 I-1：单一来源，不得分叉）。
 	st, err := state.Load(dest)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w\n%s", err, state.LoadHint(err))
 	}
 
 	lock, err := state.LockProject(dest)

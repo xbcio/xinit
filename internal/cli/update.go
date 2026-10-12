@@ -110,7 +110,8 @@ func runUpdate(o UpdateOptions) (*UpdateReport, error) {
 	// 先 Load 再取锁：Load 失败（不是 xinit 项目）时不该凭空创建 .xinit/。
 	st, err := state.Load(projectDir)
 	if err != nil {
-		return nil, err
+		// 缺失/损坏两条指引同 status/check（评审 I-1：单一来源，不得分叉）。
+		return nil, fmt.Errorf("%w\n%s", err, state.LoadHint(err))
 	}
 	rep.Source = st.Template.Source
 	rep.OldRevision = st.Template.Revision

@@ -106,7 +106,8 @@ func runBackflow(o BackflowOptions) (*BackflowReport, error) {
 	}
 	st, err := state.Load(projectDir)
 	if err != nil {
-		return nil, err
+		// 缺失/损坏两条指引同 status/check（评审 I-1：单一来源，不得分叉）。
+		return nil, fmt.Errorf("%w\n%s", err, state.LoadHint(err))
 	}
 
 	rep := &BackflowReport{

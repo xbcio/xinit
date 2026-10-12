@@ -83,10 +83,9 @@ func runStatus(o StatusOptions) (*statusReport, error) {
 	}
 	st, err := state.Load(projectDir)
 	if err != nil {
-		// 第 4 段：状态缺失（adopt 见 §5.3）
-		return nil, fmt.Errorf(
-			"%w\n这不是 xinit 项目，或 .xinit/state.json 缺失；请从模板 init 生成，或用 xinit adopt 重建基线（§5.3）",
-			err)
+		// 第 4 段：状态缺失（adopt 见 §5.3）；损坏 → .prev 人工恢复指引
+		// （评审 I-1：指引单一来源，六调用点不得分叉）。
+		return nil, fmt.Errorf("%w\n%s", err, state.LoadHint(err))
 	}
 	rep := &statusReport{
 		Source:         st.Template.Source,

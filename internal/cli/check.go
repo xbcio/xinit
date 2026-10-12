@@ -69,9 +69,8 @@ func runCheck(o CheckOptions) (*checkReport, error) {
 	}
 	st, err := state.Load(projectDir)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"%w\n这不是 xinit 项目，或 .xinit/state.json 缺失；请从模板 init 生成，或用 xinit adopt 重建基线（§5.3）",
-			err)
+		// 缺失/损坏两条指引同 status（评审 I-1：单一来源，不得分叉）。
+		return nil, fmt.Errorf("%w\n%s", err, state.LoadHint(err))
 	}
 	rep := newCheckReport(st.Template.Source)
 	if err := checkGroupA(rep, projectDir, st); err != nil {

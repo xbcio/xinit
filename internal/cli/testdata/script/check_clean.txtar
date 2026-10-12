@@ -60,13 +60,17 @@ stderr '这不是 xinit 项目，或 \.xinit/state\.json 缺失；请从模板 i
 ! stdout '检查汇总'
 ! exists .xinit
 
-# ── 前置失败（验收 16 损坏半边）：state.json 非法 JSON → 退 1，不进计数器 ──
+# ── 前置失败（验收 16 损坏半边）：state.json 非法 JSON → 退 1，不进计数器；
+# 损坏走「解析失败（文件可能已损坏）」+ .prev 人工恢复指引（评审 I-1），
+# 不得再落到「缺失」那句泛化文案 ──
 cd $WORK/out
 cp $WORK/bad-state.json .xinit/state.json
 xinit-code check
 stdout 'exit=1'
 stderr '^xinit: 解析 .*\.xinit/state\.json: '
-stderr '这不是 xinit 项目，或 \.xinit/state\.json 缺失；请从模板 init 生成，或用 xinit adopt 重建基线（§5\.3）'
+stderr '解析失败（文件可能已损坏）'
+stderr '如存在 \.xinit/state\.json\.prev，可将其复制为 \.xinit/state\.json 后重试'
+! stderr '这不是 xinit 项目'
 ! stdout 'xinit check: '
 ! stdout '检查汇总'
 
