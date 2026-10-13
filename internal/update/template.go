@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"sort"
 
 	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/manifest"
@@ -208,21 +207,4 @@ func snapFromRendered(entries []render.Entry, rendered map[string][]byte) plan.S
 		}
 	}
 	return snap
-}
-
-// unionKeys 返回 base ∪ theirs 的路径（字节序）。与 plan 内部的并集同一
-// 定义（R18）——ours 的扫描范围必须一致，否则行语义会漂。
-func unionKeys(base, theirs plan.Snap) []string {
-	seen := make(map[string]bool, len(base)+len(theirs))
-	var out []string
-	for _, s := range []plan.Snap{base, theirs} {
-		for p := range s {
-			if !seen[p] {
-				seen[p] = true
-				out = append(out, p)
-			}
-		}
-	}
-	sort.Strings(out)
-	return out
 }

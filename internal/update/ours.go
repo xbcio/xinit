@@ -17,7 +17,7 @@ import (
 
 // Ours 是 ours 侧快照（P3 建立；§2.3）。
 type Ours struct {
-	Union []string          // base ∪ theirs 的路径（字节序；R18）
+	Union []string          // base ∪ theirs 的路径（plan.Union；字节序；R18）
 	Snap  plan.Snap         // Dst → ours 元数据（Plan 的 ours 参数）
 	Bytes map[string][]byte // Dst → ours 原始字节
 	Prune plan.PruneSet     // .xinit/prune.txt 展开到并集上的结果（R4）
@@ -25,8 +25,8 @@ type Ours struct {
 
 // snapshotOurs 是 P3（§2.2）：ours 快照（块 11）+ prune 展开（块 12）。
 func snapshotOurs(s *session, t *Template, b *Base) (*Ours, error) {
-	// 6. ours 快照（R18：只查 base ∪ theirs 的并集——与 Plan 的并集一致）
-	union := unionKeys(b.Metas, t.Snap)
+	// 6. ours 快照（R18：只查 base ∪ theirs 的并集——与 Plan 同用 plan.Union）
+	union := plan.Union(b.Metas, t.Snap)
 	oursSnap, oursBytes, err := worktree.Scan(s.dir, union)
 	if err != nil {
 		return nil, err

@@ -21,7 +21,7 @@ import (
 // 每条路径产出一个 Action，按路径字节序排序（确定性）。「不在列表 = 移出
 // files」由调用方落地（R5）。不碰磁盘、不看未跟踪文件、不读配置。
 func Plan(base, ours, theirs Snap, pruned PruneSet, hooksRun bool) []Action {
-	paths := union(base, theirs)
+	paths := Union(base, theirs)
 	actions := make([]Action, 0, len(paths))
 	for _, p := range paths {
 		if pruned[p] {
@@ -131,8 +131,8 @@ func SettleMergeClean(a *Action, base, ours, theirs Snap) {
 	settle(a, base, ours, theirs)
 }
 
-// union 返回 base ∪ theirs 的路径，按字节序排序。
-func union(base, theirs Snap) []string {
+// Union 返回 base ∪ theirs 的路径，按字节序排序。
+func Union(base, theirs Snap) []string {
 	seen := make(map[string]bool, len(base)+len(theirs))
 	out := make([]string, 0, len(base)+len(theirs))
 	for _, s := range []Snap{base, theirs} {

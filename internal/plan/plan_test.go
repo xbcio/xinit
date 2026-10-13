@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -319,5 +320,43 @@ func TestBothAddedNoteNotBinaryEOL(t *testing.T) {
 	}
 	if !strings.Contains(bin[0].Note, "二进制或混合 EOL") {
 		t.Errorf("行 6 应继续用 conflictNote 原句：%q", bin[0].Note)
+	}
+}
+
+// TestUnionMatchesPlanUnion 钉 Union 的语义本体（I2 单实现后的口径，
+// R-M3a-2）：对构造输入断言 = 并集 ∧ 去重 ∧ 字节序（测试内参考实现对拍）
+// + 边界（双空 / 空 base / 空 theirs / 全重叠 / 单侧重叠）。
+func TestUnionMatchesPlanUnion(t *testing.T) {
+	ref := func(base, theirs Snap) []string { // 参考实现：并集 + 去重 + 字节序
+		seen := map[string]bool{}
+		for _, s := range []Snap{base, theirs} {
+			for p := range s {
+				seen[p] = true
+			}
+		}
+		out := make([]string, 0, len(seen))
+		for p := range seen {
+			out = append(out, p)
+		}
+		slices.Sort(out)
+		return out
+	}
+	cases := []struct {
+		name         string
+		base, theirs Snap
+	}{
+		{"双空", Snap{}, Snap{}},
+		{"空 base", Snap{}, Snap{"b/a.txt": reg("h"), "a.txt": reg("h")}},
+		{"空 theirs", Snap{"a.txt": reg("h")}, Snap{}},
+		{"全重叠", Snap{"a.txt": reg("h1"), "b.txt": reg("h2")}, Snap{"a.txt": reg("h1"), "b.txt": reg("h2")}},
+		{"单侧重叠", Snap{"a.txt": reg("h"), "b.txt": reg("h")}, Snap{"b.txt": reg("h"), "c.txt": reg("h")}},
+		{"字节序", Snap{"Z.txt": reg("h"), "a.txt": reg("h"), "Ä.txt": reg("h"), "A.txt": reg("h")}, Snap{"z.txt": reg("h"), "B.txt": reg("h")}},
+	}
+	for _, c := range cases {
+		got := Union(c.base, c.theirs)
+		want := ref(c.base, c.theirs)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s：Union = %v，参考 = %v", c.name, got, want)
+		}
 	}
 }
