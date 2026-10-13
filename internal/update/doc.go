@@ -17,9 +17,9 @@
 //	P1  loadTemplate   template.go  模板源获取 + 清单编译 + 渲染
 //	P2  loadBase       base.go      base 快照读取（缺失/降级语义）
 //	P3  snapshotOurs   ours.go      ours 工作树快照（含 prune 展开）
-//	P4  rewriteAccept  accept.go    --accept 的 P 侧行 12 重写
-//	P5  buildDecision  decide.go    决策表组装 + 冲突分类 + changes 预测
-//	P6  refineDecision accept.go    冲突问询后的行 9/13 精化
+//	P4  rewriteAccept  accept.go    --accept 预检与 P 侧 base′ 重写
+//	P5  buildDecision  decide.go    决策表组装 + 冲突分类
+//	P6  refineDecision accept.go    行 8/9→13 迁移精化 + --accept 后处理
 //	P7  gate           gate.go      管线门：dry-run/pending/障碍物短路
 //	P8  trust          trust.go     hooks 信任门（rc4 零写）
 //	P9  deliver        deliver.go   写盘：backup/写/删/冲突文件/拒绝还原
