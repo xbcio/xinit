@@ -27,8 +27,8 @@ type Interactive interface {
 }
 
 // session 是 P0 建立的跨阶段上下文（§2.2 P0 产物行；dryRun 为控制器裁定
-// R-M2-1，§2.2 字段列表缺口）。io/now 的消费者在 M4（Input.IO/Input.Now）；
-// M2 期间只初始化、不读取。
+// R-M2-1、force 为 R-M2-8，均 §2.2 字段列表缺口）。io/now 的消费者在 M4
+// （Input.IO/Input.Now）；M2 期间只初始化、不读取。
 type session struct {
 	dir           string           // = abs(in.ProjectDir)
 	st            *state.State     // = state.Load(dir)（块 3）
@@ -40,6 +40,7 @@ type session struct {
 	mode          Mode             // = in.Mode
 	dryRun        bool             // = in.DryRun（R-M2-1）
 	noHooks       bool             // = in.NoHooks
+	force         bool             // = in.Force（R-M2-8；§2.2 字段列表缺口——唯一消费 = 块 23 warnIfDirty）
 	engineVersion string           // = in.EngineVersion（P10 消费，v2-I-2）
 }
 
@@ -67,6 +68,7 @@ func prepare(in Input) (*session, error) {
 		mode:          in.Mode,
 		dryRun:        in.DryRun,
 		noHooks:       in.NoHooks,
+		force:         in.Force,
 		engineVersion: in.EngineVersion,
 	}
 

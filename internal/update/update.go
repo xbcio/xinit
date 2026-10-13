@@ -5,8 +5,9 @@ package update
 // 声明（§2.3、§2.6 M2 布局：update.go = 包文档/Input/IO/Mode/Verdict/Run）；
 // Interactive 已随 P0 迁 session.go、模板侧 helper 随 P1 迁 template.go、
 // base 装载随 P2 阶段化、ours 快照随 P3 迁 ours.go（M2a/T4）；accept 预检随
-// P4/P6 迁 accept.go、plan/merge 分类随 P5 迁 decide.go（M2b/T5）。M2 拆阶段
-// 进行中：块 1-18 已抽，块 19-32 仍逐字留在 Run（bridge 兜住引用，R-M2-2）。
+// P4/P6 迁 accept.go、plan/merge 分类随 P5 迁 decide.go、gate 随 P7 迁
+// gate.go（M2b/T5）。M2 拆阶段进行中：块 1-23 已抽，块 24-32 仍逐字留在 Run
+// （bridge 兜住引用，R-M2-2）。
 
 import (
 	"fmt"
@@ -133,7 +134,6 @@ func Run(in Input) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	acceptSet := a.Set
 
 	d, err := buildDecision(s, t, b, o, a, hooksRun(s, t))
 	if err != nil {
@@ -145,7 +145,7 @@ func Run(in Input) (*Report, error) {
 	// 报告据此决定是否打印「参考：conflicts/」行（评审 E1/m-3）。实跑写入的
 	// 条目与 c.Conflicts 一致（apply.rebuildConflicts 全量重建），无需另取。
 	rep.ConflictFiles = sortedStringKeys(d.Conflicts)
-	actions, merged, conflicted, conflicts := d.Actions, d.Merged, d.Conflicted, d.Conflicts
+	actions, merged, conflicted := d.Actions, d.Merged, d.Conflicted
 	hooksRun := hooksRun(s, t)
 
 	if err := refineDecision(s, t, b, o, d, a); err != nil {
@@ -154,66 +154,38 @@ func Run(in Input) (*Report, error) {
 	rep.Migrations = d.Migrations
 	rep.Acceptable = d.Acceptable
 
-	// 9. 第 4 步：未解决冲突检查（conflicts/ 现有条目 ∩ 本轮冲突集合）
-	existing, err := ListConflicts(projectDir)
+	g, v, done, err := gate(s, t, b, o, d, a)
 	if err != nil {
 		return nil, err
 	}
-	rep.Blocked = step4Unresolved(existing, conflicted)
-	// --accept 豁免第 4 步检查（§10.3）：这是这套设计里唯一「必须先豁免
-	// 才能退出循环」的接口，不能省。
-	rep.Blocked = except(rep.Blocked, acceptSet)
-	if len(rep.Blocked) > 0 && !in.DryRun {
-		rep.Verdict = VerdictPending
-		// 早退轮同样「版本记录不推进」（第 9 步的推进根本不会走到）：报告
-		// 顶部的版本行必须跟 AR 注解，否则与下方待解决轮的报告自相矛盾。
-		rep.Pending = true
-		return rep, nil // 不执行任何写操作、不推进任何状态（§10.2 第 4 步）
+	rep.Blocked = g.Blocked // 原第 4 步两行赋值折叠一行（值等价；D2 先例）
+	if g.Taken > 0 {
+		// 派生字段与两个 map 同步：按与创建时逐字相同的表达式重算
+		// （不逐字段手工增删，避免静默不一致）。
+		rep.Conflicted = sortedStringKeys(d.Conflicted)
+		rep.ConflictFiles = sortedStringKeys(d.Conflicts)
+		rep.Acceptable = acceptableConflicts(rep.Conflicted, d.Actions)
 	}
-
-	// 9c. 第 4b 步：交互式冲突解决（§10.2 第 4b 步、§19.4）——仅可交互时，
-	// 落在第 4 步之后、组装变更集之前，且在写任何内容之前。--dry-run / diff
-	// 恒不提问（只读预测）。
-	if !in.DryRun && ps != nil {
-		taken, err := promptConflicts(ps, actions, conflicted, conflicts, baseSnap.Metas, oursSnap, theirsSnap, theirsRendered)
-		if err != nil {
-			return nil, err
+	if done { // 终局①：pending / dry-run
+		if v == VerdictPending {
+			// 早退轮同样「版本记录不推进」（第 9 步的推进根本不会走到）：报告
+			// 顶部的版本行必须跟 AR 注解，否则与下方待解决轮的报告自相矛盾。
+			rep.Pending = true
+			rep.Verdict = v
+			return rep, nil
 		}
-		if taken > 0 {
-			// 派生字段与两个 map 同步：按与创建时逐字相同的表达式重算
-			// （不逐字段手工增删，避免静默不一致）。
-			rep.Conflicted = sortedStringKeys(conflicted)
-			rep.ConflictFiles = sortedStringKeys(conflicts)
-			rep.Acceptable = acceptableConflicts(rep.Conflicted, actions)
-		}
-	}
-
-	// 10. 组装变更集（第 8 步的输入）
-	changes, err := buildChanges(baseSnap.Metas, oursSnap, theirsSnap, actions, theirsRendered, merged, conflicts)
-	if err != nil {
-		return nil, err
-	}
-
-	if in.DryRun {
-		// 只读预测：拒绝项检查与 Execute 前两步同判据，但不落盘、不改状态
-		refusals, err := predictRefusals(projectDir, changes)
-		if err != nil {
-			return nil, err
-		}
-		refused := refusalSet(refusals)
-		rep.Refused = refusals
-		rep.Written = keysExcept(changes.Writes, refused)
-		rep.Deleted = except(changes.Deletes, refused)
-		rep.Chmodded = chmodPredictions(changes, refused)
-		rep.Merged = sortedStringKeys(merged)
-		rep.Overwritten = overwrittenPaths(actions, refused)
-		rep.Resolved = except(existing, conflicted)
-		rep.Verdict = dryRunExit(actions)
+		refused := refusalSet(g.Forecast)
+		rep.Refused = g.Forecast
+		rep.Written = keysExcept(g.Changes.Writes, refused)
+		rep.Deleted = except(g.Changes.Deletes, refused)
+		rep.Chmodded = chmodPredictions(g.Changes, refused)
+		rep.Merged = sortedStringKeys(d.Merged)
+		rep.Overwritten = overwrittenPaths(d.Actions, refused)
+		rep.Resolved = except(g.Existing, d.Conflicted)
+		rep.Verdict = v
 		return rep, nil
 	}
-
-	// 11. 脏检查（§10.2 第 5 步；--force 跳过；两条路都不阻止执行）
-	warnIfDirty(projectDir, in.Force)
+	changes := g.Changes // 桥接（R-M2-2）：块 24-32 消费
 
 	// 12. 信任确认（§10.2 第 6 步、§10.5）——在备份与任何写入之前。
 	if m.Hooks.PostUpdate != "" {
@@ -538,49 +510,6 @@ func execConclusion(a plan.Action, base, ours, theirs plan.Snap) (bool, bool) {
 	return a.NewBase.Exec, true
 }
 
-// ListConflicts 精确列举 .xinit/conflicts/ 的条目（相对项目根、/ 分隔）。
-// 目录不存在 = 没有未解决冲突。
-func ListConflicts(projectDir string) ([]string, error) {
-	root := filepath.Join(projectDir, state.DirName, "conflicts")
-	var out []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		out = append(out, filepath.ToSlash(rel))
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("列举 conflicts/: %w", err)
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-// step4Unresolved 是 §10.2 第 4 步：conflicts/ 里的条目若本轮仍判为冲突动作
-// → 拒绝（必须先解决）。正向判据（F9）：不穷举「已解决」的诸情形；本轮不再
-// 判冲突的条目一概放行，其删除由第 8 步的 rebuild 统一做。
-func step4Unresolved(existing []string, conflicted map[string]bool) []string {
-	var out []string
-	for _, p := range existing {
-		if conflicted[p] {
-			out = append(out, p)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 // warnIfDirty 是 §10.2 第 5 步：git 仓脏 → 警告；非 git 仓 → 警告后继续。
 // --force 跳过检查（§11.2）。两条路都不阻止执行。
 func warnIfDirty(projectDir string, force bool) {
@@ -626,68 +555,6 @@ func backupTargets(c apply.Changes, oursSnap plan.Snap) []string {
 	}
 	sort.Strings(targets)
 	return targets
-}
-
-// predictRefusals 是 dry-run 的只读预测：经 apply.Forecast 单点，与 Execute
-// 的前两步同源（删除的 §9.5、写前检查），只是不落盘——diff 因此能在不改任何
-// 东西的前提下报告折叠拒绝与障碍物。
-func predictRefusals(projectDir string, c apply.Changes) ([]apply.Refusal, error) {
-	return apply.Forecast(projectDir, c)
-}
-
-func refusalSet(refs []apply.Refusal) map[string]bool {
-	set := make(map[string]bool, len(refs))
-	for _, r := range refs {
-		set[r.Path] = true
-	}
-	return set
-}
-
-// keysExcept 是 map 的键（排序）减去 drop 集合。
-func keysExcept(m map[string][]byte, drop map[string]bool) []string {
-	var out []string
-	for _, p := range sortedStringKeys(m) {
-		if !drop[p] {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// except 从 xs 里剔除 drop 中的元素（保持输入顺序；输入均已排序）。
-func except(xs []string, drop map[string]bool) []string {
-	out := make([]string, 0, len(xs))
-	for _, x := range xs {
-		if !drop[x] {
-			out = append(out, x)
-		}
-	}
-	return out
-}
-
-// chmodPredictions 预测 dry-run 下会发生的纯 exec 变更（R7 通道）：
-// ExecBits 里不在 Writes、也未被拒的路径。
-func chmodPredictions(c apply.Changes, refused map[string]bool) []string {
-	var out []string
-	for _, p := range sortedStringKeys(c.ExecBits) {
-		if _, inWrites := c.Writes[p]; inWrites || refused[p] {
-			continue
-		}
-		out = append(out, p)
-	}
-	return out
-}
-
-// dryRunExit 是 diff/dry-run 的终局语义（§11.5；M1 起返回 Verdict，cli 单点
-// 映射为码）：有非 Noop → VerdictChanged（5），否则 VerdictOK（0）。
-// 不模拟 2——没有执行，就没有「待解决」的写盘后果要报。
-func dryRunExit(actions []plan.Action) Verdict {
-	for _, a := range actions {
-		if a.Kind != plan.Noop {
-			return VerdictChanged
-		}
-	}
-	return VerdictOK
 }
 
 // restoreRefused 把被拒路径（折叠拒绝、障碍物、删除路径逃逸）的 NewBase
