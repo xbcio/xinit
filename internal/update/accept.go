@@ -168,7 +168,8 @@ func refineDecision(s *session, t *Template, b *Base, o *Ours, d *Decision, a *A
 	}
 
 	// --accept 可用集：冲突全集里非 ConflictKind 的路径（打 accept 命令用）。
-	d.Acceptable = acceptableConflicts(sortedStringKeys(d.Conflicted), d.Actions)
+	// 经单点（I17 第三消费者顺带收敛）：与 report() 两处同一表达式出处。
+	_, _, d.Acceptable = derivedFields(d)
 	return nil
 }
 

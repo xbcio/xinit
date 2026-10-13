@@ -206,3 +206,14 @@ func execConclusion(a plan.Action, base, ours, theirs plan.Snap) (bool, bool) {
 	}
 	return a.NewBase.Exec, true
 }
+
+// derivedFields 是派生字段的单点重算（I17/I18，M3a）：Conflicted/ConflictFiles/
+// Acceptable 的唯一表达式出处——report() 主装配、taken 段重算与 P6 的
+// d.Acceptable 落值共用。内部序固定：conflicted 先于 acceptable（后者依赖它；
+// ConflictFiles 与两者无依赖，居中不变）。
+func derivedFields(d *Decision) (conflicted, conflictFiles, acceptable []string) {
+	conflicted = sortedStringKeys(d.Conflicted)
+	conflictFiles = sortedStringKeys(d.Conflicts)
+	acceptable = acceptableConflicts(conflicted, d.Actions)
+	return conflicted, conflictFiles, acceptable
+}

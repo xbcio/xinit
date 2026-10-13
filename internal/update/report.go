@@ -153,20 +153,18 @@ func report(s *session, t *Template, b *Base, o *Ours, d *Decision, g *Gate, w *
 	rep.Restored = b.Restored
 
 	rep.Actions = d.Actions
-	rep.Conflicted = sortedStringKeys(d.Conflicted)
+	// 派生字段单点（I17/I18）：conflicted/conflictFiles/acceptable 的唯一
+	// 表达式出处（decide.go derivedFields——与 P6 的 d.Acceptable 同式）。
+	rep.Conflicted, rep.ConflictFiles, rep.Acceptable = derivedFields(d)
 	// conflicts/ 内容条目 ⊆ 冲突全集（ConflictKind 且 theirs 缺失时无条目）：
 	// 报告据此决定是否打印「参考：conflicts/」行（评审 E1/m-3）。实跑写入的
 	// 条目与 c.Conflicts 一致（apply.rebuildConflicts 全量重建），无需另取。
-	rep.ConflictFiles = sortedStringKeys(d.Conflicts)
 	rep.Migrations = d.Migrations
-	rep.Acceptable = d.Acceptable
 	rep.Blocked = g.Blocked // 原第 4 步两行赋值折叠一行（值等价；D2 先例）
 	if g.Taken > 0 {
-		// 派生字段与两个 map 同步：按与创建时逐字相同的表达式重算
-		// （不逐字段手工增删，避免静默不一致）。
-		rep.Conflicted = sortedStringKeys(d.Conflicted)
-		rep.ConflictFiles = sortedStringKeys(d.Conflicts)
-		rep.Acceptable = acceptableConflicts(rep.Conflicted, d.Actions)
+		// 派生字段与两个 map 同步：经单点重算（I18——P7 交互改写后不再
+		// 逐字段手写「与创建时逐字相同的表达式」）。
+		rep.Conflicted, rep.ConflictFiles, rep.Acceptable = derivedFields(d)
 	}
 
 	if v == VerdictNeedTrust { // 终局②：rc4（零写）——报告只带头部与决策派生
