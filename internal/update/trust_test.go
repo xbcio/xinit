@@ -4,6 +4,7 @@ package update
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +77,8 @@ func TestTrustNoticeRoutesToInjectedOut(t *testing.T) {
 
 	var outBuf bytes.Buffer
 	ps, _ := newFakeInteractive("") // 无答复 → ConfirmTrust 走 EOF 分支
-	rep, err := Run(Input{ProjectDir: dir, Revision: commit, Interactive: ps, IO: IO{Out: &outBuf}})
+	// Err 一并注入（O-5 park 清零）：警告通道不落真 stderr，IO 接缝两半都受控。
+	rep, err := Run(Input{ProjectDir: dir, Revision: commit, Interactive: ps, IO: IO{Out: &outBuf, Err: io.Discard}})
 	if err != nil {
 		t.Fatal(err)
 	}
