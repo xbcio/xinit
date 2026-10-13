@@ -146,3 +146,26 @@ func textState(src, content string) state.FileState {
 func sessionT(dir string, st *state.State, cacheRoot string, dryRun bool) *session {
 	return &session{dir: dir, st: st, cacheRoot: cacheRoot, dryRun: dryRun}
 }
+
+// countingInteractive 包装 fakeInteractive 并记录两个提问方法的调用次数
+// （R-M3b-4：dry-run 零读 stdin 的计数证据——读取只发生在这两方法）。
+type countingInteractive struct {
+	*fakeInteractive
+	trustCalls, conflictCalls int
+}
+
+// newCountingInteractive 构造记录型会话（答复注入语义同 newFakeInteractive）。
+func newCountingInteractive(answers string) *countingInteractive {
+	f, _ := newFakeInteractive(answers)
+	return &countingInteractive{fakeInteractive: f}
+}
+
+func (c *countingInteractive) ConfirmTrust() (bool, error) {
+	c.trustCalls++
+	return c.fakeInteractive.ConfirmTrust()
+}
+
+func (c *countingInteractive) AskConflict(q string) (yes, eof bool, err error) {
+	c.conflictCalls++
+	return c.fakeInteractive.AskConflict(q)
+}

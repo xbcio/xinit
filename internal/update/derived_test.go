@@ -146,3 +146,38 @@ func TestDerivedFieldsRecomputedAfterPrompt(t *testing.T) {
 		t.Errorf("rep.Acceptable = %v，want [b.txt]（按当前集合重算；绝不读 d.Acceptable 陈值）", rep.Acceptable)
 	}
 }
+
+// TestDerivedFieldsRecomputedWithoutTake 钉 O-1（T7a 评审转入口，R-M3b-6）：
+// 既有用例只走 Taken>0 的 P7 重算支；本用例把 Taken 置 0——report() 只剩
+// 主装配点一次 derivedFields 赋值，陈值 d.Acceptable 仍必须被无视（堵住
+// 主装配点改读 d.Acceptable/d.Conflicted/d.Conflicts 字段的形式等价缺口）。
+func TestDerivedFieldsRecomputedWithoutTake(t *testing.T) {
+	s := sessionT(t.TempDir(),
+		&state.State{Template: state.TemplateRef{Source: "/tpl", Revision: "r1", Commit: "c1"}}, "", false)
+	tpl := &Template{
+		Src:      &template.Source{Revision: "r2", Commit: "c2"},
+		Manifest: &manifest.Manifest{}, // 无 post_update → hooksRun false
+	}
+	d := &Decision{
+		Actions: []plan.Action{
+			{Path: "a.txt", Kind: plan.WriteTheirs},
+			{Path: "b.txt", Kind: plan.Merge},
+			{Path: "c.txt", Kind: plan.ConflictKind},
+		},
+		Conflicted: map[string]bool{"b.txt": true, "c.txt": true},
+		Conflicts:  map[string][]byte{"b.txt": []byte("x")},
+		Acceptable: []string{"a.txt-stale"}, // P6 陈值：Taken==0 时也必须被无视
+	}
+	g := &Gate{} // Taken == 0：不进 P7 重算支
+	rep := report(s, tpl, &Base{}, &Ours{}, d, g, &Delivery{}, VerdictOK, &HookOutcome{})
+
+	if !slices.Equal(rep.Conflicted, []string{"b.txt", "c.txt"}) {
+		t.Errorf("rep.Conflicted = %v，want [b.txt c.txt]", rep.Conflicted)
+	}
+	if !slices.Equal(rep.ConflictFiles, []string{"b.txt"}) {
+		t.Errorf("rep.ConflictFiles = %v，want [b.txt]", rep.ConflictFiles)
+	}
+	if !slices.Equal(rep.Acceptable, []string{"b.txt"}) {
+		t.Errorf("rep.Acceptable = %v，want [b.txt]（Taken==0 的主装配点同样重算，绝不读 d.Acceptable）", rep.Acceptable)
+	}
+}

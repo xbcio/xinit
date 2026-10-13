@@ -360,3 +360,16 @@ func TestUnionMatchesPlanUnion(t *testing.T) {
 		}
 	}
 }
+
+// TestUnionEmptyNonNil 钉 O-4（T7a 评审转入口，R-M3b-7）：Union 空并集必须
+// 返回非 nil 空切片（显式契约——既有对拍用 slices.Equal，nil 与空切片区分
+// 不出；调用方对两者等价，但契约按 Union 的「返回路径」注释收紧）。
+func TestUnionEmptyNonNil(t *testing.T) {
+	out := Union(Snap{}, Snap{})
+	if out == nil {
+		t.Fatal("Union 空并集返回 nil——违反显式契约（必须为非 nil 空切片）")
+	}
+	if len(out) != 0 {
+		t.Fatalf("Union 空并集应为空：%v", out)
+	}
+}

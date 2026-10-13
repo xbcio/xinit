@@ -14,6 +14,7 @@ import (
 
 	"github.com/xbcio/xinit/internal/apply"
 	"github.com/xbcio/xinit/internal/fsutil"
+	"github.com/xbcio/xinit/internal/manifest"
 	"github.com/xbcio/xinit/internal/plan"
 	"github.com/xbcio/xinit/internal/render"
 	"github.com/xbcio/xinit/internal/state"
@@ -269,4 +270,236 @@ func TestAdvanceStateSrcFromNewSrcWithoutFilesEntry(t *testing.T) {
 	if !bytes.Equal(got, baseBytes) {
 		t.Errorf("base/%s = %q，want %q（保持旧 base 字节，不写 theirs）", dst, got, baseBytes)
 	}
+}
+
+// ── T7b/M3b C4：渲染钩子杂项（I20/I21/I26/I6a/I6b，含 T6 O-3）─────────────
+
+// TestEmptyRenderIsPresentEmptySlice 钉 I20/I21（§1.3 templates / §4.1；
+// 含 T6 O-3）：
+//
+//	①空渲染归一——两条 nil 途径（Go template 渲染为空 / 源文件 0 字节）在
+//	  Rendered 里都必须是「键存在 ∧ 非 nil ∧ 0 字节」（renderTheirs 归一，
+//	  template.go:177-179：空渲染是空内容文件，不是「模板没有它」）；
+//	②conflicts/ 内容条目的缺失集 ⊆ {ConflictKind ∧ theirs 缺失}——按条件句
+//	  显式断言差集（classifyMerges 只在该组合下不产条目）。
+func TestEmptyRenderIsPresentEmptySlice(t *testing.T) {
+	t.Run("空渲染两条途径归一到非 nil 空切片", func(t *testing.T) {
+		repo, commit := mkTemplateRepoT(t, map[string]string{
+			"xinit.yml": "manifest_version: 1\nrender:\n  - paths: [\"t.txt\"]\n",
+			"t.txt":     "{{- \"\" -}}\n", // 途径①：Go template 渲染为空（ModeTemplate）
+			"z.txt":     "",               // 途径②：源文件 0 字节（ModeSubst）
+		})
+		dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
+			map[string]state.FileState{})
+		s := sessionT(dir, mustLoadState(t, dir), t.TempDir(), false)
+
+		tpl, err := loadTemplate(s, commit, "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range []string{"t.txt", "z.txt"} {
+			data, ok := tpl.Rendered[p]
+			if !ok {
+				t.Errorf("Rendered[%s] 键缺失（空渲染 = 空内容文件，必须存在）", p)
+				continue
+			}
+			if data == nil || len(data) != 0 {
+				t.Errorf("Rendered[%s] = %#v（len=%d），want 非 nil 空切片（I20）", p, data, len(data))
+			}
+		}
+	})
+
+	t.Run("conflicts 条目缺失集 ⊆ {ConflictKind ∧ theirs 缺失}（T6 O-3）", func(t *testing.T) {
+		actions := []plan.Action{
+			{Path: "k1.txt", Kind: plan.ConflictKind}, // theirs 有 → 有条目
+			{Path: "k2.txt", Kind: plan.ConflictKind}, // theirs 缺 → 无条目（唯一合法缺失）
+			{Path: "m.txt", Kind: plan.Merge},         // 真三方冲突 → 有条目
+		}
+		theirsRendered := map[string][]byte{"k1.txt": []byte("K1\n"), "m.txt": []byte("T\n")}
+		msnap := plan.Snap{"m.txt": {Kind: render.KindRegular, Hash: "hm"}}
+		merged, conflicted, conflicts, err := classifyMerges(actions,
+			&Base{Metas: msnap, Bytes: map[string][]byte{"m.txt": []byte("B\n")}},
+			msnap, map[string][]byte{"m.txt": []byte("O\n")},
+			msnap, theirsRendered)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(merged) != 0 {
+			t.Fatalf("三方皆异应判冲突：merged = %v", merged)
+		}
+		if !slices.Equal(sortedStringKeys(conflicted), []string{"k1.txt", "k2.txt", "m.txt"}) {
+			t.Fatalf("conflicted = %v", sortedStringKeys(conflicted))
+		}
+		if !slices.Equal(sortedStringKeys(conflicts), []string{"k1.txt", "m.txt"}) {
+			t.Fatalf("conflicts = %v", sortedStringKeys(conflicts))
+		}
+		// 显式缺失集断言：差集必须恰为 k2，且 k2 满足「ConflictKind ∧ theirs 缺失」。
+		var missing []string
+		for _, p := range sortedStringKeys(conflicted) {
+			if _, ok := conflicts[p]; !ok {
+				missing = append(missing, p)
+			}
+		}
+		if !slices.Equal(missing, []string{"k2.txt"}) {
+			t.Fatalf("conflicts 缺失集 = %v，want [k2.txt]", missing)
+		}
+		act := findAction(actions, "k2.txt")
+		if act == nil || act.Kind != plan.ConflictKind {
+			t.Errorf("缺失项必须来自 ConflictKind：%+v", act)
+		}
+		if _, ok := theirsRendered["k2.txt"]; ok {
+			t.Error("缺失项的 theirs 必须缺失")
+		}
+		// 子集关系一般形（T6 O-3 的主命题）：conflicts 键 ⊆ conflicted 键。
+		for p := range conflicts {
+			if !conflicted[p] {
+				t.Errorf("conflicts 含非冲突路径 %s（⊆ 违反）", p)
+			}
+		}
+	})
+}
+
+// TestHooksClassifyInputs 钉 I26（§1.3 :136 的 planned/generated 口径）：planned
+// = 本轮 Actions 全部路径（含 Noop——runHook 冻结为无 Kind 过滤）；generated
+// 取本轮模板侧位（t.Snap 的 Generated）。钩子一次触碰三文件，覆盖三分类：
+// planned 被触碰 → Modified；generated ∧ ¬planned 被触碰 → 静默；其余 → Unplanned。
+func TestHooksClassifyInputs(t *testing.T) {
+	dir := t.TempDir()
+	writeFilesT(t, dir, map[string]string{"n.txt": "noop\n", "p.txt": "gen0\n"})
+	s := sessionT(dir, &state.State{}, t.TempDir(), false)
+	tpl := &Template{
+		Src: &template.Source{Kind: template.KindDir},
+		Manifest: &manifest.Manifest{Hooks: manifest.HooksSpec{
+			PostUpdate: "echo touched >> n.txt; echo rebuilt > p.txt; echo new > extra.txt",
+		}},
+		Snap: plan.Snap{
+			"n.txt": {Kind: render.KindRegular},                  // ¬generated
+			"p.txt": {Kind: render.KindRegular, Generated: true}, // 模板侧位
+		},
+	}
+	// Noop 也在 planned 里（冻结口径：Actions 全部路径，无 Kind 过滤）。
+	actions := []plan.Action{{Path: "n.txt", Kind: plan.Noop}}
+
+	h, err := runHook(s, tpl, actions, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Failed || h.ExitCode != 0 {
+		t.Fatalf("钩子应成功：Failed=%v ExitCode=%d", h.Failed, h.ExitCode)
+	}
+	if !slices.Equal(h.Modified, []string{"n.txt"}) {
+		t.Errorf("Modified = %v，want [n.txt]（planned 含 Noop 路径：计划内改写必须报告）", h.Modified)
+	}
+	if !slices.Equal(h.Unplanned, []string{"extra.txt"}) {
+		t.Errorf("Unplanned = %v，want [extra.txt]（p.txt = generated∧¬planned 被触碰 → 静默）", h.Unplanned)
+	}
+}
+
+// TestDryRunDoesNotLock 钉 I6a（session.go 取锁块的反面 / R12）：--dry-run 只读，
+// 连 .xinit/lock 文件都不创建。对照段同夹具跑一次真路径——flock 锁文件常驻，
+// 证明本用例的「不存在」不可能恒真（锁文件确会被真跑创建）。
+func TestDryRunDoesNotLock(t *testing.T) {
+	isolateCacheT(t)
+	repo, commit := mkTemplateRepoT(t, map[string]string{"xinit.yml": tmplYAML, "a.txt": "new\n"})
+	envT := func(t *testing.T) string {
+		t.Helper()
+		dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
+			map[string]state.FileState{"a.txt": textState("a.txt", "old\n")})
+		writeFilesT(t, dir, map[string]string{"a.txt": "old\n"})
+		writeFilesT(t, filepath.Join(dir, state.DirName, "base"), map[string]string{"a.txt": "old\n"})
+		return dir
+	}
+
+	dir := envT(t)
+	rep, err := Run(Input{ProjectDir: dir, Revision: commit, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.DryRun {
+		t.Fatal("夹具前提：dry-run 报告")
+	}
+	if _, err := os.Stat(filepath.Join(dir, state.DirName, "lock")); !os.IsNotExist(err) {
+		t.Errorf("--dry-run 不得创建锁文件（R12）：stat err = %v", err)
+	}
+
+	// 对照：真跑路径必留 lock 文件。
+	dir2 := envT(t)
+	if _, err := Run(Input{ProjectDir: dir2, Revision: commit}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir2, state.DirName, "lock")); err != nil {
+		t.Errorf("对照：真跑应创建锁文件（flock 常驻）：%v", err)
+	}
+}
+
+// conflictHooksEnvT 造 I6b 三场景共用的「有提问机会」夹具：a.txt 三方冲突
+// （Merge 判冲突，可问 §19.4.1）+ 清单声明 post_update（未信任）——dry-run 若
+// 误读 stdin 或 --yes 语义错位，计数装置必捕获。
+func conflictHooksEnvT(t *testing.T) (dir, commit string) {
+	t.Helper()
+	isolateCacheT(t)
+	repo, commit := mkTemplateRepoT(t, map[string]string{
+		"xinit.yml": "manifest_version: 1\nhooks:\n  post_update: |\n    echo hi\n",
+		"a.txt":     "T\n",
+	})
+	dir = projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
+		map[string]state.FileState{"a.txt": textState("a.txt", "B\n")})
+	writeFilesT(t, dir, map[string]string{"a.txt": "O\n"}) // ours 本地改过 → 三方皆异
+	writeFilesT(t, filepath.Join(dir, state.DirName, "base"), map[string]string{"a.txt": "B\n"})
+	return dir, commit
+}
+
+// TestDryRunNeverReadsStdin 钉 I6b（R-M3b-4）：dry-run 全程零读 stdin——计数
+// 证据（stdin 读取只发生在 ConfirmTrust/AskConflict 两方法）。三场景：
+//
+//	①dry-run：两计数均为 0；
+//	②--yes：信任门短路（trustCalls==0）但冲突提问不受影响（conflictCalls==1）；
+//	③对照（非 dry、非 yes）：两计数各 1——证明计数装置在本夹具上非恒零
+//	  （防「零提问」因环境不具提问条件而假阳性）。
+func TestDryRunNeverReadsStdin(t *testing.T) {
+	t.Run("dry-run 全程零提问", func(t *testing.T) {
+		dir, commit := conflictHooksEnvT(t)
+		ci := newCountingInteractive("")
+		rep, err := Run(Input{ProjectDir: dir, Revision: commit, DryRun: true, Interactive: ci})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ci.trustCalls != 0 || ci.conflictCalls != 0 {
+			t.Errorf("dry-run 不得读 stdin：ConfirmTrust=%d AskConflict=%d，want 0/0",
+				ci.trustCalls, ci.conflictCalls)
+		}
+		if !rep.DryRun {
+			t.Error("夹具前提：dry-run 报告")
+		}
+	})
+
+	t.Run("--yes 短路信任门但不短路冲突提问", func(t *testing.T) {
+		dir, commit := conflictHooksEnvT(t)
+		ci := newCountingInteractive("")
+		if _, err := Run(Input{ProjectDir: dir, Revision: commit, Yes: true, Interactive: ci}); err != nil {
+			t.Fatal(err)
+		}
+		if ci.trustCalls != 0 {
+			t.Errorf("--yes 预先确认：ConfirmTrust 应零调用，got %d", ci.trustCalls)
+		}
+		if ci.conflictCalls != 1 {
+			t.Errorf("--yes 不影响冲突提问（a.txt 一条可问）：AskConflict = %d，want 1", ci.conflictCalls)
+		}
+	})
+
+	t.Run("对照：非 dry/非 yes 两问各一次（装置有效性）", func(t *testing.T) {
+		dir, commit := conflictHooksEnvT(t)
+		ci := newCountingInteractive("")
+		rep, err := Run(Input{ProjectDir: dir, Revision: commit, Interactive: ci})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ci.conflictCalls != 1 || ci.trustCalls != 1 {
+			t.Errorf("对照场景应各问一次（计数装置检查）：AskConflict=%d ConfirmTrust=%d",
+				ci.conflictCalls, ci.trustCalls)
+		}
+		if rep.Verdict != VerdictNeedTrust {
+			t.Errorf("信任拒绝（EOF 锁存）应 rc4：Verdict = %v", rep.Verdict)
+		}
+	})
 }
