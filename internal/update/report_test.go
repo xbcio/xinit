@@ -4,10 +4,15 @@ package update
 
 import (
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/xbcio/xinit/internal/apply"
+	"github.com/xbcio/xinit/internal/manifest"
 	"github.com/xbcio/xinit/internal/plan"
+	"github.com/xbcio/xinit/internal/state"
+	"github.com/xbcio/xinit/internal/template"
 )
 
 // §17.6 的四态行逐字断言（纯文本，不经 shellQuote）。节标题与行格式是
@@ -152,5 +157,80 @@ func TestUpdateReportPrintRestoredLine(t *testing.T) {
 	rep2.Print(&buf2)
 	if strings.Contains(buf2.String(), "base 恢复") {
 		t.Errorf("Restored 为空时不得有恢复行:\n%s", buf2.String())
+	}
+}
+
+// reportTplT 是 report() 直调的最小模板夹具（dir 源、无 hooks、无条目）。
+func reportTplT() *Template {
+	return &Template{
+		Src:      &template.Source{Kind: template.KindDir, Revision: "r2", Commit: "c2"},
+		Manifest: &manifest.Manifest{},
+		Rendered: map[string][]byte{},
+		SrcOf:    map[string]string{},
+		Snap:     plan.Snap{},
+	}
+}
+
+// reportSessionT 是 report() 直调的最小会话夹具（模板记录齐备）。
+func reportSessionT(t *testing.T, dryRun bool) *session {
+	t.Helper()
+	return sessionT(t.TempDir(),
+		&state.State{Template: state.TemplateRef{Source: "/tpl", Revision: "r1", Commit: "c1"}},
+		"", dryRun)
+}
+
+// TestReportConflictedNotOverwrittenByResult 钉 I11（§2.3 Report.Conflicted /
+// report.go 终局③）：实跑报告保持决策表的冲突全集（含 ConflictKind 且
+// theirs 缺失的条目），不被 res.Conflicts（只含已写盘条目）覆盖——后者会把
+// 该冲突漏报成「冲突 0」并绕开 D3 门禁（评审 E1）。
+func TestReportConflictedNotOverwrittenByResult(t *testing.T) {
+	const p = "linkish"
+	d := &Decision{
+		Actions:    []plan.Action{{Path: p, Kind: plan.ConflictKind}},
+		Merged:     map[string][]byte{},
+		Conflicted: map[string]bool{p: true},
+		Conflicts:  map[string][]byte{}, // theirs 缺失：conflicts/ 无内容条目
+	}
+	w := &Delivery{Result: apply.Result{}} // 本轮没有条目写出 → res.Conflicts 空
+	rep := report(reportSessionT(t, false), reportTplT(), &Base{}, &Ours{}, d,
+		&Gate{}, w, VerdictOK, &HookOutcome{})
+	if len(w.Result.Conflicts) != 0 {
+		t.Fatalf("夹具前提：res.Conflicts 应为空；got %v", w.Result.Conflicts)
+	}
+	if !slices.Equal(rep.Conflicted, []string{p}) {
+		t.Errorf("rep.Conflicted = %v，want [%s]（不得被 res.Conflicts 覆盖）", rep.Conflicted, p)
+	}
+	if len(rep.ConflictFiles) != 0 {
+		t.Errorf("conflicts/ 无内容条目：ConflictFiles = %v", rep.ConflictFiles)
+	}
+}
+
+// TestReportMergedTwoPaths 钉 I35（§2.3 Report.Merged）：dry-run（终局①，
+// 预测径）与实跑（终局③）都取 Decision.Merged 的排序键集——两径同值且按
+// 字节序（本夹具键序与插入序相反，未排序的实现无法稳定通过）。
+func TestReportMergedTwoPaths(t *testing.T) {
+	d := &Decision{
+		Actions:    []plan.Action{},
+		Merged:     map[string][]byte{"b.txt": []byte("B"), "a.txt": []byte("A")},
+		Conflicted: map[string]bool{},
+		Conflicts:  map[string][]byte{},
+	}
+	g := &Gate{Changes: apply.Changes{Writes: map[string][]byte{}, ExecBits: map[string]bool{}, Conflicts: map[string][]byte{}}}
+	want := []string{"a.txt", "b.txt"}
+
+	// 径 1：dry-run（w=nil，终局① 的预测赋值段）。
+	repDry := report(reportSessionT(t, true), reportTplT(), &Base{}, &Ours{}, d,
+		g, nil, VerdictChanged, nil)
+	// 径 2：实跑（w 非 nil，终局③）。
+	repRun := report(reportSessionT(t, false), reportTplT(), &Base{}, &Ours{}, d,
+		g, &Delivery{Result: apply.Result{}}, VerdictOK, &HookOutcome{})
+	if !slices.Equal(repDry.Merged, want) {
+		t.Errorf("dry-run 径 Merged = %v，want %v（sortedKeys(Decision.Merged)）", repDry.Merged, want)
+	}
+	if !slices.Equal(repRun.Merged, want) {
+		t.Errorf("实跑径 Merged = %v，want %v", repRun.Merged, want)
+	}
+	if !slices.Equal(repDry.Merged, repRun.Merged) {
+		t.Errorf("两径 Merged 应同值：dry=%v run=%v", repDry.Merged, repRun.Merged)
 	}
 }
