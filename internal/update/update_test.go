@@ -235,7 +235,7 @@ func TestAdvanceStateSrcFromNewSrcWithoutFilesEntry(t *testing.T) {
 	// v2-W-6：EngineVersion 常量留 cli（§2.7 #13）——本包用例用测试字面量
 	// 走同一条注入链（advanceState 的 engineVersion 参数），断言不依赖其取值。
 	st := state.New(engineVersionT)
-	baseSnap := &baseSnapshot{
+	baseSnap := &Base{
 		Metas: map[string]plan.FileMeta{dst: meta},
 		Bytes: map[string][]byte{dst: baseBytes},
 	}

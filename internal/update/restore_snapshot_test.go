@@ -31,7 +31,7 @@ func TestRestoreBaseFromSnapshotDir(t *testing.T) {
 		"sub/b.txt": []byte("bee\n"),
 	})
 
-	snap, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+	snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, false))
 	if err != nil {
 		t.Fatalf("快照全命中不得报错（也不得打开模板源）：%v", err)
 	}
@@ -78,7 +78,7 @@ func TestRestoreBaseFromSnapshotCommitGone(t *testing.T) {
 	runGitT(t, repo, "add", "-A")
 	runGitT(t, repo, "commit", "-q", "-m", "rewritten")
 
-	snap, err := loadBase(proj, mustLoadState(t, proj), cacheRoot, false)
+	snap, err := loadBase(sessionT(proj, mustLoadState(t, proj), cacheRoot, false))
 	if err != nil {
 		t.Fatalf("快照全命中不得触碰模板源（旧 commit 已不可取）：%v", err)
 	}
@@ -108,7 +108,7 @@ func TestRestoreBasePartialRecoveryDir(t *testing.T) {
 		"b.txt": []byte("B\n"),
 	})
 
-	snap, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+	snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, false))
 	if err != nil {
 		t.Fatalf("部分恢复不得硬错（§21.6-3 dir 混合态）：%v", err)
 	}
@@ -134,7 +134,7 @@ func TestRestoreBaseReadOnlyNoWrite(t *testing.T) {
 		map[string]state.FileState{"a.txt": textState("a.txt", "hello\n")})
 	seedSnapshotT(t, dir, cacheRoot, map[string][]byte{"a.txt": []byte("hello\n")})
 
-	snap, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, true)
+	snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestRestoreBaseSnapshotCRLFTwinMisses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snap, err := loadBase(proj, mustLoadState(t, proj), cacheRoot, false)
+	snap, err := loadBase(sessionT(proj, mustLoadState(t, proj), cacheRoot, false))
 	if err != nil {
 		t.Fatalf("git 源余项应走既有重渲染链：%v", err)
 	}
@@ -203,7 +203,7 @@ func TestRestoreBaseNoCacheRootCreated(t *testing.T) {
 		dir := projectWithState(t, state.TemplateRef{Source: "/nonexistent", Kind: "dir", Commit: "treehash-v1"},
 			map[string]state.FileState{"a.txt": textState("a.txt", "hello\n")})
 
-		_, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+		_, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, false))
 		if err == nil || !strings.Contains(err.Error(), "adopt") {
 			t.Fatalf("dir 零命中应保持现行硬错（含 adopt 指引）：%v", err)
 		}
@@ -216,7 +216,7 @@ func TestRestoreBaseNoCacheRootCreated(t *testing.T) {
 		dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
 			map[string]state.FileState{"a.txt": textState("a.txt", "hello\n")})
 
-		snap, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+		snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, false))
 		if err != nil {
 			t.Fatalf("git 源零命中应走现行重渲染链：%v", err)
 		}
@@ -240,7 +240,7 @@ func TestRestoreBaseNoCacheRootCreated(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		snap, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+		snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, false))
 		if err != nil {
 			t.Fatalf("健康 base 不应触发恢复：%v", err)
 		}
@@ -282,8 +282,8 @@ func TestRestoreBaseUnreadableCacheMisses(t *testing.T) {
 
 		// 对照组：无快照（cacheRoot 不存在）跑同一 state——两者错误文本必须逐字同。
 		ctrl := filepath.Join(t.TempDir(), "no-cache")
-		_, ctrlErr := loadBase(dir, mustLoadState(t, dir), ctrl, false)
-		_, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+		_, ctrlErr := loadBase(sessionT(dir, mustLoadState(t, dir), ctrl, false))
+		_, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, false))
 		if err == nil || ctrlErr == nil {
 			t.Fatalf("dir 零命中应硬错：err=%v ctrlErr=%v", err, ctrlErr)
 		}
@@ -303,7 +303,7 @@ func TestRestoreBaseUnreadableCacheMisses(t *testing.T) {
 		seedSnapshotT(t, dir, cacheRoot, map[string][]byte{"a.txt": []byte("hello\n")})
 		sealEntryUnreadableT(t, cacheRoot)
 
-		snap, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+		snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, false))
 		if err != nil {
 			t.Fatalf("缓存不可读应静默 miss、走既有重渲染链：%v", err)
 		}
@@ -344,7 +344,7 @@ func TestRestoreBaseGitMixedErrorCarriesRecoveryLine(t *testing.T) {
 	runGitT(t, repo, "add", "-A")
 	runGitT(t, repo, "commit", "-q", "-m", "rewritten")
 
-	_, err := loadBase(proj, mustLoadState(t, proj), cacheRoot, false)
+	_, err := loadBase(sessionT(proj, mustLoadState(t, proj), cacheRoot, false))
 	if err == nil {
 		t.Fatal("余项走重渲染链且旧 commit 不可取 → 应硬错（rc=1 半写回）")
 	}
@@ -394,7 +394,7 @@ func TestRestoreBaseDirSelfHealsBaseNewerThanState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snap, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+	snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, false))
 	if err != nil {
 		t.Fatalf("快照自愈不得硬错（判据 13）：%v", err)
 	}
@@ -421,7 +421,7 @@ func TestRestoreBaseRecoveredExecMode(t *testing.T) {
 		})
 	seedSnapshotT(t, dir, cacheRoot, map[string][]byte{"run.sh": []byte("#!/bin/sh\necho hi\n")})
 
-	snap, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+	snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestRestoreBaseSnapshotWriteFailureCarriesRecoveryLine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+	_, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, false))
 	if err == nil {
 		t.Fatal("b.txt 写回失败应报错（rc=1 半写回）")
 	}
@@ -501,8 +501,8 @@ func TestRestoreBaseGitZeroHitErrorTextVerbatim(t *testing.T) {
 
 	// 对照组：无快照（cacheRoot 不存在）跑同一 state。
 	ctrl := filepath.Join(t.TempDir(), "no-cache")
-	_, ctrlErr := loadBase(dir, mustLoadState(t, dir), ctrl, false)
-	_, err := loadBase(dir, mustLoadState(t, dir), cacheRoot, false)
+	_, ctrlErr := loadBase(sessionT(dir, mustLoadState(t, dir), ctrl, false))
+	_, err := loadBase(sessionT(dir, mustLoadState(t, dir), cacheRoot, false))
 	if err == nil || ctrlErr == nil {
 		t.Fatalf("旧 commit 不可取应硬错：err=%v ctrlErr=%v", err, ctrlErr)
 	}

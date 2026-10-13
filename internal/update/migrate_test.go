@@ -389,7 +389,7 @@ func TestDecideMigrationStatic(t *testing.T) {
 // Q=new/a.txt（行 13 WriteTheirs），Part A 同 Src 配对。
 type migFixture struct {
 	actions        []plan.Action
-	base           *baseSnapshot
+	base           *Base
 	ours, theirs   plan.Snap
 	oursBytes      map[string][]byte
 	theirsRendered map[string][]byte
@@ -410,7 +410,7 @@ func newMigFixture(baseB, oursB, theirsB []byte) *migFixture {
 			{Path: q, Kind: plan.WriteTheirs, NewBase: &tq},
 			{Path: p, Kind: plan.KeepWarned, Note: "v1 keep"},
 		},
-		base:           &baseSnapshot{Metas: map[string]plan.FileMeta{p: meta(baseB)}, Bytes: map[string][]byte{p: baseB}},
+		base:           &Base{Metas: map[string]plan.FileMeta{p: meta(baseB)}, Bytes: map[string][]byte{p: baseB}},
 		ours:           plan.Snap{p: meta(oursB)},
 		theirs:         plan.Snap{q: tq},
 		oursBytes:      map[string][]byte{p: oursB},
@@ -664,7 +664,7 @@ func TestClassifyMigrationsFallbackPNotInPrecheckSet(t *testing.T) {
 		{Path: "x.txt", Kind: plan.WriteTheirs, NewBase: &q2},
 		{Path: "z/X.txt", Kind: plan.WriteTheirs, NewBase: &q1},
 	}
-	base := &baseSnapshot{
+	base := &Base{
 		Metas: map[string]plan.FileMeta{"X.txt": m("h-b1"), "Y.txt": m("h-b2")},
 		Bytes: map[string][]byte{"X.txt": []byte("b1\n"), "Y.txt": []byte("b2\n")},
 	}

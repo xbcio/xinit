@@ -139,3 +139,10 @@ func seedSnapshotT(t *testing.T, proj, cacheRoot string, rendered map[string][]b
 func textState(src, content string) state.FileState {
 	return state.FileState{Src: src, Hash: fsutil.CompareHash([]byte(content), false)}
 }
+
+// sessionT 构造只含 P2 所需字段的 session（测试专用）。loadBase 阶段化
+// （M2a/P2，签名收 s *session）后测试调用点的机械连带——各站点原四实参
+// (dir, st, cacheRoot, readOnly) 原样透传，断言零改动。
+func sessionT(dir string, st *state.State, cacheRoot string, dryRun bool) *session {
+	return &session{dir: dir, st: st, cacheRoot: cacheRoot, dryRun: dryRun}
+}

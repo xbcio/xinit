@@ -3,9 +3,9 @@ package update
 // 来源：internal/cli/update.go 行 92-1283（迁移集：runUpdate + 全部消费方辅助
 // 函数闭包；I-2 实施批 T2/M1）。本文件头部承载 Input/IO/Mode/Verdict 接缝
 // 声明（§2.3、§2.6 M2 布局：update.go = 包文档/Input/IO/Mode/Verdict/Run）；
-// Interactive 已随 P0 迁 session.go、模板侧 helper 随 P1 迁 template.go
-// （M2a/T4）。M2 拆阶段进行中：块 1-9 已抽，块 10-32 仍逐字留在 Run
-// （bridge 兜住引用，R-M2-2）。
+// Interactive 已随 P0 迁 session.go、模板侧 helper 随 P1 迁 template.go、
+// base 装载随 P2 阶段化（M2a/T4）。M2 拆阶段进行中：块 1-10 已抽，块 11-32
+// 仍逐字留在 Run（bridge 兜住引用，R-M2-2）。
 
 import (
 	"fmt"
@@ -110,20 +110,18 @@ func Run(in Input) (*Report, error) {
 	rep.NewRevision = t.Src.Revision
 	rep.NewCommit = t.Src.Commit
 
+	b, err := loadBase(s)
+	if err != nil {
+		return nil, err
+	}
+	rep.Degraded = b.Degraded
+	rep.Restored = b.Restored
+
 	// M2 中间态桥接（R-M2-2）：后半阶段逐步抽取期间保持块 13-32 逐字不变；
 	// M2c 终局化时消除。
 	projectDir, st, cacheRoot, ps := s.dir, s.st, s.cacheRoot, s.interactive
 	src, m, vars, theirsRendered, newSrc, theirsSnap := t.Src, t.Manifest, t.Vars, t.Rendered, t.SrcOf, t.Snap
-
-	// 5. base（§5.2 逐路径恢复；R9 重渲染用 st.Vars、R10 全量校验）
-	// dry-run/diff 只读：恢复照常进行但只进内存快照，不写回 .xinit/base/
-	// （零写契约，评审 I-1——恢复写回是 dry-run 路径上唯一的项目内写盘点）。
-	baseSnap, err := loadBase(projectDir, st, cacheRoot, in.DryRun)
-	if err != nil {
-		return nil, err
-	}
-	rep.Degraded = baseSnap.Degraded
-	rep.Restored = baseSnap.Restored
+	baseSnap := b // 别名引用：块 13-32 的就地改写（P4/P6 的 Metas/Bytes）语义不变
 
 	// 6. ours 快照（R18：只查 base ∪ theirs 的并集——与 Plan 的并集一致）
 	union := unionKeys(baseSnap.Metas, theirsSnap)
@@ -547,7 +545,7 @@ func expandPrune(projectDir string, paths []string) (plan.PruneSet, error) {
 // = 模板没有该路径（如行 6 的 binary 在 theirs 里存在则不会缺；Kind 冲突在
 // theirs 里存在）；键在且值为空切片 = 空内容文件（renderTheirs 已把空渲染
 // 归一成非 nil 空切片，2026-10-11 M7），照常落 0 字节条目。
-func classifyMerges(actions []plan.Action, baseSnap *baseSnapshot, oursSnap plan.Snap,
+func classifyMerges(actions []plan.Action, baseSnap *Base, oursSnap plan.Snap,
 	oursBytes map[string][]byte, theirsSnap plan.Snap, theirsRendered map[string][]byte,
 ) (map[string][]byte, map[string]bool, map[string][]byte, error) {
 	merged := map[string][]byte{}
@@ -887,7 +885,7 @@ func joinNote(note, extra string) string {
 // 逐路径恢复要用记录的 commit 重渲染这些路径——提前推进 commit 会让它们
 // 的重建 hash 必然不符 → 降级成 base✗。收敛后的重跑再推进（F6 语义保证
 // 「没有更高的 tag 时取当前 revision」，重跑不会空转）。
-func advanceState(projectDir string, st *state.State, baseSnap *baseSnapshot,
+func advanceState(projectDir string, st *state.State, baseSnap *Base,
 	actions []plan.Action, theirsRendered map[string][]byte,
 	newSrc map[string]string, vars render.Vars, src *template.Source, pending bool,
 	cacheRoot, engineVersion string,

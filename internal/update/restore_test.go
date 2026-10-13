@@ -33,7 +33,7 @@ func TestLoadBaseRebuildsMissingPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snap, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+	snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), t.TempDir(), false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestLoadBaseHealthyDoesNotNeedTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snap, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+	snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), t.TempDir(), false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestLoadBaseDegradesOnHashMismatch(t *testing.T) {
 			"a.txt": {Src: "a.txt", Hash: fsutil.CompareHash([]byte("旧 base\n"), false)},
 		})
 
-	snap, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+	snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), t.TempDir(), false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestLoadBaseDirSourceErrorsWithAdoptHint(t *testing.T) {
 	dir := projectWithState(t, state.TemplateRef{Source: "/nonexistent", Kind: "dir"},
 		map[string]state.FileState{"a.txt": {Src: "a.txt", Hash: "sha256/normlf-v1:deadbeef"}})
 
-	_, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+	_, err := loadBase(sessionT(dir, mustLoadState(t, dir), t.TempDir(), false))
 	if err == nil || !strings.Contains(err.Error(), "adopt") {
 		t.Fatalf("dir 源无法重建应报错并指引 adopt：%v", err)
 	}
@@ -118,7 +118,7 @@ func TestLoadBaseCommitGoneErrorsWithAdoptHint(t *testing.T) {
 	dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 		map[string]state.FileState{"a.txt": {Src: "a.txt", Hash: "sha256/normlf-v1:deadbeef"}})
 
-	_, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+	_, err := loadBase(sessionT(dir, mustLoadState(t, dir), t.TempDir(), false))
 	if err == nil || !strings.Contains(err.Error(), "adopt") {
 		t.Fatalf("旧 commit 不可取应报错并指引 adopt：%v", err)
 	}
@@ -142,7 +142,7 @@ func TestLoadBaseRebuildsCorruptPresentPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snap, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+	snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), t.TempDir(), false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestLoadBaseRebuildExecMode(t *testing.T) {
 			"run.sh": {Src: "run.sh", Hash: fsutil.CompareHash([]byte("#!/bin/sh\necho hi\n"), false), Exec: true},
 		})
 
-	snap, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+	snap, err := loadBase(sessionT(dir, mustLoadState(t, dir), t.TempDir(), false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestLoadBaseUsesFrozenVarsWithoutEvalVars(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snap, err := loadBase(dir, st, t.TempDir(), false)
+	snap, err := loadBase(sessionT(dir, st, t.TempDir(), false))
 	if err != nil {
 		t.Fatalf("R9：重渲染不得重跑 EvalVars（已删除的变量还在 state.vars 里）：%v", err)
 	}
@@ -228,7 +228,7 @@ func TestLoadBaseRebuildErrorsHintAdopt(t *testing.T) {
 		})
 		dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
 			map[string]state.FileState{"a.txt": {Src: "a.txt", Hash: "sha256/normlf-v1:deadbeef"}})
-		_, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+		_, err := loadBase(sessionT(dir, mustLoadState(t, dir), t.TempDir(), false))
 		if err == nil || !strings.Contains(err.Error(), "重建 base") || !strings.Contains(err.Error(), "adopt") {
 			t.Fatalf("重渲染路径失败应报错并指引 adopt（AC-M1）：%v", err)
 		}
@@ -241,7 +241,7 @@ func TestLoadBaseRebuildErrorsHintAdopt(t *testing.T) {
 		})
 		dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
 			map[string]state.FileState{"a.txt": {Src: "a.txt", Hash: "sha256/normlf-v1:deadbeef"}})
-		_, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+		_, err := loadBase(sessionT(dir, mustLoadState(t, dir), t.TempDir(), false))
 		if err == nil || !strings.Contains(err.Error(), "重建 base/a.txt") || !strings.Contains(err.Error(), "adopt") {
 			t.Fatalf("重渲染内容失败应报错并指引 adopt（AC-M1）：%v", err)
 		}
@@ -256,7 +256,7 @@ func TestLoadBaseRebuildErrorsHintAdopt(t *testing.T) {
 		if err := os.WriteFile(state.BaseDir(dir), []byte("not a dir"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		_, err := loadBase(dir, mustLoadState(t, dir), t.TempDir(), false)
+		_, err := loadBase(sessionT(dir, mustLoadState(t, dir), t.TempDir(), false))
 		if err == nil || !strings.Contains(err.Error(), "重建 base/a.txt") || !strings.Contains(err.Error(), "adopt") {
 			t.Fatalf("写回失败应报错并指引 adopt（AC-M1）：%v", err)
 		}

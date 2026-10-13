@@ -18,33 +18,37 @@ import (
 	"github.com/xbcio/xinit/internal/template"
 )
 
-// baseSnapshot 是 .xinit/base/ 的装载结果（§5.2）。
-type baseSnapshot struct {
+// Base 是 base 侧快照（§5.2；P2 建立，§2.3）。M2a 起由 baseSnapshot 改名
+// （R-M2-6：全库替换，逐处见 task-4-report.md）。
+type Base struct {
 	Metas    map[string]plan.FileMeta // Dst → 元数据（Plan 的 base 参数）
 	Bytes    map[string][]byte        // Dst → base 原始字节（merge 三方输入）
 	Degraded []string                 // 无法重建、本轮按 base✗ 处理的路径（排序）
 	Restored []string                 // §21.6-4：从渲染快照恢复的 Dst（排序 = need 序 = 字节序）
 }
 
-// loadBase 装载 base 快照。base 缺失、单文件缺失或损坏时走 §5.2 恢复：
-// 用 state 记录的旧模板 @commit + 旧 vars 重渲染，逐路径比对 files[P].hash
-// ——一致的重建、不一致的降级。
+// loadBase 是 P2（§2.2）：装载 base 快照。base 缺失、单文件缺失或损坏时走
+// §5.2 恢复：用 state 记录的旧模板 @commit + 旧 vars 重渲染，逐路径比对
+// files[P].hash——一致的重建、不一致的降级。
 //
 // 每轮全量校验（R10）：base 是 update 的正确性根基，不能被缓存或抽查。
 //
 // readOnly（dry-run/diff）把恢复降级为纯内存操作：重建结果照常进 Metas/
 // Bytes 供 Plan 计算、降级照常进 Degraded，但一个字节都不写回 .xinit/base/
-// （零写契约，评审 I-1）。
-func loadBase(projectDir string, st *state.State, cacheRoot string, readOnly bool) (*baseSnapshot, error) {
-	present, err := readBaseTree(state.BaseDir(projectDir))
+// （零写契约，评审 I-1）。阶段化后 readOnly 取自 s.dryRun（R-M2-1）。
+func loadBase(s *session) (*Base, error) {
+	// 5. base（§5.2 逐路径恢复；R9 重渲染用 st.Vars、R10 全量校验）
+	// dry-run/diff 只读：恢复照常进行但只进内存快照，不写回 .xinit/base/
+	// （零写契约，评审 I-1——恢复写回是 dry-run 路径上唯一的项目内写盘点）。
+	present, err := readBaseTree(state.BaseDir(s.dir))
 	if err != nil {
 		return nil, err
 	}
 
-	snap := &baseSnapshot{Metas: map[string]plan.FileMeta{}, Bytes: map[string][]byte{}}
+	snap := &Base{Metas: map[string]plan.FileMeta{}, Bytes: map[string][]byte{}}
 	var need []string
-	for _, dst := range sortedStringKeys(st.Files) {
-		fst := st.Files[dst]
+	for _, dst := range sortedStringKeys(s.st.Files) {
+		fst := s.st.Files[dst]
 		if content, ok := present[dst]; ok && fsutil.CompareHash(content, fst.Binary) == fst.Hash {
 			snap.Metas[dst] = metaFromFileState(fst, content)
 			snap.Bytes[dst] = content
@@ -53,7 +57,7 @@ func loadBase(projectDir string, st *state.State, cacheRoot string, readOnly boo
 		need = append(need, dst) // 缺失或 hash 不符 → §5.2 恢复
 	}
 	if len(need) > 0 {
-		if err := restoreBase(projectDir, st, cacheRoot, need, snap, readOnly); err != nil {
+		if err := restoreBase(s.dir, s.st, s.cacheRoot, need, snap, s.dryRun); err != nil {
 			return nil, err
 		}
 	}
@@ -115,7 +119,7 @@ func metaFromFileState(fst state.FileState, content []byte) plan.FileMeta {
 //
 // readOnly 时跳过唯一的落盘点（写回 .xinit/base/）：重建内容仍进 snap，
 // 磁盘保持原样（dry-run/diff 零写契约，评审 I-1）。
-func restoreBase(projectDir string, st *state.State, cacheRoot string, need []string, snap *baseSnapshot, readOnly bool) error {
+func restoreBase(projectDir string, st *state.State, cacheRoot string, need []string, snap *Base, readOnly bool) error {
 	const adoptHint = "；请运行 xinit adopt --template <source> --revision <ref> --config <vars.yml> 重建基线（§5.2）"
 
 	// §21.6 前置一级：快照命中即恢复（写回字节过同一记录 hash 门，§20.4

@@ -188,7 +188,7 @@ func decideMigration(p migrationPair, base, ours, theirs plan.Snap,
 // 先跑 §17.4 拒绝预检，再做内容迁移（直搬 / 前置过滤 / 三方合并），Clean 落地
 // 后**就地改写** actions（P → Delete，Q → Merge+MigratedFrom）并把 Q 的字节注入
 // merged——buildChanges 等下游经既有通道消费，零改动。
-func classifyMigrations(projectDir string, actions []plan.Action, base *baseSnapshot,
+func classifyMigrations(projectDir string, actions []plan.Action, base *Base,
 	ours plan.Snap, oursBytes map[string][]byte, theirs plan.Snap, theirsRendered map[string][]byte,
 	newSrc map[string]string, st *state.State, merged map[string][]byte,
 ) ([]MigrationNote, error) {
