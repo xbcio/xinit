@@ -4,10 +4,13 @@ package update
 // （§4.3 规则 1）。
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/xbcio/xinit/internal/apply"
 	"github.com/xbcio/xinit/internal/fsutil"
@@ -162,5 +165,54 @@ func TestRestoreRefusedOrder(t *testing.T) {
 	}
 	if string(data) != "old\n" {
 		t.Errorf("base/%s = %q，want 旧字节 %q（被拒路径不写 theirs）", p, data, "old\n")
+	}
+}
+
+// ── T8/M4：IO/Now 接缝断言（B1/B2）────────────────────────────────────
+
+// TestBackupStampSingleCall 钉 I25（§1.3 :123；M4 落地）：一轮里 s.now() 恰
+// 调用一次——「同轮所有备份同目录」的机制保证；且 backup 目录名就是注入时钟
+// 的格式化值（消费点证明：用的不是真实时间）。
+func TestBackupStampSingleCall(t *testing.T) {
+	isolateCacheT(t)
+	repo, commit := mkTemplateRepoT(t, map[string]string{"xinit.yml": tmplYAML, "a.txt": "new\n"})
+	dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
+		map[string]state.FileState{"a.txt": textState("a.txt", "old\n")})
+	writeFilesT(t, dir, map[string]string{"a.txt": "old\n"}) // ours==base → 行 2（有备份对象）
+	writeFilesT(t, filepath.Join(dir, state.DirName, "base"), map[string]string{"a.txt": "old\n"})
+
+	calls := 0
+	fused := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	rep, err := Run(Input{ProjectDir: dir, Revision: commit, Now: func() time.Time { calls++; return fused }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Errorf("s.now() 调用次数 = %d，want 1（I25：同轮备份同戳）", calls)
+	}
+	if got := filepath.Base(rep.BackupDir); got != "20260102-030405" {
+		t.Errorf("BackupDir 基名 = %q，want %q（必须消费注入时钟，而非真实时间）", got, "20260102-030405")
+	}
+}
+
+// TestIOInjectionRoutesWarnings 钉 M4 IO 接缝（R-M4-4：warnIfDirty 路径定死）：
+// 注入 IO.Err 后，真跑的非 git 仓警告（§10.2 第 5 步）必须落在注入缓冲——
+// 证明 11 个替换点中的警告族确实走 s.io.Err（warnIfDirty 经 gate 的
+// gate.go 调用点传通道）。夹具即 projectWithState 于 t.TempDir 手写
+// state.json，天然非 git 仓。
+func TestIOInjectionRoutesWarnings(t *testing.T) {
+	isolateCacheT(t)
+	repo, commit := mkTemplateRepoT(t, map[string]string{"xinit.yml": tmplYAML, "a.txt": "new\n"})
+	dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
+		map[string]state.FileState{"a.txt": textState("a.txt", "old\n")})
+	writeFilesT(t, dir, map[string]string{"a.txt": "old\n"})
+	writeFilesT(t, filepath.Join(dir, state.DirName, "base"), map[string]string{"a.txt": "old\n"})
+
+	var errBuf bytes.Buffer
+	if _, err := Run(Input{ProjectDir: dir, Revision: commit, IO: IO{Err: &errBuf}}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errBuf.String(), "当前目录不是 git 仓库") {
+		t.Errorf("注入的 Err 通道应收到非 git 仓警告；got %q", errBuf.String())
 	}
 }

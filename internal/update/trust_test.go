@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xbcio/xinit/internal/state"
@@ -55,5 +56,38 @@ func TestTrustDeclineWritesNothing(t *testing.T) {
 	st2 := mustLoadState(t, dir)
 	if len(st2.TrustedHooks) != 0 {
 		t.Errorf("拒绝不得记录信任：TrustedHooks = %v", st2.TrustedHooks)
+	}
+}
+
+// TestTrustNoticeRoutesToInjectedOut 钉 M4 io.Out 通道（trust 提示族，
+// R-M4-4 可选加强）：rc4 轮的 PrintNotice/PrintAsk 必须落在注入的 Out 缓冲
+// ——与 B2 的 Err 通道合成 IO 接缝的两半（11 点替换族：Out=提示、Err=警告）。
+func TestTrustNoticeRoutesToInjectedOut(t *testing.T) {
+	isolateCacheT(t)
+	repo, commit := mkTemplateRepoT(t, map[string]string{
+		"xinit.yml": "manifest_version: 1\nhooks:\n  post_update: |\n    echo hi\n",
+		"a.txt":     "new\n",
+	})
+	dir := projectWithState(t,
+		state.TemplateRef{Source: repo, Kind: "git", Commit: commit},
+		map[string]state.FileState{"a.txt": textState("a.txt", "old\n")})
+	writeFilesT(t, dir, map[string]string{"a.txt": "old\n"})
+	writeFilesT(t, filepath.Join(dir, state.DirName, "base"), map[string]string{"a.txt": "old\n"})
+
+	var outBuf bytes.Buffer
+	ps, _ := newFakeInteractive("") // 无答复 → ConfirmTrust 走 EOF 分支
+	rep, err := Run(Input{ProjectDir: dir, Revision: commit, Interactive: ps, IO: IO{Out: &outBuf}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Verdict != VerdictNeedTrust {
+		t.Fatalf("夹具前提：rc4 轮；Verdict = %v", rep.Verdict)
+	}
+	got := outBuf.String()
+	if !strings.Contains(got, "需要确认") {
+		t.Errorf("注入的 Out 通道应收到信任提示（PrintNotice）；got %q", got)
+	}
+	if !strings.Contains(got, "退出码 4") {
+		t.Errorf("PrintAsk 指引应同走注入通道；got %q", got)
 	}
 }
