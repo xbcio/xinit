@@ -1,13 +1,8 @@
 package update
 
-// 来源：internal/cli/update.go 行 92-1283（迁移集：runUpdate + 全部消费方辅助
-// 函数闭包；I-2 实施批 T2/M1）。本文件承载 Input/IO/Mode/Verdict 接缝声明 +
-// verdictOf 单点 + Run 编排骨架（§2.6 M2 布局：update.go = 包文档/Input/IO/
-// Mode/Verdict/Run）。阶段函数与 helper 归位（M2a/T4、M2b/T5、M2c/T6 收口）：
-// session.go（P0）、template.go（P1）、base.go（P2）、ours.go（P3）、
-// accept.go（P4/P6）、decide.go（P5 + classifyMerges/buildChanges/
-// execConclusion）、gate.go（P7）、trust.go（P8）、deliver.go（P9）、
-// advance.go（P10）、hook.go（P11）、report.go（终局 report() 单点组装）。
+// 本文件 = Input/IO/Mode/Verdict 接缝声明 + verdictOf 单点 + Run 编排骨架；
+// 阶段布局与边界见 doc.go（唯一包文档）。来源：internal/cli/update.go 行
+// 92-1283（迁移集：runUpdate + 全部消费方辅助函数闭包；I-2 实施批 T2/M1）。
 
 import (
 	"io"

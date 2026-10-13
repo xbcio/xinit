@@ -3,6 +3,7 @@ package update
 // 来源：internal/cli/report_test.go（§4.3 整文件随迁，I-2 实施批 T2/M1）。
 
 import (
+	"bytes"
 	"os/exec"
 	"slices"
 	"strings"
@@ -232,5 +233,29 @@ func TestReportMergedTwoPaths(t *testing.T) {
 	}
 	if !slices.Equal(repDry.Merged, repRun.Merged) {
 		t.Errorf("两径 Merged 应同值：dry=%v run=%v", repDry.Merged, repRun.Merged)
+	}
+}
+
+// TestOrNone 钉 T2 B-O1（R-M4-5）：orNone（report.go:395）只测 update 侧副本
+// ——cli 侧同名副本零改动（§2.7 #8 两处各留，BASE 继承缺口在此收口）。表驱动
+// + 报告行端到端：OldRevision 为空时版本行渲染「-」（report.go:229 消费点）。
+func TestOrNone(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"", "-"},
+		{"main", "main"},
+		{"v1.0.0", "v1.0.0"},
+	}
+	for _, tc := range tests {
+		if got := orNone(tc.in); got != tc.want {
+			t.Errorf("orNone(%q) = %q，want %q", tc.in, got, tc.want)
+		}
+	}
+
+	// 端到端一行：版本行经 orNone 渲染空值为「-」。
+	rep := &Report{Header: "xinit: 更新", Source: "/tpl", OldRevision: "", NewRevision: "main"}
+	var buf bytes.Buffer
+	rep.Print(&buf)
+	if !strings.Contains(buf.String(), "版本: - → main") {
+		t.Errorf("报告版本行应经 orNone 把空值渲染为「-」；got:\n%s", buf.String())
 	}
 }
