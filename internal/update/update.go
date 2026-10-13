@@ -13,12 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"slices"
-	"sort"
-	"strings"
-	"time"
 
 	"github.com/xbcio/xinit/internal/apply"
 	"github.com/xbcio/xinit/internal/fsutil"
@@ -126,7 +120,6 @@ func Run(in Input) (*Report, error) {
 	projectDir, st, cacheRoot := s.dir, s.st, s.cacheRoot
 	src, m, vars, theirsRendered, newSrc, theirsSnap := t.Src, t.Manifest, t.Vars, t.Rendered, t.SrcOf, t.Snap
 	baseSnap := b // 别名引用：后半（块 14-32）的就地改写语义不变——baseSnap 与 b 是同一对象
-	oursSnap, oursBytes := o.Snap, o.Bytes
 
 	a, err := rewriteAccept(s, b, o, in.Accept)
 	if err != nil {
@@ -143,7 +136,7 @@ func Run(in Input) (*Report, error) {
 	// 报告据此决定是否打印「参考：conflicts/」行（评审 E1/m-3）。实跑写入的
 	// 条目与 c.Conflicts 一致（apply.rebuildConflicts 全量重建），无需另取。
 	rep.ConflictFiles = sortedStringKeys(d.Conflicts)
-	actions, merged, conflicted := d.Actions, d.Merged, d.Conflicted
+	actions := d.Actions
 	hooksRun := hooksRun(s, t)
 
 	if err := refineDecision(s, t, b, o, d, a); err != nil {
@@ -183,8 +176,6 @@ func Run(in Input) (*Report, error) {
 		rep.Verdict = v
 		return rep, nil
 	}
-	changes := g.Changes // 桥接（R-M2-2）：块 24-32 消费
-
 	if done, err := trust(s, t, in.NoHooks, in.Yes); err != nil {
 		return nil, err
 	} else if done {
@@ -192,74 +183,27 @@ func Run(in Input) (*Report, error) {
 		return rep, nil                // 原 :218
 	}
 
-	// 13. 备份（§10.2 第 7 步、§10.1）：计划内会被写入或删除的路径；目标以
-	// oursSnap（Scan，不穿透软链）为准过滤——中间段是软链的路径（将被
-	// CheckWrites 拒绝）不得进备份，否则 Backup 的穿透 Lstat 会错位备份
-	// 链后文件（裁定 U/Z）。
-	backupDir, err := apply.Backup(projectDir, time.Now().Format("20060102-150405"), backupTargets(changes, oursSnap))
-	if err != nil {
-		return nil, fmt.Errorf("备份: %w", err)
-	}
-	rep.BackupDir = backupDir
-
-	// 13b. 行 5 覆盖保护（§8.2 :614）：本轮会被 generated 覆盖的路径，其
-	// 本地版本先另存 .xinit/overwritten/<P>——持久保留，不随 update 清理
-	//（同一路径再次被覆盖时更新为最近一次副本）。
-	//
-	// 先取「写前检查的拒绝集」再落盘：被折叠拒绝/障碍物挡下的路径**没有被
-	// 覆盖**，§8.2 的另存义务只在真的发生覆盖时触发——既不写副本、也不进
-	// 报告。拒绝集原样来自 predictRefusals（与 Execute 步骤 1-2 同一组函数、
-	// 同一 changes），绝不手写近似判据：手写判据会开出「Execute 会写、却没
-	// 另存」的窗口。
-	if slices.ContainsFunc(actions, func(a plan.Action) bool { return a.OverwriteGenerated }) {
-		refusals, err := predictRefusals(projectDir, changes)
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range overwrittenPaths(actions, refusalSet(refusals)) {
-			data := oursBytes[p]
-			if data == nil {
-				return nil, fmt.Errorf("内部错误：%q 判为 generated 覆盖但本地内容缺失", p)
-			}
-			mode := os.FileMode(0o644)
-			if m, ok := oursSnap[p]; ok && m.Exec {
-				mode = 0o755
-			}
-			full := filepath.Join(projectDir, state.DirName, "overwritten", filepath.FromSlash(p))
-			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-				return nil, fmt.Errorf("另存被覆盖的本地版本: %w", err)
-			}
-			if err := state.WriteFileAtomic(full, data, mode); err != nil {
-				return nil, fmt.Errorf("另存被覆盖的本地版本: %w", err)
-			}
-			rep.Overwritten = append(rep.Overwritten, p)
-		}
-	}
-
-	// 14. 执行（§10.2 第 8 步）——折叠拒绝/障碍物路径跳过、不中止其余路径
-	res, err := apply.Execute(projectDir, changes)
+	w, err := deliver(s, b, o, d, g)
 	if err != nil {
 		return nil, err
 	}
-	rep.Written = res.Written
-	rep.Deleted = res.Deleted
-	rep.Chmodded = res.Chmodded
+	rep.BackupDir = w.BackupDir
+	rep.Overwritten = w.Overwritten
+	rep.Written = w.Result.Written
+	rep.Deleted = w.Result.Deleted
+	rep.Chmodded = w.Result.Chmodded
 	// rep.Conflicted 保持第 8 步的冲突全集（不覆盖为 res.Conflicts：后者只含
 	// 已写盘条目，会把 ConflictKind 且 theirs 缺失的冲突漏报成「冲突 0」——
 	// 评审 E1。conflicts/ 条目由 rep.ConflictFiles 单独承载）。
-	rep.Resolved = res.Resolved
-	rep.Refused = res.Refusals
-	rep.Merged = sortedStringKeys(merged)
-
-	// 15. 被拒路径把 NewBase 还原为「本轮开始时的 base 条目」（§8.5
-	//     折叠拒绝行）——必须在第 9 步之前，否则被拒路径的 base 会被推进。
-	actions = restoreRefused(actions, baseSnap.Metas, refusalSet(res.Refusals))
+	rep.Resolved = w.Result.Resolved
+	rep.Refused = w.Result.Refusals
+	rep.Merged = sortedStringKeys(d.Merged)
 
 	// 本轮是否仍有待解决项（冲突/折叠拒绝/障碍物）——决定第 9 步是否推进
 	// 模板版本与 commit，也决定第 19 步的退出码（§11.5）。冲突用第 8 步全集
 	// （评审 E1：res.Conflicts 只有已写盘条目，ConflictKind 且 theirs 缺失时
 	// 会漏算 → 退 0 且版本照推，绕开 D3 门禁）。
-	pending := len(res.Refusals) > 0 || len(conflicted) > 0
+	pending := w.Pending // R-M2c-4：bridge（块 32 逐字守卫必需）
 	rep.Pending = pending
 
 	// 16. 第 9 步：推进 state 与 .xinit/base/（先 base 后 state，含写入自检）
@@ -481,73 +425,6 @@ func execConclusion(a plan.Action, base, ours, theirs plan.Snap) (bool, bool) {
 	return a.NewBase.Exec, true
 }
 
-// warnIfDirty 是 §10.2 第 5 步：git 仓脏 → 警告；非 git 仓 → 警告后继续。
-// --force 跳过检查（§11.2）。两条路都不阻止执行。
-func warnIfDirty(projectDir string, force bool) {
-	if force {
-		return
-	}
-	out, err := exec.Command("git", "-C", projectDir, "status", "--porcelain").Output()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "xinit: 警告: 当前目录不是 git 仓库：出问题只能靠 .xinit/backup/ 还原")
-		return
-	}
-	if s := strings.TrimSpace(string(out)); s != "" {
-		n := len(strings.Split(s, "\n"))
-		fmt.Fprintf(os.Stderr,
-			"xinit: 警告: 工作树有 %d 处未提交改动；update 会直接改写工作树，建议先提交（或用 --force 跳过检查）\n", n)
-	}
-}
-
-// backupTargets 是 §10.1 的备份对象：计划内会被写入或删除、且 ours 侧确实是
-// 常规文件的路径（含纯 exec 变更；删除也记入备份）。
-//
-// 过滤依据是 worktree.Scan 的快照（不穿透符号链接），而不是让 apply.Backup
-// 的 os.Lstat 判定（穿透语义）：中间段是软链的路径在 ours 侧「不存在」，
-// 穿透的 Lstat 却会看到链后的文件——错位备份（裁定 U/Z）。
-// ours 不存在 → 无原内容可备份；目录/符号链接 → 本轮不会被改动。
-func backupTargets(c apply.Changes, oursSnap plan.Snap) []string {
-	targets := make([]string, 0, len(c.Writes)+len(c.Deletes)+len(c.ExecBits))
-	add := func(p string) {
-		if m, ok := oursSnap[p]; ok && m.Kind == render.KindRegular {
-			targets = append(targets, p)
-		}
-	}
-	for _, p := range sortedStringKeys(c.Writes) {
-		add(p)
-	}
-	for _, p := range c.Deletes {
-		add(p)
-	}
-	for _, p := range sortedStringKeys(c.ExecBits) {
-		if _, inWrites := c.Writes[p]; !inWrites {
-			add(p)
-		}
-	}
-	sort.Strings(targets)
-	return targets
-}
-
-// restoreRefused 把被拒路径（折叠拒绝、障碍物、删除路径逃逸）的 NewBase
-// 还原为「本轮开始时的 base 条目」（§8.5 折叠拒绝行）——base✗ → nil
-// （与行 15 的「保持旧值 = nil」同形）。必须在第 9 步之前调用。
-func restoreRefused(actions []plan.Action, baseMeta plan.Snap, refused map[string]bool) []plan.Action {
-	for i := range actions {
-		a := &actions[i]
-		if !refused[a.Path] {
-			continue
-		}
-		if old, ok := baseMeta[a.Path]; ok {
-			m := old
-			a.NewBase = &m
-		} else {
-			a.NewBase = nil
-		}
-		a.Note = joinNote(a.Note, "本轮被拒绝（折叠/障碍物）：未落盘，保持旧 base，下一轮重新判定")
-	}
-	return actions
-}
-
 // joinNote 把追加文案并入 Note（与 plan 内部的 noteJoin 同形；Note 是
 // 用户可见文案，不做去重）。
 func joinNote(note, extra string) string {
@@ -690,20 +567,3 @@ func advanceState(projectDir string, st *state.State, baseSnap *Base,
 
 // acceptDetachedNote 是 --accept 对「模板已删除该路径」的覆盖文案（§10.3）。
 const acceptDetachedNote = "已按 --accept 声明解决：模板已删除该路径，本轮脱离管理（不再有 base 记录；磁盘不动）"
-
-// overwrittenPaths 是本轮「会被 generated 覆盖（§8.2 行 5）、且未被写前检查
-// 拒绝」的路径（排序）——13b 的落盘清单与 dry-run 的预测共用同一出处。
-//
-// refused 必须原样来自 predictRefusals（与 apply.Execute 步骤 1-2 同一组
-// 函数）：被拒的路径没有被覆盖，另存义务不触发；换成手写近似判据会同时开出
-// 「Execute 写而没另存」（漏档）与「没写而记档」（虚账）两个窗口。
-func overwrittenPaths(actions []plan.Action, refused map[string]bool) []string {
-	var out []string
-	for _, a := range actions {
-		if a.OverwriteGenerated && !refused[a.Path] {
-			out = append(out, a.Path)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
