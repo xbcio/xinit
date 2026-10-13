@@ -270,7 +270,8 @@ func TestExecuteConflictsRebuild(t *testing.T) {
 // TestForecastMatchesExecuteRefusals 是 I10 的防漂移回归闸（设计稿 §3-M0a，
 // 评审 WN-7）：dry-run 的拒绝预测（Forecast）与实际落盘（Execute 步骤 1-2）
 // 必须给出逐条相等的拒绝集。M0a 之后两侧共用 forecast 单点，本测试钉的是
-// 「此后任一侧改回独立实现/改叶子调用即红」。
+// 「此后任一侧改回独立实现/改叶子调用即红」——它钉两侧漂移，不钉单点内部
+// 文案（单点内的文案语义由既有 check_test.go 与 txtar 面兜底）。
 func TestForecastMatchesExecuteRefusals(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir()
@@ -350,6 +351,37 @@ func refusalPaths(rs []Refusal) []string {
 		paths = append(paths, r.Path)
 	}
 	return paths
+}
+
+// 评审 I-1（T1 fix 轮）（a）：手搓重叠输入「ExecBits ∩ Deletes 且删除段被 §9.5 拒」。
+// HEAD 的 refused 是合并拒绝集（含删除段），故步骤 5 跳过、不穿透外指符号链接；
+// BASE 的 refused 只含 CheckWrites 键，会经 link-dir 把**项目根之外**的 old.txt
+// chmod（0755→0644）。本测试钉死新语义（更安全方向）。该输入 CLI 不可达：
+// plan 每路径一 Action，buildChanges/execConclusion 保证 Deletes 与 ExecBits 互斥。
+func TestExecuteRefusedDeleteNotChmoddedThroughSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	writeFile(t, outside, "old.txt", "根外文件", 0o755)
+	if err := os.Symlink(outside, filepath.Join(dir, "link-dir")); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Execute(dir, Changes{
+		Deletes:  []string{"link-dir/old.txt"},               // 删除段 §9.5：父路径外指 → 拒绝
+		ExecBits: map[string]bool{"link-dir/old.txt": false}, // 重叠输入（CLI 不可达）
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Refusals) != 1 || res.Refusals[0].Path != "link-dir/old.txt" {
+		t.Fatalf("删除段 §9.5 应拒绝该路径：%v", res.Refusals)
+	}
+	if len(res.Chmodded) != 0 {
+		t.Errorf("被拒的重叠路径不得做纯 exec 变更：Chmodded=%v", res.Chmodded)
+	}
+	if got := mustPerm(t, outside, "old.txt"); got != 0o755 {
+		t.Errorf("项目根之外的文件权限被改动：got %v, want 0755", got)
+	}
 }
 
 // §10.4：冲突全清后连 .xinit/conflicts/ 目录一起消失（「存在即未解决冲突」）。

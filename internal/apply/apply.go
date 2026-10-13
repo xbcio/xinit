@@ -53,6 +53,11 @@ func Execute(projectDir string, c Changes) (Result, error) {
 		return Result{}, err
 	}
 	res.Refusals = refusals
+	// refused 取合并后的拒绝集（含删除段 §9.5 拒绝，不限于 CheckWrites 的 writes 键）：
+	// 「ExecBits ∩ Deletes 且该删除被 §9.5 拒」的重叠输入因此不会在步骤 5 穿透外指
+	// 符号链接做纯 exec 变更——与 BASE 此处行为不同（BASE 的 refused 只含 writes
+	// 键，会 chmod 项目根之外的文件）、方向更安全。该输入 CLI 不可达：plan 每路径
+	// 一 Action，buildChanges/execConclusion 保证 Deletes 与 ExecBits 互斥。
 	refused := make(map[string]bool, len(refusals))
 	for _, r := range refusals {
 		refused[r.Path] = true
