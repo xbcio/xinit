@@ -148,7 +148,7 @@ func loadManifestVars(src *template.Source, st *state.State, configPath string) 
 
 // RenderTheirs 是模板侧渲染+告警的单点（§7；init 与 update 共用，I-2 M5）：
 // 路径渲染警告逐条；替换规则零命中按**规则**汇总（§7.4）。errW = 警告通道
-// （R-M4-3：末位形参，调用点传 s.io.Err）。
+// （R-M4-3：末位形参；update 传 s.io.Err，init 传 os.Stderr）。
 func RenderTheirs(src *template.Source, compiled *manifest.Compiled, vars render.Vars, errW io.Writer,
 ) ([]render.Entry, map[string][]byte, map[string]string, error) {
 	entries, warnings, err := render.Paths(src.FS, compiled, vars)
