@@ -150,7 +150,7 @@ func TestRestoreRefusedOrder(t *testing.T) {
 	// baseSnap.Metas ⇒ advanced=false ⇒ files 保持旧 hash、base 保持旧字节。
 	if err := advanceState(dir, st, b, d.Actions, nil,
 		map[string]string{p: "x.tmpl"}, render.Vars{}, &template.Source{Kind: template.KindDir},
-		true, t.TempDir(), engineVersionT); err != nil {
+		true, t.TempDir(), engineVersionT, os.Stderr); err != nil {
 		t.Fatal(err)
 	}
 	if got := st.Files[p].Hash; got != oldHash {

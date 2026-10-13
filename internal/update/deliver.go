@@ -9,13 +9,13 @@ package update
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/xbcio/xinit/internal/apply"
 	"github.com/xbcio/xinit/internal/plan"
@@ -41,7 +41,7 @@ func deliver(s *session, b *Base, o *Ours, d *Decision, g *Gate) (*Delivery, err
 	// oursSnap（Scan，不穿透软链）为准过滤——中间段是软链的路径（将被
 	// CheckWrites 拒绝）不得进备份，否则 Backup 的穿透 Lstat 会错位备份
 	// 链后文件（裁定 U/Z）。
-	backupDir, err := apply.Backup(s.dir, time.Now().Format("20060102-150405"), backupTargets(g.Changes, o.Snap))
+	backupDir, err := apply.Backup(s.dir, s.now().Format("20060102-150405"), backupTargets(g.Changes, o.Snap))
 	if err != nil {
 		return nil, fmt.Errorf("备份: %w", err)
 	}
@@ -97,19 +97,20 @@ func deliver(s *session, b *Base, o *Ours, d *Decision, g *Gate) (*Delivery, err
 }
 
 // warnIfDirty 是 §10.2 第 5 步：git 仓脏 → 警告；非 git 仓 → 警告后继续。
-// --force 跳过检查（§11.2）。两条路都不阻止执行。
-func warnIfDirty(projectDir string, force bool) {
+// --force 跳过检查（§11.2）。两条路都不阻止执行。errW = 警告通道
+// （R-M4-3：末位形参，调用点传 s.io.Err）。
+func warnIfDirty(projectDir string, force bool, errW io.Writer) {
 	if force {
 		return
 	}
 	out, err := exec.Command("git", "-C", projectDir, "status", "--porcelain").Output()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "xinit: 警告: 当前目录不是 git 仓库：出问题只能靠 .xinit/backup/ 还原")
+		fmt.Fprintln(errW, "xinit: 警告: 当前目录不是 git 仓库：出问题只能靠 .xinit/backup/ 还原")
 		return
 	}
 	if s := strings.TrimSpace(string(out)); s != "" {
 		n := len(strings.Split(s, "\n"))
-		fmt.Fprintf(os.Stderr,
+		fmt.Fprintf(errW,
 			"xinit: 警告: 工作树有 %d 处未提交改动；update 会直接改写工作树，建议先提交（或用 --force 跳过检查）\n", n)
 	}
 }

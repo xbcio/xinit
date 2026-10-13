@@ -247,7 +247,7 @@ func TestAdvanceStateSrcFromNewSrcWithoutFilesEntry(t *testing.T) {
 		map[string][]byte{dst: []byte("theirs\n")},
 		map[string]string{dst: srcPath},
 		render.Vars{}, &template.Source{Kind: template.KindDir},
-		false, t.TempDir(), engineVersionT)
+		false, t.TempDir(), engineVersionT, os.Stderr)
 	if err != nil {
 		t.Fatalf("advanceState: %v", err)
 	}

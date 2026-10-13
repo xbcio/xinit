@@ -411,7 +411,7 @@ func TestAcceptCleanConvergeStateAdvances(t *testing.T) {
 	if err := refineDecision(s, tpl, b, o, d, a); err != nil {
 		t.Fatal(err)
 	}
-	if err := advanceState(s.dir, s.st, b, d.Actions, tpl.Rendered, tpl.SrcOf, tpl.Vars, tpl.Src, false, s.cacheRoot, engineVersionT); err != nil {
+	if err := advanceState(s.dir, s.st, b, d.Actions, tpl.Rendered, tpl.SrcOf, tpl.Vars, tpl.Src, false, s.cacheRoot, engineVersionT, os.Stderr); err != nil {
 		t.Fatal(err)
 	}
 	st2 := mustLoadState(t, dir)

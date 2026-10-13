@@ -9,7 +9,10 @@ package update
 // execConclusion）、gate.go（P7）、trust.go（P8）、deliver.go（P9）、
 // advance.go（P10）、hook.go（P11）、report.go（终局 report() 单点组装）。
 
-import "io"
+import (
+	"io"
+	"time"
+)
 
 // Mode 是管线入口模式（§2.4：报告头等可观测字符串的单一来源）。
 type Mode int
@@ -43,15 +46,16 @@ func verdictOf(pending, hookFailed bool) Verdict {
 	return VerdictOK
 }
 
-// IO 是管线输出通道组（§2.6 update.go 行；M2 期间无消费者——M4 接
-// Input.IO。P0 的 session.io 初始化 = os.Stdout/os.Stderr 对）。
+// IO 是管线输出通道组（§2.6 update.go 行；M4 已落地——零值回退 =
+// 标准输出/标准错误，回退单点在 prepare，cli 侧不作显式接线）。
 type IO struct {
 	Out io.Writer
 	Err io.Writer
 }
 
 // Input 是 update 的全部输入（cli 侧由 flag 经 inputOf 映射，§2.7 #3）。
-// M1 只落「搬运 + 编译必需的最小接缝」：IO/Now 留 M4（§2.4 交互行）。
+// IO/Now 已落地（M4）：零值回退为生产默认（标准输出/标准错误/当前时间，
+// 见 prepare），测试经此注入假通道/假时钟。
 type Input struct {
 	ProjectDir    string
 	Revision      string
@@ -62,9 +66,11 @@ type Input struct {
 	NoHooks       bool
 	Yes           bool
 	Accept        []string
-	Mode          Mode        // ModeDiff = diff（报告头派生；M1 起不再由 cli 覆盖 Header）
-	Interactive   Interactive // nil = 不可交互（cli 侧 interactiveSession 判定）
-	EngineVersion string      // §2.7 #13：cli 为唯一真源，经此注入（M2 落 session）
+	Mode          Mode             // ModeDiff = diff（报告头派生；M1 起不再由 cli 覆盖 Header）
+	Interactive   Interactive      // nil = 不可交互（cli 侧 interactiveSession 判定）
+	EngineVersion string           // §2.7 #13：cli 为唯一真源，经此注入（M2 落 session）
+	IO            IO               // 输出通道（M4 落地；零值回退 = 标准输出/标准错误，见 prepare）
+	Now           func() time.Time // 时间源（M4 落地；I25；nil 回退 = 当前时间）
 }
 
 // Run 是 §10.2 的十二步本体（不打印；diff 与 cli 测试复用它）。

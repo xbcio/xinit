@@ -27,16 +27,17 @@ type Interactive interface {
 }
 
 // session 是 P0 建立的跨阶段上下文（§2.2 P0 产物行；dryRun 为控制器裁定
-// R-M2-1、force 为 R-M2-8，均 §2.2 字段列表缺口）。io/now 的消费者在 M4
-// （Input.IO/Input.Now）；M2 期间只初始化、不读取。
+// R-M2-1、force 为 R-M2-8，均 §2.2 字段列表缺口）。M4 起的消费者：io.Out =
+// trust 提示族（PrintNotice/PrintAsk）；io.Err = 警告族（template/deliver/
+// advance）；now = backup 时间戳（I25，唯一调用点 deliver）。
 type session struct {
 	dir           string           // = abs(in.ProjectDir)
 	st            *state.State     // = state.Load(dir)（块 3）
 	lock          *state.Lock      // 块 5；nil = dry-run（连 lock 文件都不建）
 	cacheRoot     string           // 块 6 = template.DefaultCacheRoot()
-	io            IO               // M2 无消费者；M4 接 Input.IO
+	io            IO               // 输出通道（Out=提示族、Err=警告族）；回退见 prepare
 	interactive   Interactive      // = in.Interactive（nil = 不可交互）
-	now           func() time.Time // M2 无消费者；M4 接 Input.Now
+	now           func() time.Time // 时间源（backup 戳，I25）；回退见 prepare
 	mode          Mode             // = in.Mode
 	dryRun        bool             // = in.DryRun（R-M2-1）
 	noHooks       bool             // = in.NoHooks
@@ -60,11 +61,24 @@ func prepare(in Input) (*session, error) {
 	// 交互会话（§19.2.2/§19.2.3）：cli 入口创建一次（创建只做一次 ioctl
 	// 判定——不读 stdin、不打印），经 Input.Interactive 注入；nil = 不可交互，
 	// 调用点一律跳过提问（--dry-run 下不提问，故不会碰 stdin）。
+	// IO/Now 默认回退单点（R-M4-2）：零值 = 生产默认（cli 侧不做显式接线），
+	// 测试经 Input 注入假通道/假时钟覆盖同一批消费点。
+	io := in.IO
+	if io.Out == nil {
+		io.Out = os.Stdout
+	}
+	if io.Err == nil {
+		io.Err = os.Stderr
+	}
+	now := in.Now
+	if now == nil {
+		now = time.Now
+	}
 	s := &session{
 		dir:           projectDir,
 		interactive:   in.Interactive,
-		io:            IO{Out: os.Stdout, Err: os.Stderr},
-		now:           time.Now,
+		io:            io,
+		now:           now,
 		mode:          in.Mode,
 		dryRun:        in.DryRun,
 		noHooks:       in.NoHooks,

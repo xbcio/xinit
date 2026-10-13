@@ -7,7 +7,7 @@ package update
 
 import (
 	"fmt"
-	"os"
+	"io"
 
 	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/plan"
@@ -22,7 +22,7 @@ import (
 // restoreRefused 已按写者表就地改写 NewBase/Note（I12）。
 func advance(s *session, t *Template, b *Base, d *Decision, w *Delivery) error {
 	// 16. 第 9 步：推进 state 与 .xinit/base/（先 base 后 state，含写入自检）
-	if err := advanceState(s.dir, s.st, b, d.Actions, t.Rendered, t.SrcOf, t.Vars, t.Src, w.Pending, s.cacheRoot, s.engineVersion); err != nil {
+	if err := advanceState(s.dir, s.st, b, d.Actions, t.Rendered, t.SrcOf, t.Vars, t.Src, w.Pending, s.cacheRoot, s.engineVersion, s.io.Err); err != nil {
 		return err
 	}
 
@@ -47,10 +47,12 @@ func advance(s *session, t *Template, b *Base, d *Decision, w *Delivery) error {
 // 逐路径恢复要用记录的 commit 重渲染这些路径——提前推进 commit 会让它们
 // 的重建 hash 必然不符 → 降级成 base✗。收敛后的重跑再推进（F6 语义保证
 // 「没有更高的 tag 时取当前 revision」，重跑不会空转）。
+// errW = 快照写侧 best-effort 警告通道（R-M4-3：末位形参，不引入 session
+// 依赖；调用点传 s.io.Err）。
 func advanceState(projectDir string, st *state.State, baseSnap *Base,
 	actions []plan.Action, theirsRendered map[string][]byte,
 	newSrc map[string]string, vars render.Vars, src *template.Source, pending bool,
-	cacheRoot, engineVersion string,
+	cacheRoot, engineVersion string, errW io.Writer,
 ) error {
 	newFiles := make(map[string]state.FileState, len(actions))
 	entries := make([]render.Entry, 0, len(actions))
@@ -159,7 +161,7 @@ func advanceState(projectDir string, st *state.State, baseSnap *Base,
 	// blobs 混合体——保持旧值路径装的是旧 base 字节）。best-effort：失败只
 	// 警告，不影响命令。
 	if !pending {
-		renderstore.WriteBestEffort(st, cacheRoot, theirsRendered, os.Stderr)
+		renderstore.WriteBestEffort(st, cacheRoot, theirsRendered, errW)
 	}
 	return nil
 }

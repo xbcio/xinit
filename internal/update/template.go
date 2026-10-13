@@ -7,8 +7,8 @@ package update
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
-	"os"
 
 	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/manifest"
@@ -37,7 +37,7 @@ type Template struct {
 // Run（值经 t.Src）。
 func loadTemplate(s *session, revision, configPath string, fetch bool) (*Template, error) {
 	// 2. 打开模板 + 选定目标版本（§11.3 / R8）
-	src, err := openTarget(s.st, revision, s.cacheRoot, fetch)
+	src, err := openTarget(s.st, revision, s.cacheRoot, fetch, s.io.Err)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +55,7 @@ func loadTemplate(s *session, revision, configPath string, fetch bool) (*Templat
 	}
 
 	// 4. 渲染 theirs（模板侧；告警与 init 同格式）
-	entries, rendered, srcOf, err := renderTheirs(src, compiled, vars)
+	entries, rendered, srcOf, err := renderTheirs(src, compiled, vars, s.io.Err)
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +72,9 @@ func loadTemplate(s *session, revision, configPath string, fetch bool) (*Templat
 	}, nil
 }
 
-// openTarget 打开模板源并选定目标版本（§11.3、R8）。
-func openTarget(st *state.State, rev, cacheRoot string, fetch bool) (*template.Source, error) {
+// openTarget 打开模板源并选定目标版本（§11.3、R8）。errW = 降级警告通道
+// （R-M4-3：末位形参，不引入 session 依赖；调用点传 s.io.Err）。
+func openTarget(st *state.State, rev, cacheRoot string, fetch bool, errW io.Writer) (*template.Source, error) {
 	target := rev
 	switch {
 	case rev != "":
@@ -106,9 +107,9 @@ func openTarget(st *state.State, rev, cacheRoot string, fetch bool) (*template.S
 		anc, err := template.IsAncestor(st.Template.Source, cacheRoot, fetch, st.Template.Revision, rev)
 		switch {
 		case err != nil:
-			fmt.Fprintf(os.Stderr, "xinit: 警告: 无法判断 %s 是否为 %s 的后代: %v\n", rev, st.Template.Revision, err)
+			fmt.Fprintf(errW, "xinit: 警告: 无法判断 %s 是否为 %s 的后代: %v\n", rev, st.Template.Revision, err)
 		case !anc:
-			fmt.Fprintf(os.Stderr,
+			fmt.Fprintf(errW,
 				"xinit: 警告: 目标版本 %s 不是当前版本 %s 的后代（降级/回退）：磁盘上已有的内容会被改写或删除、回退到 %s 的版本（原内容在 .xinit/backup/ 保留；本地改动走合并/冲突或保留删除、均不会被静默回退）；两版之间模板的改动不会出现在本项目里，之后可能被误判为本地改动（§11.3）\n",
 				rev, st.Template.Revision, rev)
 		}
@@ -145,15 +146,16 @@ func loadManifestVars(src *template.Source, st *state.State, configPath string) 
 }
 
 // renderTheirs 渲染模板侧全部路径（§7）。告警与 init 完全同格式：
-// 路径渲染警告逐条；替换规则零命中按**规则**汇总（§7.4）。
-func renderTheirs(src *template.Source, compiled *manifest.Compiled, vars render.Vars,
+// 路径渲染警告逐条；替换规则零命中按**规则**汇总（§7.4）。errW = 警告通道
+// （R-M4-3：末位形参，调用点传 s.io.Err）。
+func renderTheirs(src *template.Source, compiled *manifest.Compiled, vars render.Vars, errW io.Writer,
 ) ([]render.Entry, map[string][]byte, map[string]string, error) {
 	entries, warnings, err := render.Paths(src.FS, compiled, vars)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("渲染模板路径: %w", err)
 	}
 	for _, w := range warnings {
-		fmt.Fprintf(os.Stderr, "xinit: 警告: %s: %s\n", w.Path, w.Msg)
+		fmt.Fprintf(errW, "xinit: 警告: %s: %s\n", w.Path, w.Msg)
 	}
 
 	rendered := make(map[string][]byte, len(entries))
@@ -168,7 +170,7 @@ func renderTheirs(src *template.Source, compiled *manifest.Compiled, vars render
 			hitTotals[h.Index] += h.Count
 		}
 		for _, w := range warns {
-			fmt.Fprintf(os.Stderr, "xinit: 警告: %s: %s\n", w.Path, w.Msg)
+			fmt.Fprintf(errW, "xinit: 警告: %s: %s\n", w.Path, w.Msg)
 		}
 		// 空渲染（Go template 渲染出空内容）是**空内容文件**，不是「模板没有它」：
 		// 归一成非 nil 空切片，使下游按「键存在」判定的全链（classifyMerges 的
@@ -182,7 +184,7 @@ func renderTheirs(src *template.Source, compiled *manifest.Compiled, vars render
 	}
 	for i, cs := range compiled.Subst {
 		if hitTotals[i] == 0 {
-			fmt.Fprintf(os.Stderr,
+			fmt.Fprintf(errW,
 				"xinit: 警告: 替换规则 %d (%q) 在渲染结果中命中 0 次 —— 模板里可能已无此字面量\n",
 				i, cs.Spec.From)
 		}

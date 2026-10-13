@@ -8,7 +8,6 @@ package update
 
 import (
 	"io/fs"
-	"os"
 
 	"github.com/xbcio/xinit/internal/hooks"
 	"github.com/xbcio/xinit/internal/manifest"
@@ -29,9 +28,9 @@ func trust(s *session, t *Template, noHooks, yes bool) (bool, error) {
 			hooks.Seen(s.st.TrustedHooks, h)
 		} else if hooks.NeedConfirm(s.st.TrustedHooks, h) {
 			oldVer, diff := hookDiffAgainstBase(s.st, s.cacheRoot, t.Manifest.Hooks.PostUpdate)
-			hooks.PrintNotice(os.Stdout, "post_update", t.Manifest.Hooks.PostUpdate, oldVer, diff)
+			hooks.PrintNotice(s.io.Out, "post_update", t.Manifest.Hooks.PostUpdate, oldVer, diff)
 			if !yes {
-				hooks.PrintAsk(os.Stdout) // T4-R2：--yes 预先确认时不打指引
+				hooks.PrintAsk(s.io.Out) // T4-R2：--yes 预先确认时不打指引
 			}
 			// 守卫是 ps != nil（而非 hooks.Interactive）：非 --interactive
 			// 时二者等价，--interactive 时信任门才第一次能在管道下被驱动

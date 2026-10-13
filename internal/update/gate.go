@@ -76,7 +76,7 @@ func gate(s *session, t *Template, b *Base, o *Ours, d *Decision, a *AcceptRewri
 	}
 
 	// 11. 脏检查（§10.2 第 5 步；--force 跳过；两条路都不阻止执行）
-	warnIfDirty(s.dir, s.force)
+	warnIfDirty(s.dir, s.force, s.io.Err)
 
 	return g, VerdictOK, false, nil
 }

@@ -33,7 +33,7 @@ func TestAdvanceSelfCheckAbortsOnHashMismatch(t *testing.T) {
 	err := advanceState(proj, st, b,
 		[]plan.Action{{Path: p, Kind: plan.WriteTheirs, NewBase: &wrongMeta}},
 		nil, map[string]string{p: "p.tmpl"}, render.Vars{},
-		&template.Source{Kind: template.KindDir}, true, t.TempDir(), engineVersionT)
+		&template.Source{Kind: template.KindDir}, true, t.TempDir(), engineVersionT, os.Stderr)
 	if err == nil || !strings.Contains(err.Error(), "写入自检失败") {
 		t.Fatalf("hash 不符应中止于写入自检（不变量 5）：err = %v", err)
 	}

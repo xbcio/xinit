@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/renderstore"
@@ -143,8 +144,14 @@ func textState(src, content string) state.FileState {
 // sessionT 构造只含 P2 所需字段的 session（测试专用）。loadBase 阶段化
 // （M2a/P2，签名收 s *session）后测试调用点的机械连带——各站点原四实参
 // (dir, st, cacheRoot, readOnly) 原样透传，断言零改动。
+// M4/T8：io/now 从「M4 前恒无消费者」变为有消费者（deliver 的 backup 戳、
+// 警告通道），直调阶段函数的用例失去 prepare 的默认回退 → 此处按 prepare
+// 同一回退口径补默认（行为与 M4 前逐字节一致：os.Stdout/os.Stderr/time.Now）。
 func sessionT(dir string, st *state.State, cacheRoot string, dryRun bool) *session {
-	return &session{dir: dir, st: st, cacheRoot: cacheRoot, dryRun: dryRun}
+	return &session{
+		dir: dir, st: st, cacheRoot: cacheRoot, dryRun: dryRun,
+		io: IO{Out: os.Stdout, Err: os.Stderr}, now: time.Now,
+	}
 }
 
 // countingInteractive 包装 fakeInteractive 并记录两个提问方法的调用次数
