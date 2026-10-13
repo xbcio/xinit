@@ -15,7 +15,6 @@ import (
 
 	"github.com/xbcio/xinit/internal/apply"
 	"github.com/xbcio/xinit/internal/fsutil"
-	"github.com/xbcio/xinit/internal/hooks"
 	"github.com/xbcio/xinit/internal/merge"
 	"github.com/xbcio/xinit/internal/plan"
 )
@@ -110,11 +109,6 @@ func Run(in Input) (*Report, error) {
 		return nil, err
 	}
 
-	// M2 中间态桥接（R-M2-2）：后半阶段逐步抽取期间保持块 13-32 逐字不变；
-	// M2c 终局化时消除。
-	projectDir := s.dir
-	m, theirsSnap := t.Manifest, t.Snap
-
 	a, err := rewriteAccept(s, b, o, in.Accept)
 	if err != nil {
 		return nil, err
@@ -130,7 +124,6 @@ func Run(in Input) (*Report, error) {
 	// 报告据此决定是否打印「参考：conflicts/」行（评审 E1/m-3）。实跑写入的
 	// 条目与 c.Conflicts 一致（apply.rebuildConflicts 全量重建），无需另取。
 	rep.ConflictFiles = sortedStringKeys(d.Conflicts)
-	hooksRun := hooksRun(s, t)
 
 	if err := refineDecision(s, t, b, o, d, a); err != nil {
 		return nil, err
@@ -203,42 +196,19 @@ func Run(in Input) (*Report, error) {
 		return nil, err
 	}
 
-	// 18. post_update（§10.2 第 11 步）——在 state/base 落盘之后。文件已按
-	// 本轮结果写完，钩子失败也只是退出码 3（文件与 state 保留，§10.2 :845）。
-	if hooksRun {
-		rep.HookName = "post_update"
-		rep.HookBlock = m.Hooks.PostUpdate
-		before, err := hooks.Snapshot(projectDir)
-		if err != nil {
-			return nil, fmt.Errorf("钩子前快照: %w", err)
-		}
-		res, err := hooks.Run(projectDir, m.Hooks.PostUpdate)
-		if err != nil {
-			return nil, err // sh 起不来：硬错误（§3.1 明确报错）
-		}
-		after, err := hooks.Snapshot(projectDir)
-		if err != nil {
-			return nil, fmt.Errorf("钩子后快照: %w", err)
-		}
-		rep.HookExitCode = res.ExitCode
-		rep.HookOutput = hookBlockLines(string(res.Output))
-		// planned = 本轮受管并集（Actions 全部路径；prune 与行 12 已被 Plan
-		// 排除）；generated 取本轮模板侧位（M3-R6）。
-		planned := make(map[string]bool, len(rep.Actions))
-		for _, a := range rep.Actions {
-			planned[a.Path] = true
-		}
-		generated := make(map[string]bool)
-		for p, m := range theirsSnap {
-			if m.Generated {
-				generated[p] = true
-			}
-		}
-		rep.HookUnplanned, rep.HookModified = hooks.Classify(before, after, planned, generated)
-		if res.ExitCode != 0 {
-			rep.HookFailed = true
-		}
+	h, err := runHook(s, t, d.Actions, hooksRun(s, t))
+	if err != nil {
+		return nil, err
 	}
+	if hooksRun(s, t) { // 原 :306 门（函数重算；Name/Block 非零值域）
+		rep.HookName = "post_update"
+		rep.HookBlock = t.Manifest.Hooks.PostUpdate // m→t.Manifest
+	}
+	rep.HookExitCode = h.ExitCode
+	rep.HookOutput = h.Output
+	rep.HookUnplanned = h.Unplanned
+	rep.HookModified = h.Modified
+	rep.HookFailed = h.Failed
 
 	// 19. 终局语义（§11.5；M3-R2 优先级 3 ＞ 2 ＞ 0；M1 起只产 Verdict，
 	// cli 单点映射为码）：冲突/折叠拒绝/障碍物待解决 → 2；钩子失败 → 3
