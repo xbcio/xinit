@@ -1,8 +1,10 @@
 package update
 
 // 来源：internal/cli/update.go 行 92-1283（迁移集：runUpdate + 全部消费方辅助
-// 函数闭包；I-2 实施批 T2/M1）。本文件头部新增 Input/Mode/Verdict/Interactive
-// 接缝声明（§2.3、§2.7 #3/#13/#16、第 ⑥ 类登记变化）——M2 拆阶段时再分流。
+// 函数闭包；I-2 实施批 T2/M1）。本文件头部承载 Input/IO/Mode/Verdict 接缝
+// 声明（§2.3、§2.6 M2 布局：update.go = 包文档/Input/IO/Mode/Verdict/Run）；
+// Interactive 已随 P0 迁 session.go（M2a/T4）。M2 拆阶段进行中：块 1-6 已抽，
+// 块 7-32 仍逐字留在 Run（bridge 兜住引用，R-M2-2）。
 
 import (
 	"fmt"
@@ -28,17 +30,6 @@ import (
 	"github.com/xbcio/xinit/internal/template"
 	"github.com/xbcio/xinit/internal/worktree"
 )
-
-// Interactive 是 update 的交互接缝（§2.4；M1 落地为第 ⑥ 类登记变化）：
-// cli 的 promptSession 实现它。「唯一 bufio.Reader」与「EOF 锁存」的纪律
-// 仍由 promptSession 独占——管线拿不到 reader；Out() 是冲突表头/EOF 行
-// （conflicts.go）的唯一打印通道。nil = 本次运行不可交互（cli 侧由
-// interactiveSession 判定后注入）。
-type Interactive interface {
-	ConfirmTrust() (bool, error)
-	AskConflict(q string) (yes, eof bool, err error)
-	Out() io.Writer
-}
 
 // Mode 是管线入口模式（§2.4：报告头等可观测字符串的单一来源）。
 type Mode int
@@ -72,6 +63,13 @@ func headerFor(mode Mode, dryRun bool) string {
 	return "xinit update"
 }
 
+// IO 是管线输出通道组（§2.6 update.go 行；M2 期间无消费者——M4 接
+// Input.IO。P0 的 session.io 初始化 = os.Stdout/os.Stderr 对）。
+type IO struct {
+	Out io.Writer
+	Err io.Writer
+}
+
 // Input 是 update 的全部输入（cli 侧由 flag 经 inputOf 映射，§2.7 #3）。
 // M1 只落「搬运 + 编译必需的最小接缝」：IO/Now 留 M4（§2.4 交互行）。
 type Input struct {
@@ -92,53 +90,21 @@ type Input struct {
 // Run 是 §10.2 的十二步本体（不打印；diff 与 cli 测试复用它）。
 // 返回的报告总是非 nil；退出码见 §11.5。
 func Run(in Input) (*Report, error) {
-	if len(in.Accept) > 0 && in.DryRun {
-		return nil, fmt.Errorf("--accept 与 --dry-run 不能组合：accept 的本义是修改状态（§10.3）")
-	}
-	projectDir, err := filepath.Abs(in.ProjectDir)
+	s, err := prepare(in)
 	if err != nil {
 		return nil, err
 	}
+	defer s.close() // 解锁（I29）；dry-run 下 lock = nil 为 no-op
 
-	// 交互会话（§19.2.2/§19.2.3）：cli 入口创建一次（创建只做一次 ioctl
-	// 判定——不读 stdin、不打印），经 Input.Interactive 注入；nil = 不可交互，
-	// 调用点一律跳过提问（--dry-run 下不提问，故不会碰 stdin）。
-	ps := in.Interactive
 	rep := &Report{Header: headerFor(in.Mode, in.DryRun)}
 	rep.DryRun = in.DryRun
+	rep.Source = s.st.Template.Source
+	rep.OldRevision = s.st.Template.Revision
+	rep.OldCommit = s.st.Template.Commit
 
-	// 先 Load 再取锁：Load 失败（不是 xinit 项目）时不该凭空创建 .xinit/。
-	st, err := state.Load(projectDir)
-	if err != nil {
-		// 缺失/损坏两条指引同 status/check（评审 I-1：单一来源，不得分叉）。
-		return nil, fmt.Errorf("%w\n%s", err, state.LoadHint(err))
-	}
-	rep.Source = st.Template.Source
-	rep.OldRevision = st.Template.Revision
-	rep.OldCommit = st.Template.Commit
-
-	// 写前安全检查（§5.5，与 init 同一判据）。
-	if tracked, err := state.IsGitTracked(projectDir, state.DirName); err != nil {
-		return nil, fmt.Errorf("无法确认 %s/ 是否被 git 跟踪: %w", state.DirName, err)
-	} else if tracked {
-		return nil, fmt.Errorf(
-			"%s/ 已被 git 跟踪：拒绝写入被版本控制的 %s/（规范 §5.5）；请执行 `git rm -r --cached %s` 后重试",
-			state.DirName, state.DirName, state.DirName)
-	}
-
-	// 1. 项目锁（R12：--dry-run 只读，不加锁——连 lock 文件都不创建）
-	if !in.DryRun {
-		lock, err := state.LockProject(projectDir)
-		if err != nil {
-			return nil, err
-		}
-		defer lock.Unlock()
-	}
-
-	cacheRoot, err := template.DefaultCacheRoot()
-	if err != nil {
-		return nil, err
-	}
+	// M2 中间态桥接（R-M2-2）：后半阶段逐步抽取期间保持块 13-32 逐字不变；
+	// M2c 终局化时消除。
+	projectDir, st, cacheRoot, ps := s.dir, s.st, s.cacheRoot, s.interactive
 
 	// 2. 打开模板 + 选定目标版本（§11.3 / R8）
 	src, err := openTarget(st, in.Revision, cacheRoot, in.Fetch)
