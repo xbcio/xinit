@@ -1,8 +1,9 @@
 package update
 
-// 来源：internal/update/update.go 的 Run 块 13（M2-P4 rewriteAccept 抽取；
-// I-2 实施批 T5/M2b）。阶段判据（§3-M2）：函数体与源区间逐字对应，差异仅
-// 「参数接入」「返回值包装」与附加裁定类（R-M2-2/9）——逐条见
+// 来源：internal/update/update.go 的 Run 块 13（M2-P4 rewriteAccept 抽取）
+// + 块 16-18（M2-P6 refineDecision 追加）+ findAction/isConflictAction 整函数
+// 搬家（I-2 实施批 T5/M2b）。阶段判据（§3-M2）：函数体与源区间逐字对应，
+// 差异仅「参数接入」「返回值包装」与附加裁定类（R-M2-2/3/9/10）——逐条见
 // task-5-report.md。
 
 import (
@@ -94,4 +95,100 @@ func (a *AcceptRewrite) rewrite(b *Base, o *Ours, p string, content []byte) {
 		Hash:      fsutil.CompareHash(content, binary),
 	}
 	b.Bytes[p] = content
+}
+
+// findAction 在按路径排序的动作表里定位路径（线性；规模 = 并集大小）。
+// 返回的是切片内元素的指针——后处理的修改直接生效。
+func findAction(actions []plan.Action, p string) *plan.Action {
+	for i := range actions {
+		if actions[i].Path == p {
+			return &actions[i]
+		}
+	}
+	return nil
+}
+
+// isConflictAction 报告动作是否仍属冲突类（Merge 冲突、Binary、BothAdded、
+// ConflictKind）——--accept 后处理据此决定是否还原 NewBase（§10.3）。
+func isConflictAction(a *plan.Action, conflicted map[string]bool) bool {
+	switch a.Kind {
+	case plan.ConflictBinary, plan.ConflictBothAdded, plan.ConflictKind:
+		return true
+	case plan.Merge:
+		return conflicted[a.Path]
+	}
+	return false
+}
+
+// refineDecision 是 P6（§2.2）：迁移分类（块 16）+ accept 后处理（块 17）+
+// Acceptable 派生（块 18）——就地补全/改写 d 与 b（b 经单点方法 a.restore）。
+// rep.Migrations/Acceptable 依 R-M2-3 留守 Run（值经 d）。§2.6 行内旧名
+// refineAccept 与本名不一致（批末回写；task-5-report.md 备案）。
+func refineDecision(s *session, t *Template, b *Base, o *Ours, d *Decision, a *AcceptRewrite) error {
+	// 8a. 路径迁移分类（§17）：动作表后处理——可迁移对改写为 Delete+Merge 并注入 merged。
+	mignotes, err := classifyMigrations(s.dir, d.Actions, b, o.Snap, o.Bytes, t.Snap, t.Rendered, t.SrcOf, s.st, d.Merged)
+	if err != nil {
+		return err
+	}
+	d.Migrations = mignotes
+
+	// 8b. --accept 后处理（§10.3）：紧跟 merge 分类之后。
+	for p := range a.Set {
+		if !a.Set[p] {
+			continue
+		}
+		act := findAction(d.Actions, p)
+		switch {
+		case act == nil:
+			// P 不在本轮并集（行 12：ours✗∧theirs✗——7b 已无条件把 base′
+			// 重写为 conflicts/P，动作表里仍没有它）：无 action 即无 NewBase，
+			// files 由 advanceState 自动移出；条目按「已不再冲突」清理（§10.3）。
+			delete(d.Conflicts, p)
+		case act.Kind == plan.ConflictKind:
+			return fmt.Errorf("--accept %s：路径是符号链接/目录障碍（ConflictKind）——accept 改变不了类型；请把 %s 写进 .xinit/prune.txt 使其脱离管理，或移走障碍物（§10.3）", p, p)
+		case act.Kind == plan.Noop && act.Note == plan.SkipNote:
+			// 跳过优先（§8.2 L7/§10.3 定向复核 b）：跳过轮不得借 accept
+			// 悄悄推进 base。
+			return fmt.Errorf("--accept %s：本轮 --no-hooks 跳过了该 generated 路径（跳过优先，§8.2 L7）——去掉 --no-hooks（或等清单声明 post_update）重跑，或把 %s 写进 .xinit/prune.txt（§10.3）", p, p)
+		case isConflictAction(act, d.Conflicted):
+			a.restore(b, act, p)
+		default:
+			if _, inTheirs := t.Snap[p]; !inTheirs {
+				// P 本轮已不在 theirs 里（模板删了它）：不重写 base′、一律
+				// 脱离管理。覆盖为 Noop + Note 必需：用户把 conflicts/P
+				// 原样拷成 ours 时，按行 8 会删掉这份刚解决的文件（§10.3）。
+				act.Kind = plan.Noop
+				act.NewBase = nil
+				act.Note = acceptDetachedNote
+				delete(d.Conflicts, p)
+			}
+			// 其余（重写后干净合并/推进）：照常走决策表的结论。
+			// base✗ 时 files 条目由 advanceState 以 newSrc 补齐（M9 C-1）。
+		}
+	}
+
+	// --accept 可用集：冲突全集里非 ConflictKind 的路径（打 accept 命令用）。
+	d.Acceptable = acceptableConflicts(sortedStringKeys(d.Conflicted), d.Actions)
+	return nil
+}
+
+// restore 是 P6 的单点方法（R-M2-10b）：还原段 = 原块 17 的 isConflictAction
+// 分支体（NewBase 与 base 的 Metas/Bytes 同步还原）。
+func (a *AcceptRewrite) restore(b *Base, act *plan.Action, p string) {
+	// 重写后的 base′ 仍判冲突：NewBase、base 字节与 Metas 一律还原为
+	// 「重写前」的 files[P]（§10.3 后处理；第五轮 F1）。Metas 必须与
+	// Bytes 同步——advanceState 用 baseSnap.Metas[p] 判定 advanced
+	// （:1055），只还原 Bytes 会误判为推进 → 写 theirs 而记旧 hash →
+	// 不变量 5 自检中止（spec :902「还原后第 9 步无事发生」）。
+	old := a.Olds[p]
+	if old.had {
+		m := old.meta
+		act.NewBase = &m
+		b.Metas[p] = old.meta
+		b.Bytes[p] = old.bytes
+	} else {
+		act.NewBase = nil
+		delete(b.Metas, p)
+		delete(b.Bytes, p)
+	}
 }

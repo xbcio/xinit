@@ -5,8 +5,8 @@ package update
 // 声明（§2.3、§2.6 M2 布局：update.go = 包文档/Input/IO/Mode/Verdict/Run）；
 // Interactive 已随 P0 迁 session.go、模板侧 helper 随 P1 迁 template.go、
 // base 装载随 P2 阶段化、ours 快照随 P3 迁 ours.go（M2a/T4）；accept 预检随
-// P4 迁 accept.go、plan/merge 分类随 P5 迁 decide.go（M2b/T5）。M2 拆阶段
-// 进行中：块 1-15 已抽，块 16-32 仍逐字留在 Run（bridge 兜住引用，R-M2-2）。
+// P4/P6 迁 accept.go、plan/merge 分类随 P5 迁 decide.go（M2b/T5）。M2 拆阶段
+// 进行中：块 1-18 已抽，块 19-32 仍逐字留在 Run（bridge 兜住引用，R-M2-2）。
 
 import (
 	"fmt"
@@ -133,7 +133,7 @@ func Run(in Input) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	acceptOlds, acceptSet := a.Olds, a.Set
+	acceptSet := a.Set
 
 	d, err := buildDecision(s, t, b, o, a, hooksRun(s, t))
 	if err != nil {
@@ -148,65 +148,11 @@ func Run(in Input) (*Report, error) {
 	actions, merged, conflicted, conflicts := d.Actions, d.Merged, d.Conflicted, d.Conflicts
 	hooksRun := hooksRun(s, t)
 
-	// 8a. 路径迁移分类（§17）：动作表后处理——可迁移对改写为 Delete+Merge 并注入 merged。
-	mignotes, err := classifyMigrations(projectDir, actions, baseSnap, oursSnap, oursBytes, theirsSnap, theirsRendered, newSrc, st, merged)
-	if err != nil {
+	if err := refineDecision(s, t, b, o, d, a); err != nil {
 		return nil, err
 	}
-	rep.Migrations = mignotes
-
-	// 8b. --accept 后处理（§10.3）：紧跟 merge 分类之后。
-	for _, p := range in.Accept {
-		if !acceptSet[p] {
-			continue
-		}
-		a := findAction(actions, p)
-		switch {
-		case a == nil:
-			// P 不在本轮并集（行 12：ours✗∧theirs✗——7b 已无条件把 base′
-			// 重写为 conflicts/P，动作表里仍没有它）：无 action 即无 NewBase，
-			// files 由 advanceState 自动移出；条目按「已不再冲突」清理（§10.3）。
-			delete(conflicts, p)
-		case a.Kind == plan.ConflictKind:
-			return nil, fmt.Errorf("--accept %s：路径是符号链接/目录障碍（ConflictKind）——accept 改变不了类型；请把 %s 写进 .xinit/prune.txt 使其脱离管理，或移走障碍物（§10.3）", p, p)
-		case a.Kind == plan.Noop && a.Note == plan.SkipNote:
-			// 跳过优先（§8.2 L7/§10.3 定向复核 b）：跳过轮不得借 accept
-			// 悄悄推进 base。
-			return nil, fmt.Errorf("--accept %s：本轮 --no-hooks 跳过了该 generated 路径（跳过优先，§8.2 L7）——去掉 --no-hooks（或等清单声明 post_update）重跑，或把 %s 写进 .xinit/prune.txt（§10.3）", p, p)
-		case isConflictAction(a, conflicted):
-			// 重写后的 base′ 仍判冲突：NewBase、base 字节与 Metas 一律还原为
-			// 「重写前」的 files[P]（§10.3 后处理；第五轮 F1）。Metas 必须与
-			// Bytes 同步——advanceState 用 baseSnap.Metas[p] 判定 advanced
-			// （:1055），只还原 Bytes 会误判为推进 → 写 theirs 而记旧 hash →
-			// 不变量 5 自检中止（spec :902「还原后第 9 步无事发生」）。
-			old := acceptOlds[p]
-			if old.had {
-				m := old.meta
-				a.NewBase = &m
-				baseSnap.Metas[p] = old.meta
-				baseSnap.Bytes[p] = old.bytes
-			} else {
-				a.NewBase = nil
-				delete(baseSnap.Metas, p)
-				delete(baseSnap.Bytes, p)
-			}
-		default:
-			if _, inTheirs := theirsSnap[p]; !inTheirs {
-				// P 本轮已不在 theirs 里（模板删了它）：不重写 base′、一律
-				// 脱离管理。覆盖为 Noop + Note 必需：用户把 conflicts/P
-				// 原样拷成 ours 时，按行 8 会删掉这份刚解决的文件（§10.3）。
-				a.Kind = plan.Noop
-				a.NewBase = nil
-				a.Note = acceptDetachedNote
-				delete(conflicts, p)
-			}
-			// 其余（重写后干净合并/推进）：照常走决策表的结论。
-			// base✗ 时 files 条目由 advanceState 以 newSrc 补齐（M9 C-1）。
-		}
-	}
-
-	// --accept 可用集：冲突全集里非 ConflictKind 的路径（打 accept 命令用）。
-	rep.Acceptable = acceptableConflicts(rep.Conflicted, actions)
+	rep.Migrations = d.Migrations
+	rep.Acceptable = d.Acceptable
 
 	// 9. 第 4 步：未解决冲突检查（conflicts/ 现有条目 ∩ 本轮冲突集合）
 	existing, err := ListConflicts(projectDir)
@@ -948,29 +894,6 @@ func hookDiffAgainstBase(st *state.State, cacheRoot, newBlock string) (oldVer, d
 		return "", ""
 	}
 	return orNone(st.Template.Revision), d
-}
-
-// findAction 在按路径排序的动作表里定位路径（线性；规模 = 并集大小）。
-// 返回的是切片内元素的指针——后处理的修改直接生效。
-func findAction(actions []plan.Action, p string) *plan.Action {
-	for i := range actions {
-		if actions[i].Path == p {
-			return &actions[i]
-		}
-	}
-	return nil
-}
-
-// isConflictAction 报告动作是否仍属冲突类（Merge 冲突、Binary、BothAdded、
-// ConflictKind）——--accept 后处理据此决定是否还原 NewBase（§10.3）。
-func isConflictAction(a *plan.Action, conflicted map[string]bool) bool {
-	switch a.Kind {
-	case plan.ConflictBinary, plan.ConflictBothAdded, plan.ConflictKind:
-		return true
-	case plan.Merge:
-		return conflicted[a.Path]
-	}
-	return false
 }
 
 // acceptDetachedNote 是 --accept 对「模板已删除该路径」的覆盖文案（§10.3）。
