@@ -1189,7 +1189,7 @@ func advanceState(projectDir string, st *state.State, baseSnap *baseSnapshot,
 	// blobs 混合体——保持旧值路径装的是旧 base 字节）。best-effort：失败只
 	// 警告，不影响命令。
 	if !pending {
-		renderstore.WriteBestEffort(cacheRoot, st, theirsRendered)
+		renderstore.WriteBestEffort(st, cacheRoot, theirsRendered, os.Stderr)
 	}
 	return nil
 }

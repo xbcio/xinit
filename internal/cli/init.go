@@ -322,7 +322,7 @@ func Init(
 	// 快照写侧挂点（§21.5）：EnsureGitExcluded 是最后一个可触发 cleanup() 回删
 	// 的步骤——此后写快照，回删窗口零孤儿；钩子失败不回删，快照照常与已落盘
 	// base 一致。best-effort：失败只警告（钩子段之前，钩子失败也不影响）。
-	renderstore.WriteBestEffort(cacheRoot, st, rendered)
+	renderstore.WriteBestEffort(st, cacheRoot, rendered, os.Stderr)
 
 	// 10. 跑 post_init（§6 第 10 步、§10.2 第 11 步语义）。失败不回删
 	//（§6.1）：渲染产物是正确的，只报告并给出退出码 3。

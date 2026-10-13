@@ -54,6 +54,7 @@ func newUpdateCmd() *cobra.Command {
 
 // Update 执行一次 update，打印报告，并把非零退出码包进 ExitError。
 func Update(o UpdateOptions) error {
+	o.mode = update.ModeUpdate // 显式置位，不依赖 Mode 零值（账本口径②）
 	rep, err := runReport(o)
 	if err != nil {
 		return err
