@@ -143,8 +143,8 @@ func report(s *session, t *Template, b *Base, o *Ours, d *Decision, g *Gate, w *
 	rep := &Report{Header: headerFor(s.mode, s.dryRun)}
 	rep.DryRun = s.dryRun
 	rep.Source = s.st.Template.Source
-	rep.OldRevision = s.st.Template.Revision
-	rep.OldCommit = s.st.Template.Commit
+	rep.OldRevision = s.oldRevision // C-1：本轮开始快照，不读 P10 推进后的活字段
+	rep.OldCommit = s.oldCommit
 
 	rep.NewRevision = t.Src.Revision
 	rep.NewCommit = t.Src.Commit

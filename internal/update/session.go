@@ -33,6 +33,8 @@ type Interactive interface {
 type session struct {
 	dir           string           // = abs(in.ProjectDir)
 	st            *state.State     // = state.Load(dir)（块 3）
+	oldRevision   string           // 本轮开始快照（C-1）：state.Load 后立即捕获，report() 读它而非活字段
+	oldCommit     string           // 同上（st.Template.Commit 的原值）
 	lock          *state.Lock      // 块 5；nil = dry-run（连 lock 文件都不建）
 	cacheRoot     string           // 块 6 = template.DefaultCacheRoot()
 	io            IO               // 输出通道（Out=提示族、Err=警告族）；回退见 prepare
@@ -47,8 +49,9 @@ type session struct {
 
 // prepare 是 P0（§2.2）：入口守卫（块 1）、路径归一 + 交互会话（块 2）、
 // 读 state（块 3）、git 跟踪守卫（块 4）、项目锁（块 5）、缓存根（块 6）。
-// 报告头两行与 rep.Source/OldRevision/OldCommit 依 R-M2-3 留守 Run
-// （值经 s.st），故本函数不触碰 Report。
+// 报告头两行与 rep.Source 依 R-M2-3 留守 Run（值经 s.st）；旧版本/旧
+// commit 值经 s.oldRevision/s.oldCommit（state.Load 后立即捕获的本轮
+// 开始快照——C-1 修复，终审返工），故本函数不触碰 Report。
 func prepare(in Input) (*session, error) {
 	if len(in.Accept) > 0 && in.DryRun {
 		return nil, fmt.Errorf("--accept 与 --dry-run 不能组合：accept 的本义是修改状态（§10.3）")
@@ -93,6 +96,11 @@ func prepare(in Input) (*session, error) {
 		return nil, fmt.Errorf("%w\n%s", err, state.LoadHint(err))
 	}
 	s.st = st
+	// C-1（终审返工）：报告旧值取「本轮开始快照」——P10 advanceState 在
+	// 非 pending 轮会就地改写 st.Template.Revision/Commit，必须紧贴 Load
+	// 后捕获原值（dry-run 无推进，值同）。
+	s.oldRevision = st.Template.Revision
+	s.oldCommit = st.Template.Commit
 
 	// 写前安全检查（§5.5，与 init 同一判据）。
 	if tracked, err := state.IsGitTracked(projectDir, state.DirName); err != nil {

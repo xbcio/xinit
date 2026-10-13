@@ -46,6 +46,7 @@ cmp a.txt $WORK/a1.txt
 
 # --yes：确认并记录 {hashA: v0.2.0}
 xinit-code update --revision v0.2.0 --yes
+stdout '版本: HEAD → v0.2.0'
 stdout 'exit=0'
 # 该轮真实应用变更（评审 Minor-1 复修：证明 a2 变更非空且被写入）
 cmp a.txt $WORK/a2.txt
@@ -71,6 +72,7 @@ stdout 'exit=4'
 
 # --no-hooks：只记录已见（marker），不执行
 xinit-code update --revision v0.3.0 --no-hooks
+stdout '版本: v0.2.0 → v0.3.0'
 stdout 'exit=0'
 ! exists out_b.txt
 
