@@ -211,6 +211,42 @@ func TestLoadHintSplitsMissingAndCorrupt(t *testing.T) {
 	}
 }
 
+func TestLoadHintSplitsCorruptKinds(t *testing.T) {
+	// O-2（park 清零）：损坏类内再分档——版本过高/算法不符不是「文件坏了」，
+	// 用户该做的是升级 xinit（.prev 只是备选），指引不得沿用「可能已损坏」。
+	// 真锁：Load 的 version/hash_algo 两处 kind 任一退回 corruptParse，或
+	// LoadHint 的 mismatch 分支折叠回 parse 句 ⇒ 本测试红。
+	for _, tc := range []struct {
+		name    string
+		payload string
+	}{
+		{"version-too-new", `{"version": 2}`},                        // decode 通过、version 检查先行触发
+		{"hash-algo-mismatch", `{"version": 1, "hash_algo": "md5"}`}, // version 过、算法不符
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := Path(dir)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(tc.payload), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(dir)
+			if err == nil {
+				t.Fatalf("夹具前提：payload %s 应使 Load 失败", tc.payload)
+			}
+			hint := LoadHint(err)
+			if !strings.Contains(hint, "可升级 xinit 后重试") {
+				t.Errorf("错配指引应给升级指引（payload %s）= %q", tc.payload, hint)
+			}
+			if strings.Contains(hint, "可能已损坏") {
+				t.Errorf("错配不得沿用解析失败文案（payload %s）= %q", tc.payload, hint)
+			}
+		})
+	}
+}
+
 func TestLoadCorruptIsErrCorrupt(t *testing.T) {
 	// 「文件在但不可用」= 损坏类（评审 I-1）：解析失败与截断都归这里，
 	// 且不得被当成缺失。

@@ -19,33 +19,52 @@ const DirName = ".xinit"
 
 // ErrCorrupt 标记「state.json 在磁盘上，但不可用」这一类载入失败：解析失败、
 // 未知字段、版本高于本工具、hash 算法不匹配（均属「文件在但不可用」）。
-// 与「文件缺失」（fs.ErrNotExist）相对——CLI 据此在两条指引间分流（评审 I-1）。
+// 与「文件缺失」（fs.ErrNotExist）相对——CLI 据此在两条指引间分流（评审 I-1）；
+// 类内成因细分（解析失败 vs 版本/算法错配）见 corruptKind。
 //
 // 它只是分类标记：不进错误消息（消息逐字是契约），用 errors.Is 判。
 var ErrCorrupt = errors.New("state.json 在磁盘上但无法使用")
 
+// corruptKind 区分「文件在但不可用」的两种成因（O-2）：解析失败（文件可能
+// 已损坏）与版本/算法错配（需升级 xinit）——两者用户指引不同。
+type corruptKind int
+
+const (
+	corruptParse    corruptKind = iota // JSON 坏/未知字段/截断
+	corruptMismatch                    // 版本高于本工具 / hash 算法不符
+)
+
 // corruptError 把 Load 的「文件在但不可用」类失败标记为 ErrCorrupt：Is 认
 // 哨兵，Error() 只透出底层原文——错误文案是逐字契约（测试与用户指引都按
-// 原文对接），分类标记不进消息。
-type corruptError struct{ error }
+// 原文对接），分类标记（kind）不进消息。
+type corruptError struct {
+	error
+	kind corruptKind
+}
 
 func (corruptError) Is(target error) bool { return target == ErrCorrupt }
 
-// corrupt 给 err 打「损坏」标记（nil 直通）。
-func corrupt(err error) error {
+// corrupt 给 err 打「损坏」标记并注明成因 kind（nil 直通）。
+func corrupt(err error, kind corruptKind) error {
 	if err == nil {
 		return nil
 	}
-	return corruptError{err}
+	return corruptError{err, kind}
 }
 
 // LoadHint 返回 Load 失败时追加给用户看的指引句——CLI 各调用点唯一来源，
-// 不得分叉：缺失 → init/adopt 指引（既有文案逐字）；损坏（ErrCorrupt）→
-// .prev 人工恢复指引。
+// 不得分叉（分档在本函数内部完成，调用点不感知 kind）：缺失 → init/adopt
+// 指引（既有文案逐字）；损坏分两支——解析失败 →「可能已损坏」+ .prev 句；
+// 版本/算法错配 → 升级 xinit 指引 + .prev 备选（错配不是文件坏了，指引的
+// 第一动作应是升级，而非恢复旧状态）。
 //
 // 「如存在 .xinit/state.json.prev」不查盘（简单优先）：句子自带条件，不做 IO。
 func LoadHint(err error) string {
-	if errors.Is(err, ErrCorrupt) {
+	var ce corruptError
+	if errors.As(err, &ce) {
+		if ce.kind == corruptMismatch {
+			return "可升级 xinit 后重试；如存在 .xinit/state.json.prev，也可将其复制为 .xinit/state.json 后重试"
+		}
 		return "state.json 解析失败（文件可能已损坏）；如存在 .xinit/state.json.prev，可将其复制为 .xinit/state.json 后重试"
 	}
 	return "这不是 xinit 项目，或 .xinit/state.json 缺失；请从模板 init 生成，或用 xinit adopt 重建基线（§5.3）"
@@ -124,17 +143,17 @@ func Load(projectDir string) (*State, error) {
 
 	var s State
 	if err := dec.Decode(&s); err != nil {
-		return nil, corrupt(fmt.Errorf("解析 %s: %w", p, err))
+		return nil, corrupt(fmt.Errorf("解析 %s: %w", p, err), corruptParse)
 	}
 	if s.Version > CurrentVersion {
 		return nil, corrupt(fmt.Errorf(
 			"%s 的版本是 %d，高于本工具支持的 %d；请升级 xinit",
-			p, s.Version, CurrentVersion))
+			p, s.Version, CurrentVersion), corruptMismatch)
 	}
 	if s.HashAlgo != fsutil.HashAlgo {
 		return nil, corrupt(fmt.Errorf(
 			"%s 的 hash 算法是 %q，本工具用 %q；状态与本版本不兼容",
-			p, s.HashAlgo, fsutil.HashAlgo))
+			p, s.HashAlgo, fsutil.HashAlgo), corruptMismatch)
 	}
 	return &s, nil
 }
