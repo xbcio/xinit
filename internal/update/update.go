@@ -4,8 +4,8 @@ package update
 // 函数闭包；I-2 实施批 T2/M1）。本文件头部承载 Input/IO/Mode/Verdict 接缝
 // 声明（§2.3、§2.6 M2 布局：update.go = 包文档/Input/IO/Mode/Verdict/Run）；
 // Interactive 已随 P0 迁 session.go、模板侧 helper 随 P1 迁 template.go、
-// base 装载随 P2 阶段化（M2a/T4）。M2 拆阶段进行中：块 1-10 已抽，块 11-32
-// 仍逐字留在 Run（bridge 兜住引用，R-M2-2）。
+// base 装载随 P2 阶段化、ours 快照随 P3 迁 ours.go（M2a/T4）。M2 拆阶段
+// 进行中：块 1-12 已抽，块 13-32 仍逐字留在 Run（bridge 兜住引用，R-M2-2）。
 
 import (
 	"fmt"
@@ -29,7 +29,6 @@ import (
 	"github.com/xbcio/xinit/internal/renderstore"
 	"github.com/xbcio/xinit/internal/state"
 	"github.com/xbcio/xinit/internal/template"
-	"github.com/xbcio/xinit/internal/worktree"
 )
 
 // Mode 是管线入口模式（§2.4：报告头等可观测字符串的单一来源）。
@@ -117,24 +116,17 @@ func Run(in Input) (*Report, error) {
 	rep.Degraded = b.Degraded
 	rep.Restored = b.Restored
 
+	o, err := snapshotOurs(s, t, b)
+	if err != nil {
+		return nil, err
+	}
+
 	// M2 中间态桥接（R-M2-2）：后半阶段逐步抽取期间保持块 13-32 逐字不变；
 	// M2c 终局化时消除。
 	projectDir, st, cacheRoot, ps := s.dir, s.st, s.cacheRoot, s.interactive
 	src, m, vars, theirsRendered, newSrc, theirsSnap := t.Src, t.Manifest, t.Vars, t.Rendered, t.SrcOf, t.Snap
 	baseSnap := b // 别名引用：块 13-32 的就地改写（P4/P6 的 Metas/Bytes）语义不变
-
-	// 6. ours 快照（R18：只查 base ∪ theirs 的并集——与 Plan 的并集一致）
-	union := unionKeys(baseSnap.Metas, theirsSnap)
-	oursSnap, oursBytes, err := worktree.Scan(projectDir, union)
-	if err != nil {
-		return nil, err
-	}
-
-	// 7. prune（R4）+ plan（R2）
-	pruned, err := expandPrune(projectDir, union)
-	if err != nil {
-		return nil, err
-	}
+	union, oursSnap, oursBytes, pruned := o.Union, o.Snap, o.Bytes, o.Prune
 	// 7b. --accept 预检与 base 重写（§10.3，在算 plan 之前）：把 P 的 base
 	// 快照条目换成 .xinit/conflicts/<P> 的内容——三方比较的 base 从此是
 	// 「用户上次看到并认可的那份」，而不是本次运行的 theirs（第五轮 D2）。
@@ -490,45 +482,6 @@ func Run(in Input) (*Report, error) {
 		rep.Verdict = VerdictHookFail
 	}
 	return rep, nil
-}
-
-// unionKeys 返回 base ∪ theirs 的路径（字节序）。与 plan 内部的并集同一
-// 定义（R18）——ours 的扫描范围必须一致，否则行语义会漂。
-func unionKeys(base, theirs plan.Snap) []string {
-	seen := make(map[string]bool, len(base)+len(theirs))
-	var out []string
-	for _, s := range []plan.Snap{base, theirs} {
-		for p := range s {
-			if !seen[p] {
-				seen[p] = true
-				out = append(out, p)
-			}
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-// expandPrune 读 .xinit/prune.txt 并把 glob 展开到并集路径上（§8.0、R4）。
-func expandPrune(projectDir string, paths []string) (plan.PruneSet, error) {
-	patterns, err := state.ReadPrune(projectDir)
-	if err != nil {
-		return nil, err
-	}
-	set := plan.PruneSet{}
-	if len(patterns) == 0 {
-		return set, nil
-	}
-	matcher, err := fsutil.CompileGlob(patterns)
-	if err != nil {
-		return nil, fmt.Errorf("解析 .xinit/prune.txt: %w", err)
-	}
-	for _, p := range paths {
-		if matcher.Match(p) {
-			set[p] = true
-		}
-	}
-	return set, nil
 }
 
 // classifyMerges 对每个 Merge 动作跑 merge-file 并落定 NewBase（§10.2 第 3
