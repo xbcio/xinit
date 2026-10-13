@@ -278,7 +278,7 @@ func TestAdvanceStateSrcFromNewSrcWithoutFilesEntry(t *testing.T) {
 // 含 T6 O-3）：
 //
 //	①空渲染归一——两条 nil 途径（Go template 渲染为空 / 源文件 0 字节）在
-//	  Rendered 里都必须是「键存在 ∧ 非 nil ∧ 0 字节」（renderTheirs 归一，
+//	  Rendered 里都必须是「键存在 ∧ 非 nil ∧ 0 字节」（RenderTheirs 归一，
 //	  template.go:177-179：空渲染是空内容文件，不是「模板没有它」）；
 //	②conflicts/ 内容条目的缺失集 ⊆ {ConflictKind ∧ theirs 缺失}——按条件句
 //	  显式断言差集（classifyMerges 只在该组合下不产条目）。

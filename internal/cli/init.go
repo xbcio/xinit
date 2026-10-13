@@ -20,6 +20,7 @@ import (
 	"github.com/xbcio/xinit/internal/renderstore"
 	"github.com/xbcio/xinit/internal/state"
 	"github.com/xbcio/xinit/internal/template"
+	"github.com/xbcio/xinit/internal/update"
 )
 
 // EngineVersion 是渲染引擎版本，写进 state.json。
@@ -207,39 +208,11 @@ func Init(
 		}
 	}
 
-	// 5. 渲染路径（含碰撞检查）
-	entries, warnings, err := render.Paths(src.FS, compiled, vars)
+	// 5. 渲染路径与内容（含碰撞检查；告警格式 §7.4——与 update 共用单点，
+	//    输出到 os.Stderr 与旧实现同通道）。
+	entries, rendered, _, err := update.RenderTheirs(src, compiled, vars, os.Stderr)
 	if err != nil {
-		return fmt.Errorf("渲染模板路径: %w", err)
-	}
-	for _, w := range warnings {
-		fmt.Fprintf(os.Stderr, "xinit: 警告: %s: %s\n", w.Path, w.Msg)
-	}
-
-	// 渲染全部内容
-	rendered := make(map[string][]byte, len(entries))
-	// 零命中告警按**规则**汇总（规范 §7.4）：逐文件告警会在
-	// paths: ["**"] 的规则上刷出与文件数同量的噪音
-	hitTotals := make(map[int]int)
-	for _, e := range entries {
-		data, hits, warns, err := render.Content(src.FS, compiled, vars, e)
-		if err != nil {
-			return err
-		}
-		for _, h := range hits {
-			hitTotals[h.Index] += h.Count
-		}
-		for _, w := range warns {
-			fmt.Fprintf(os.Stderr, "xinit: 警告: %s: %s\n", w.Path, w.Msg)
-		}
-		rendered[e.Dst] = data
-	}
-	for i, cs := range compiled.Subst {
-		if hitTotals[i] == 0 {
-			fmt.Fprintf(os.Stderr,
-				"xinit: 警告: 替换规则 %d (%q) 在渲染结果中命中 0 次 —— 模板里可能已无此字面量\n",
-				i, cs.Spec.From)
-		}
+		return err
 	}
 
 	// 6. 写文件，记录本次创建的路径

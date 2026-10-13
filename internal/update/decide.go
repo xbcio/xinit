@@ -59,7 +59,7 @@ func buildDecision(s *session, t *Template, b *Base, o *Ours, a *AcceptRewrite, 
 // 四类冲突动作（Merge 冲突、ConflictBinary、ConflictBothAdded、ConflictKind）
 // 都进 conflicts/ 内容表；内容 = theirsRendered[P]，**键缺失**时跳过——键缺失
 // = 模板没有该路径（如行 6 的 binary 在 theirs 里存在则不会缺；Kind 冲突在
-// theirs 里存在）；键在且值为空切片 = 空内容文件（renderTheirs 已把空渲染
+// theirs 里存在）；键在且值为空切片 = 空内容文件（RenderTheirs 已把空渲染
 // 归一成非 nil 空切片，2026-10-11 M7），照常落 0 字节条目。
 func classifyMerges(actions []plan.Action, baseSnap *Base, oursSnap plan.Snap,
 	oursBytes map[string][]byte, theirsSnap plan.Snap, theirsRendered map[string][]byte,

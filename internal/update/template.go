@@ -4,6 +4,7 @@ package update
 // 4 个 helper 整函数搬家；I-2 实施批 T4/M2a）。阶段判据（§3-M2）：函数体与
 // 源区间逐字对应，差异仅「参数接入」与「返回值包装」两类（逐条见
 // task-4-report.md）。
+// M5：renderTheirs 导出为 RenderTheirs——init 渲染块改走本单点（共用渲染）。
 
 import (
 	"fmt"
@@ -55,7 +56,7 @@ func loadTemplate(s *session, revision, configPath string, fetch bool) (*Templat
 	}
 
 	// 4. 渲染 theirs（模板侧；告警与 init 同格式）
-	entries, rendered, srcOf, err := renderTheirs(src, compiled, vars, s.io.Err)
+	entries, rendered, srcOf, err := RenderTheirs(src, compiled, vars, s.io.Err)
 	if err != nil {
 		return nil, err
 	}
@@ -145,10 +146,10 @@ func loadManifestVars(src *template.Source, st *state.State, configPath string) 
 	return m, compiled, vars, nil
 }
 
-// renderTheirs 渲染模板侧全部路径（§7）。告警与 init 完全同格式：
+// RenderTheirs 是模板侧渲染+告警的单点（§7；init 与 update 共用，I-2 M5）：
 // 路径渲染警告逐条；替换规则零命中按**规则**汇总（§7.4）。errW = 警告通道
 // （R-M4-3：末位形参，调用点传 s.io.Err）。
-func renderTheirs(src *template.Source, compiled *manifest.Compiled, vars render.Vars, errW io.Writer,
+func RenderTheirs(src *template.Source, compiled *manifest.Compiled, vars render.Vars, errW io.Writer,
 ) ([]render.Entry, map[string][]byte, map[string]string, error) {
 	entries, warnings, err := render.Paths(src.FS, compiled, vars)
 	if err != nil {
