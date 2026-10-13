@@ -1,4 +1,6 @@
-package cli
+package update
+
+// 来源：internal/cli/report_test.go（§4.3 整文件随迁，I-2 实施批 T2/M1）。
 
 import (
 	"os/exec"
@@ -13,7 +15,7 @@ import (
 // 第 5 行是 migrationText 的防御分支（四态之外的值原文照打、不静默），
 // 不属于 §17.6 契约，随本节一并锁定列宽与「不吞掉缺陷」的行为。
 func TestReportMigrationsSection(t *testing.T) {
-	rep := &UpdateReport{
+	rep := &Report{
 		Header: "xinit diff",
 		Source: "/tpl",
 		DryRun: true,
@@ -41,7 +43,7 @@ func TestReportMigrationsSection(t *testing.T) {
 
 // 无迁移行时不得打印节标题（空节会误导读者以为本轮有迁移）。
 func TestReportMigrationsSectionAbsentWhenEmpty(t *testing.T) {
-	rep := &UpdateReport{Header: "xinit diff", Source: "/tpl"}
+	rep := &Report{Header: "xinit diff", Source: "/tpl"}
 	var buf strings.Builder
 	rep.Print(&buf)
 	if strings.Contains(buf.String(), "路径迁移") {
@@ -126,7 +128,7 @@ func TestShellQuoteRoundTrip(t *testing.T) {
 // 快照恢复行（§21.6-4 / §21.11 项 18）：文案逐字、位置在「base 降级」块
 // 之前、仅 Restored > 0 时输出。
 func TestUpdateReportPrintRestoredLine(t *testing.T) {
-	rep := &UpdateReport{
+	rep := &Report{
 		Header:   "xinit update",
 		Source:   "/tpl",
 		Restored: []string{"a.txt", "b.txt"},
@@ -145,7 +147,7 @@ func TestUpdateReportPrintRestoredLine(t *testing.T) {
 	}
 
 	// 空 Restored：恢复行零出现（>0 才输出）。
-	rep2 := &UpdateReport{Header: "xinit diff", Source: "/tpl", Degraded: []string{"c.txt"}}
+	rep2 := &Report{Header: "xinit diff", Source: "/tpl", Degraded: []string{"c.txt"}}
 	var buf2 strings.Builder
 	rep2.Print(&buf2)
 	if strings.Contains(buf2.String(), "base 恢复") {

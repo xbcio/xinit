@@ -16,6 +16,7 @@ import (
 	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/state"
 	"github.com/xbcio/xinit/internal/template"
+	"github.com/xbcio/xinit/internal/update"
 )
 
 // CheckOptions 是 check 的输入（R13：作用于 cwd）。
@@ -397,7 +398,7 @@ func checkBaseTables(r *checkReport, base string, st *state.State, legal []strin
 // checkGroupB 执行 B1（§18.3）：只读列举 conflicts/，不做「本轮仍冲突」
 // 判定（那是 diff 的预测）。出路两行是 check 专属文案，不复用 conflictExits。
 func checkGroupB(r *checkReport, projectDir string, st *state.State) error {
-	entries, err := listConflicts(projectDir)
+	entries, err := update.ListConflicts(projectDir)
 	if err != nil {
 		return err
 	}

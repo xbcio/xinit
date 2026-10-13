@@ -13,6 +13,7 @@ import (
 	"github.com/xbcio/xinit/internal/manifest"
 	"github.com/xbcio/xinit/internal/plan"
 	"github.com/xbcio/xinit/internal/render"
+	"github.com/xbcio/xinit/internal/renderstore"
 	"github.com/xbcio/xinit/internal/state"
 	"github.com/xbcio/xinit/internal/template"
 	"github.com/xbcio/xinit/internal/worktree"
@@ -139,7 +140,7 @@ func Adopt(o AdoptOptions) error {
 			return err
 		}
 	}
-	provided, err := LoadConfig(o.ConfigPath)
+	provided, err := manifest.LoadVarsFile(o.ConfigPath)
 	if err != nil {
 		return err
 	}
@@ -199,7 +200,7 @@ func Adopt(o AdoptOptions) error {
 
 	// 快照写侧挂点（§21.5）：SyncBase 与 st.Save 之后；EnsureGitExcluded 失败
 	// 即整命令失败，不写快照是正确取舍。字节源 = rendered（全量渲染结果）。
-	writeSnapshotBestEffort(cacheRoot, st, rendered)
+	renderstore.WriteBestEffort(cacheRoot, st, rendered)
 
 	// 磁盘 vs 渲染：差异即「本地改动」（§5.3 输出的一部分）。
 	all := make([]string, 0, len(entries))

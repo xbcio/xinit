@@ -1,4 +1,6 @@
-package cli
+package update
+
+// 来源：internal/cli/updatevars.go（1:1 整文件搬迁，I-2 实施批 T2/M1）。
 
 import (
 	"fmt"

@@ -1,0 +1,1284 @@
+package update
+
+// 来源：internal/cli/update.go 行 92-1283（迁移集：runUpdate + 全部消费方辅助
+// 函数闭包；I-2 实施批 T2/M1）。本文件头部新增 Input/Mode/Verdict/Interactive
+// 接缝声明（§2.3、§2.7 #3/#13/#16、第 ⑥ 类登记变化）——M2 拆阶段时再分流。
+
+import (
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/xbcio/xinit/internal/apply"
+	"github.com/xbcio/xinit/internal/fsutil"
+	"github.com/xbcio/xinit/internal/hooks"
+	"github.com/xbcio/xinit/internal/manifest"
+	"github.com/xbcio/xinit/internal/merge"
+	"github.com/xbcio/xinit/internal/plan"
+	"github.com/xbcio/xinit/internal/render"
+	"github.com/xbcio/xinit/internal/renderstore"
+	"github.com/xbcio/xinit/internal/state"
+	"github.com/xbcio/xinit/internal/template"
+	"github.com/xbcio/xinit/internal/worktree"
+)
+
+// Interactive 是 update 的交互接缝（§2.4；M1 落地为第 ⑥ 类登记变化）：
+// cli 的 promptSession 实现它。「唯一 bufio.Reader」与「EOF 锁存」的纪律
+// 仍由 promptSession 独占——管线拿不到 reader；Out() 是冲突表头/EOF 行
+// （conflicts.go）的唯一打印通道。nil = 本次运行不可交互（cli 侧由
+// interactiveSession 判定后注入）。
+type Interactive interface {
+	ConfirmTrust() (bool, error)
+	AskConflict(q string) (yes, eof bool, err error)
+	Out() io.Writer
+}
+
+// Mode 是管线入口模式（§2.4：报告头等可观测字符串的单一来源）。
+type Mode int
+
+const (
+	ModeUpdate Mode = iota // xinit update
+	ModeDiff               // xinit diff（只读镜像；DryRun 恒为真）
+)
+
+// Verdict 是终局语义（§2.3），cli 用一张 5 行表映射为 §11.5 数字。
+type Verdict int
+
+const (
+	VerdictOK        Verdict = iota // → 0
+	VerdictPending                  // → 2（冲突/折叠拒绝/障碍物）
+	VerdictHookFail                 // → 3
+	VerdictNeedTrust                // → 4（零写）
+	VerdictChanged                  // → 5（dry-run 预测有非 Noop）
+)
+
+// headerFor 派生报告头（可观测字符串，逐字不变）：diff 恒 "xinit diff"；
+// update 的 dry-run 轮带 --dry-run 后缀。cli 侧不再事后覆盖 Header
+// （§2.4 报告归属段，评审 IM-5）。
+func headerFor(mode Mode, dryRun bool) string {
+	if mode == ModeDiff {
+		return "xinit diff"
+	}
+	if dryRun {
+		return "xinit update --dry-run"
+	}
+	return "xinit update"
+}
+
+// Input 是 update 的全部输入（cli 侧由 flag 经 inputOf 映射，§2.7 #3）。
+// M1 只落「搬运 + 编译必需的最小接缝」：IO/Now 留 M4（§2.4 交互行）。
+type Input struct {
+	ProjectDir    string
+	Revision      string
+	ConfigPath    string
+	Fetch         bool
+	Force         bool
+	DryRun        bool
+	NoHooks       bool
+	Yes           bool
+	Accept        []string
+	Mode          Mode        // ModeDiff = diff（报告头派生；M1 起不再由 cli 覆盖 Header）
+	Interactive   Interactive // nil = 不可交互（cli 侧 interactiveSession 判定）
+	EngineVersion string      // §2.7 #13：cli 为唯一真源，经此注入（M2 落 session）
+}
+
+// Run 是 §10.2 的十二步本体（不打印；diff 与 cli 测试复用它）。
+// 返回的报告总是非 nil；退出码见 §11.5。
+func Run(in Input) (*Report, error) {
+	if len(in.Accept) > 0 && in.DryRun {
+		return nil, fmt.Errorf("--accept 与 --dry-run 不能组合：accept 的本义是修改状态（§10.3）")
+	}
+	projectDir, err := filepath.Abs(in.ProjectDir)
+	if err != nil {
+		return nil, err
+	}
+
+	// 交互会话（§19.2.2/§19.2.3）：cli 入口创建一次（创建只做一次 ioctl
+	// 判定——不读 stdin、不打印），经 Input.Interactive 注入；nil = 不可交互，
+	// 调用点一律跳过提问（--dry-run 下不提问，故不会碰 stdin）。
+	ps := in.Interactive
+	rep := &Report{Header: headerFor(in.Mode, in.DryRun)}
+	rep.DryRun = in.DryRun
+
+	// 先 Load 再取锁：Load 失败（不是 xinit 项目）时不该凭空创建 .xinit/。
+	st, err := state.Load(projectDir)
+	if err != nil {
+		// 缺失/损坏两条指引同 status/check（评审 I-1：单一来源，不得分叉）。
+		return nil, fmt.Errorf("%w\n%s", err, state.LoadHint(err))
+	}
+	rep.Source = st.Template.Source
+	rep.OldRevision = st.Template.Revision
+	rep.OldCommit = st.Template.Commit
+
+	// 写前安全检查（§5.5，与 init 同一判据）。
+	if tracked, err := state.IsGitTracked(projectDir, state.DirName); err != nil {
+		return nil, fmt.Errorf("无法确认 %s/ 是否被 git 跟踪: %w", state.DirName, err)
+	} else if tracked {
+		return nil, fmt.Errorf(
+			"%s/ 已被 git 跟踪：拒绝写入被版本控制的 %s/（规范 §5.5）；请执行 `git rm -r --cached %s` 后重试",
+			state.DirName, state.DirName, state.DirName)
+	}
+
+	// 1. 项目锁（R12：--dry-run 只读，不加锁——连 lock 文件都不创建）
+	if !in.DryRun {
+		lock, err := state.LockProject(projectDir)
+		if err != nil {
+			return nil, err
+		}
+		defer lock.Unlock()
+	}
+
+	cacheRoot, err := template.DefaultCacheRoot()
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. 打开模板 + 选定目标版本（§11.3 / R8）
+	src, err := openTarget(st, in.Revision, cacheRoot, in.Fetch)
+	if err != nil {
+		return nil, err
+	}
+	rep.NewRevision = src.Revision
+	rep.NewCommit = src.Commit
+
+	// 3. 清单 + vars（R15）
+	m, compiled, vars, err := loadManifestVars(src, st, in.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	// dir 源的「版本」= 树 hash（与 init 同一算法：清单编译后、排除 exclude 命中）
+	if src.Kind == template.KindDir {
+		if src.Commit, err = template.TreeHashOf(src.DirRoot, compiled.Exclude); err != nil {
+			return nil, err
+		}
+		rep.NewCommit = src.Commit
+	}
+
+	// 4. 渲染 theirs（模板侧；告警与 init 同格式）
+	entries, theirsRendered, newSrc, err := renderTheirs(src, compiled, vars)
+	if err != nil {
+		return nil, err
+	}
+	theirsSnap := snapFromRendered(entries, theirsRendered)
+
+	// 5. base（§5.2 逐路径恢复；R9 重渲染用 st.Vars、R10 全量校验）
+	// dry-run/diff 只读：恢复照常进行但只进内存快照，不写回 .xinit/base/
+	// （零写契约，评审 I-1——恢复写回是 dry-run 路径上唯一的项目内写盘点）。
+	baseSnap, err := loadBase(projectDir, st, cacheRoot, in.DryRun)
+	if err != nil {
+		return nil, err
+	}
+	rep.Degraded = baseSnap.Degraded
+	rep.Restored = baseSnap.Restored
+
+	// 6. ours 快照（R18：只查 base ∪ theirs 的并集——与 Plan 的并集一致）
+	union := unionKeys(baseSnap.Metas, theirsSnap)
+	oursSnap, oursBytes, err := worktree.Scan(projectDir, union)
+	if err != nil {
+		return nil, err
+	}
+
+	// 7. prune（R4）+ plan（R2）
+	pruned, err := expandPrune(projectDir, union)
+	if err != nil {
+		return nil, err
+	}
+	// 7b. --accept 预检与 base 重写（§10.3，在算 plan 之前）：把 P 的 base
+	// 快照条目换成 .xinit/conflicts/<P> 的内容——三方比较的 base 从此是
+	// 「用户上次看到并认可的那份」，而不是本次运行的 theirs（第五轮 D2）。
+	type acceptOld struct {
+		meta  plan.FileMeta
+		bytes []byte
+		had   bool // base 快照里原有该条目（Metas/Bytes 同源）
+	}
+	acceptOlds := map[string]acceptOld{}
+	acceptSet := map[string]bool{}
+	// prune 判定的候选集另算（T7 评审 Nit-3，§10.3 :906「P 已在 prune.txt
+	// 中」是字面承诺）：并集 ∪ in.Accept——陈旧 conflicts 项（P 已不在并集）
+	// 的字面 prune 行同样拒。**独立变量**：绝不可并入喂给 plan.Plan 的
+	// pruned（那会让 accept 路径凭空移出并集）。
+	acceptCand := append(append([]string{}, union...), in.Accept...)
+	prunedWithAccept, err := expandPrune(projectDir, acceptCand)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range in.Accept {
+		if acceptSet[p] {
+			continue
+		}
+		if !fsutil.ValidRelPath(p) {
+			return nil, fmt.Errorf("--accept %s：必须是 .xinit/conflicts/ 下的规范相对路径（不接受空串、绝对路径、.. 段、含 `\\` 或 `:` 或未规范化写法，§10.3）", p)
+		}
+		if prunedWithAccept[p] {
+			return nil, fmt.Errorf("--accept %s：该路径已在 .xinit/prune.txt 中，已脱离管理、无需 accept（§10.3）", p)
+		}
+		content, err := os.ReadFile(filepath.Join(projectDir, state.DirName, "conflicts", filepath.FromSlash(p)))
+		if err != nil {
+			return nil, fmt.Errorf("--accept %s：.xinit/conflicts/%s 不存在或不可读——--accept 只能声明「已解决的冲突」（§10.3）：%v", p, p, err)
+		}
+		old := acceptOld{bytes: baseSnap.Bytes[p]}
+		if m, ok := baseSnap.Metas[p]; ok {
+			old.meta, old.had = m, true
+		}
+		acceptOlds[p] = old
+		acceptSet[p] = true
+		binary := fsutil.IsBinary(content)
+		exec := false
+		if old.had {
+			exec = old.meta.Exec
+		} else if m, ok := oursSnap[p]; ok {
+			exec = m.Exec // 第五轮 F8：base✗ 取 ours.exec
+		}
+		baseSnap.Metas[p] = plan.FileMeta{
+			Kind:      render.KindRegular,
+			Exec:      exec,
+			Binary:    binary,
+			MixedEOL:  fsutil.DetectEOL(content) == fsutil.EOLMixed,
+			Generated: old.had && old.meta.Generated,
+			Hash:      fsutil.CompareHash(content, binary),
+		}
+		baseSnap.Bytes[p] = content
+	}
+	// hooksRun（§4.2）：未给 --no-hooks 且清单声明了 post_update。
+	hooksRun := !in.NoHooks && m.Hooks.PostUpdate != ""
+	actions := plan.Plan(baseSnap.Metas, oursSnap, theirsSnap, pruned, hooksRun)
+	rep.Actions = actions
+
+	// 8. merge 分类（§10.2 第 3 步；R3/R19）——就地改写 actions 的元素
+	merged, conflicted, conflicts, err := classifyMerges(actions, baseSnap, oursSnap, oursBytes, theirsSnap, theirsRendered)
+	if err != nil {
+		return nil, err
+	}
+	rep.Conflicted = sortedStringKeys(conflicted)
+	// conflicts/ 内容条目 ⊆ 冲突全集（ConflictKind 且 theirs 缺失时无条目）：
+	// 报告据此决定是否打印「参考：conflicts/」行（评审 E1/m-3）。实跑写入的
+	// 条目与 c.Conflicts 一致（apply.rebuildConflicts 全量重建），无需另取。
+	rep.ConflictFiles = sortedStringKeys(conflicts)
+
+	// 8a. 路径迁移分类（§17）：动作表后处理——可迁移对改写为 Delete+Merge 并注入 merged。
+	mignotes, err := classifyMigrations(projectDir, actions, baseSnap, oursSnap, oursBytes, theirsSnap, theirsRendered, newSrc, st, merged)
+	if err != nil {
+		return nil, err
+	}
+	rep.Migrations = mignotes
+
+	// 8b. --accept 后处理（§10.3）：紧跟 merge 分类之后。
+	for _, p := range in.Accept {
+		if !acceptSet[p] {
+			continue
+		}
+		a := findAction(actions, p)
+		switch {
+		case a == nil:
+			// P 不在本轮并集（行 12：ours✗∧theirs✗——7b 已无条件把 base′
+			// 重写为 conflicts/P，动作表里仍没有它）：无 action 即无 NewBase，
+			// files 由 advanceState 自动移出；条目按「已不再冲突」清理（§10.3）。
+			delete(conflicts, p)
+		case a.Kind == plan.ConflictKind:
+			return nil, fmt.Errorf("--accept %s：路径是符号链接/目录障碍（ConflictKind）——accept 改变不了类型；请把 %s 写进 .xinit/prune.txt 使其脱离管理，或移走障碍物（§10.3）", p, p)
+		case a.Kind == plan.Noop && a.Note == plan.SkipNote:
+			// 跳过优先（§8.2 L7/§10.3 定向复核 b）：跳过轮不得借 accept
+			// 悄悄推进 base。
+			return nil, fmt.Errorf("--accept %s：本轮 --no-hooks 跳过了该 generated 路径（跳过优先，§8.2 L7）——去掉 --no-hooks（或等清单声明 post_update）重跑，或把 %s 写进 .xinit/prune.txt（§10.3）", p, p)
+		case isConflictAction(a, conflicted):
+			// 重写后的 base′ 仍判冲突：NewBase、base 字节与 Metas 一律还原为
+			// 「重写前」的 files[P]（§10.3 后处理；第五轮 F1）。Metas 必须与
+			// Bytes 同步——advanceState 用 baseSnap.Metas[p] 判定 advanced
+			// （:1055），只还原 Bytes 会误判为推进 → 写 theirs 而记旧 hash →
+			// 不变量 5 自检中止（spec :902「还原后第 9 步无事发生」）。
+			old := acceptOlds[p]
+			if old.had {
+				m := old.meta
+				a.NewBase = &m
+				baseSnap.Metas[p] = old.meta
+				baseSnap.Bytes[p] = old.bytes
+			} else {
+				a.NewBase = nil
+				delete(baseSnap.Metas, p)
+				delete(baseSnap.Bytes, p)
+			}
+		default:
+			if _, inTheirs := theirsSnap[p]; !inTheirs {
+				// P 本轮已不在 theirs 里（模板删了它）：不重写 base′、一律
+				// 脱离管理。覆盖为 Noop + Note 必需：用户把 conflicts/P
+				// 原样拷成 ours 时，按行 8 会删掉这份刚解决的文件（§10.3）。
+				a.Kind = plan.Noop
+				a.NewBase = nil
+				a.Note = acceptDetachedNote
+				delete(conflicts, p)
+			}
+			// 其余（重写后干净合并/推进）：照常走决策表的结论。
+			// base✗ 时 files 条目由 advanceState 以 newSrc 补齐（M9 C-1）。
+		}
+	}
+
+	// --accept 可用集：冲突全集里非 ConflictKind 的路径（打 accept 命令用）。
+	rep.Acceptable = acceptableConflicts(rep.Conflicted, actions)
+
+	// 9. 第 4 步：未解决冲突检查（conflicts/ 现有条目 ∩ 本轮冲突集合）
+	existing, err := ListConflicts(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	rep.Blocked = step4Unresolved(existing, conflicted)
+	// --accept 豁免第 4 步检查（§10.3）：这是这套设计里唯一「必须先豁免
+	// 才能退出循环」的接口，不能省。
+	rep.Blocked = except(rep.Blocked, acceptSet)
+	if len(rep.Blocked) > 0 && !in.DryRun {
+		rep.Verdict = VerdictPending
+		// 早退轮同样「版本记录不推进」（第 9 步的推进根本不会走到）：报告
+		// 顶部的版本行必须跟 AR 注解，否则与下方待解决轮的报告自相矛盾。
+		rep.Pending = true
+		return rep, nil // 不执行任何写操作、不推进任何状态（§10.2 第 4 步）
+	}
+
+	// 9c. 第 4b 步：交互式冲突解决（§10.2 第 4b 步、§19.4）——仅可交互时，
+	// 落在第 4 步之后、组装变更集之前，且在写任何内容之前。--dry-run / diff
+	// 恒不提问（只读预测）。
+	if !in.DryRun && ps != nil {
+		taken, err := promptConflicts(ps, actions, conflicted, conflicts, baseSnap.Metas, oursSnap, theirsSnap, theirsRendered)
+		if err != nil {
+			return nil, err
+		}
+		if taken > 0 {
+			// 派生字段与两个 map 同步：按与创建时逐字相同的表达式重算
+			// （不逐字段手工增删，避免静默不一致）。
+			rep.Conflicted = sortedStringKeys(conflicted)
+			rep.ConflictFiles = sortedStringKeys(conflicts)
+			rep.Acceptable = acceptableConflicts(rep.Conflicted, actions)
+		}
+	}
+
+	// 10. 组装变更集（第 8 步的输入）
+	changes, err := buildChanges(baseSnap.Metas, oursSnap, theirsSnap, actions, theirsRendered, merged, conflicts)
+	if err != nil {
+		return nil, err
+	}
+
+	if in.DryRun {
+		// 只读预测：拒绝项检查与 Execute 前两步同判据，但不落盘、不改状态
+		refusals, err := predictRefusals(projectDir, changes)
+		if err != nil {
+			return nil, err
+		}
+		refused := refusalSet(refusals)
+		rep.Refused = refusals
+		rep.Written = keysExcept(changes.Writes, refused)
+		rep.Deleted = except(changes.Deletes, refused)
+		rep.Chmodded = chmodPredictions(changes, refused)
+		rep.Merged = sortedStringKeys(merged)
+		rep.Overwritten = overwrittenPaths(actions, refused)
+		rep.Resolved = except(existing, conflicted)
+		rep.Verdict = dryRunExit(actions)
+		return rep, nil
+	}
+
+	// 11. 脏检查（§10.2 第 5 步；--force 跳过；两条路都不阻止执行）
+	warnIfDirty(projectDir, in.Force)
+
+	// 12. 信任确认（§10.2 第 6 步、§10.5）——在备份与任何写入之前。
+	if m.Hooks.PostUpdate != "" {
+		if st.TrustedHooks == nil {
+			st.TrustedHooks = map[string]string{}
+		}
+		h := hooks.Hash(m.Hooks.PostUpdate)
+		if in.NoHooks {
+			// 跳过执行也记录内容（§10.5）：下次不带 --no-hooks 仍需确认。
+			hooks.Seen(st.TrustedHooks, h)
+		} else if hooks.NeedConfirm(st.TrustedHooks, h) {
+			oldVer, diff := hookDiffAgainstBase(st, cacheRoot, m.Hooks.PostUpdate)
+			hooks.PrintNotice(os.Stdout, "post_update", m.Hooks.PostUpdate, oldVer, diff)
+			if !in.Yes {
+				hooks.PrintAsk(os.Stdout) // T4-R2：--yes 预先确认时不打指引
+			}
+			// 守卫是 ps != nil（而非 hooks.Interactive）：非 --interactive
+			// 时二者等价，--interactive 时信任门才第一次能在管道下被驱动
+			//（§19.2.3；信任判据本身不变——仍须显式 y/yes）。走 ps.confirm：
+			// 会话已 EOF 锁存时省掉提问行、输出走 ps.out（M3/M4，M7）。
+			ok := in.Yes
+			if !ok && ps != nil {
+				var cerr error
+				if ok, cerr = ps.ConfirmTrust(); cerr != nil {
+					return nil, cerr
+				}
+			}
+			if !ok {
+				rep.Verdict = VerdictNeedTrust
+				return rep, nil // 未做任何修改；Update() 特判此码（不打印动作报告）
+			}
+			hooks.Consent(st.TrustedHooks, h, hookVersion(src))
+		}
+	}
+
+	// 13. 备份（§10.2 第 7 步、§10.1）：计划内会被写入或删除的路径；目标以
+	// oursSnap（Scan，不穿透软链）为准过滤——中间段是软链的路径（将被
+	// CheckWrites 拒绝）不得进备份，否则 Backup 的穿透 Lstat 会错位备份
+	// 链后文件（裁定 U/Z）。
+	backupDir, err := apply.Backup(projectDir, time.Now().Format("20060102-150405"), backupTargets(changes, oursSnap))
+	if err != nil {
+		return nil, fmt.Errorf("备份: %w", err)
+	}
+	rep.BackupDir = backupDir
+
+	// 13b. 行 5 覆盖保护（§8.2 :614）：本轮会被 generated 覆盖的路径，其
+	// 本地版本先另存 .xinit/overwritten/<P>——持久保留，不随 update 清理
+	//（同一路径再次被覆盖时更新为最近一次副本）。
+	//
+	// 先取「写前检查的拒绝集」再落盘：被折叠拒绝/障碍物挡下的路径**没有被
+	// 覆盖**，§8.2 的另存义务只在真的发生覆盖时触发——既不写副本、也不进
+	// 报告。拒绝集原样来自 predictRefusals（与 Execute 步骤 1-2 同一组函数、
+	// 同一 changes），绝不手写近似判据：手写判据会开出「Execute 会写、却没
+	// 另存」的窗口。
+	if slices.ContainsFunc(actions, func(a plan.Action) bool { return a.OverwriteGenerated }) {
+		refusals, err := predictRefusals(projectDir, changes)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range overwrittenPaths(actions, refusalSet(refusals)) {
+			data := oursBytes[p]
+			if data == nil {
+				return nil, fmt.Errorf("内部错误：%q 判为 generated 覆盖但本地内容缺失", p)
+			}
+			mode := os.FileMode(0o644)
+			if m, ok := oursSnap[p]; ok && m.Exec {
+				mode = 0o755
+			}
+			full := filepath.Join(projectDir, state.DirName, "overwritten", filepath.FromSlash(p))
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				return nil, fmt.Errorf("另存被覆盖的本地版本: %w", err)
+			}
+			if err := state.WriteFileAtomic(full, data, mode); err != nil {
+				return nil, fmt.Errorf("另存被覆盖的本地版本: %w", err)
+			}
+			rep.Overwritten = append(rep.Overwritten, p)
+		}
+	}
+
+	// 14. 执行（§10.2 第 8 步）——折叠拒绝/障碍物路径跳过、不中止其余路径
+	res, err := apply.Execute(projectDir, changes)
+	if err != nil {
+		return nil, err
+	}
+	rep.Written = res.Written
+	rep.Deleted = res.Deleted
+	rep.Chmodded = res.Chmodded
+	// rep.Conflicted 保持第 8 步的冲突全集（不覆盖为 res.Conflicts：后者只含
+	// 已写盘条目，会把 ConflictKind 且 theirs 缺失的冲突漏报成「冲突 0」——
+	// 评审 E1。conflicts/ 条目由 rep.ConflictFiles 单独承载）。
+	rep.Resolved = res.Resolved
+	rep.Refused = res.Refusals
+	rep.Merged = sortedStringKeys(merged)
+
+	// 15. 被拒路径把 NewBase 还原为「本轮开始时的 base 条目」（§8.5
+	//     折叠拒绝行）——必须在第 9 步之前，否则被拒路径的 base 会被推进。
+	actions = restoreRefused(actions, baseSnap.Metas, refusalSet(res.Refusals))
+
+	// 本轮是否仍有待解决项（冲突/折叠拒绝/障碍物）——决定第 9 步是否推进
+	// 模板版本与 commit，也决定第 19 步的退出码（§11.5）。冲突用第 8 步全集
+	// （评审 E1：res.Conflicts 只有已写盘条目，ConflictKind 且 theirs 缺失时
+	// 会漏算 → 退 0 且版本照推，绕开 D3 门禁）。
+	pending := len(res.Refusals) > 0 || len(conflicted) > 0
+	rep.Pending = pending
+
+	// 16. 第 9 步：推进 state 与 .xinit/base/（先 base 后 state，含写入自检）
+	if err := advanceState(projectDir, st, baseSnap, actions, theirsRendered, newSrc, vars, src, pending, cacheRoot, in.EngineVersion); err != nil {
+		return nil, err
+	}
+
+	// 17. 第 10 步：幂等写 .git/info/exclude
+	if err := state.EnsureGitExcluded(projectDir); err != nil {
+		return nil, fmt.Errorf("写 .git/info/exclude: %w", err)
+	}
+
+	// 18. post_update（§10.2 第 11 步）——在 state/base 落盘之后。文件已按
+	// 本轮结果写完，钩子失败也只是退出码 3（文件与 state 保留，§10.2 :845）。
+	if hooksRun {
+		rep.HookName = "post_update"
+		rep.HookBlock = m.Hooks.PostUpdate
+		before, err := hooks.Snapshot(projectDir)
+		if err != nil {
+			return nil, fmt.Errorf("钩子前快照: %w", err)
+		}
+		res, err := hooks.Run(projectDir, m.Hooks.PostUpdate)
+		if err != nil {
+			return nil, err // sh 起不来：硬错误（§3.1 明确报错）
+		}
+		after, err := hooks.Snapshot(projectDir)
+		if err != nil {
+			return nil, fmt.Errorf("钩子后快照: %w", err)
+		}
+		rep.HookExitCode = res.ExitCode
+		rep.HookOutput = hookBlockLines(string(res.Output))
+		// planned = 本轮受管并集（Actions 全部路径；prune 与行 12 已被 Plan
+		// 排除）；generated 取本轮模板侧位（M3-R6）。
+		planned := make(map[string]bool, len(rep.Actions))
+		for _, a := range rep.Actions {
+			planned[a.Path] = true
+		}
+		generated := make(map[string]bool)
+		for p, m := range theirsSnap {
+			if m.Generated {
+				generated[p] = true
+			}
+		}
+		rep.HookUnplanned, rep.HookModified = hooks.Classify(before, after, planned, generated)
+		if res.ExitCode != 0 {
+			rep.HookFailed = true
+		}
+	}
+
+	// 19. 终局语义（§11.5；M3-R2 优先级 3 ＞ 2 ＞ 0；M1 起只产 Verdict，
+	// cli 单点映射为码）：冲突/折叠拒绝/障碍物待解决 → 2；钩子失败 → 3
+	//（本轮没有完整做完；2 的状态已持久化，下一轮照旧会报）。
+	rep.Verdict = VerdictOK
+	if pending {
+		rep.Verdict = VerdictPending
+	}
+	if rep.HookFailed {
+		rep.Verdict = VerdictHookFail
+	}
+	return rep, nil
+}
+
+// openTarget 打开模板源并选定目标版本（§11.3、R8）。
+func openTarget(st *state.State, rev, cacheRoot string, fetch bool) (*template.Source, error) {
+	target := rev
+	switch {
+	case rev != "":
+		// 显式指定：允许任意 ref、允许降级（下面给后代警告）
+	case st.Template.Kind == template.KindDir.String():
+		// dir 源没有版本概念：原样重开（Open 忽略 revision）
+	default:
+		sel, err := template.SelectRevision(st.Template.Source, cacheRoot, fetch, st.Template.Revision)
+		if err != nil {
+			return nil, err
+		}
+		target = sel
+	}
+
+	// allowClone=true：镜像优先，缺失回退首次 clone（update 的功能性回退；
+	// 取已记录版本时模板可能尚未镜像）。
+	src, err := template.Open(st.Template.Source, target, cacheRoot, fetch, true)
+	if err != nil {
+		return nil, err
+	}
+
+	// 显式 --revision 的降级警告（§11.3）：目标不是当前 revision 的后代时
+	// 警告但不阻止——模板发了坏版本时用户需要能回退。回退不是「模板改动不出
+	// 现」那么轻：磁盘上已有的内容会被改写或删除、回退到目标版本的旧内容
+	//（未被本地改过的路径走行 2 覆盖／行 8 删除，原内容在 .xinit/backup/
+	// 保留），本地改动走合并/冲突、本地删除保留删除（行 6/7/10/11，不会被静默回退）。发布批次
+	// O2/场景 7.5 实测：模板 HEAD 领先 tag 时 init 带入的未发布改动正是这样
+	// 被写回 tag 内容的。
+	if rev != "" && st.Template.Revision != "" && rev != st.Template.Revision {
+		anc, err := template.IsAncestor(st.Template.Source, cacheRoot, fetch, st.Template.Revision, rev)
+		switch {
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "xinit: 警告: 无法判断 %s 是否为 %s 的后代: %v\n", rev, st.Template.Revision, err)
+		case !anc:
+			fmt.Fprintf(os.Stderr,
+				"xinit: 警告: 目标版本 %s 不是当前版本 %s 的后代（降级/回退）：磁盘上已有的内容会被改写或删除、回退到 %s 的版本（原内容在 .xinit/backup/ 保留；本地改动走合并/冲突或保留删除、均不会被静默回退）；两版之间模板的改动不会出现在本项目里，之后可能被误判为本地改动（§11.3）\n",
+				rev, st.Template.Revision, rev)
+		}
+	}
+	return src, nil
+}
+
+// loadManifestVars 读模板清单并解析本轮 vars（R15：--config > 冻结值 > default）。
+// 同时返回 Manifest——hooks 块挂在它上面（Compiled 无 Hooks 字段）。
+func loadManifestVars(src *template.Source, st *state.State, configPath string) (*manifest.Manifest, *manifest.Compiled, render.Vars, error) {
+	manifestData, err := fs.ReadFile(src.FS, "xinit.yml")
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("模板缺少 xinit.yml: %w", err)
+	}
+	m, err := manifest.Parse(manifestData)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("解析模板的 xinit.yml: %w", err)
+	}
+	compiled, err := m.Compile()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("编译模板的 xinit.yml: %w", err)
+	}
+	var config map[string]string
+	if configPath != "" {
+		if config, err = manifest.LoadVarsFile(configPath); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	vars, err := ResolveUpdateVars(compiled, st.Vars, config)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return m, compiled, vars, nil
+}
+
+// renderTheirs 渲染模板侧全部路径（§7）。告警与 init 完全同格式：
+// 路径渲染警告逐条；替换规则零命中按**规则**汇总（§7.4）。
+func renderTheirs(src *template.Source, compiled *manifest.Compiled, vars render.Vars,
+) ([]render.Entry, map[string][]byte, map[string]string, error) {
+	entries, warnings, err := render.Paths(src.FS, compiled, vars)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("渲染模板路径: %w", err)
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "xinit: 警告: %s: %s\n", w.Path, w.Msg)
+	}
+
+	rendered := make(map[string][]byte, len(entries))
+	srcOf := make(map[string]string, len(entries))
+	hitTotals := make(map[int]int)
+	for _, e := range entries {
+		data, hits, warns, err := render.Content(src.FS, compiled, vars, e)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		for _, h := range hits {
+			hitTotals[h.Index] += h.Count
+		}
+		for _, w := range warns {
+			fmt.Fprintf(os.Stderr, "xinit: 警告: %s: %s\n", w.Path, w.Msg)
+		}
+		// 空渲染（Go template 渲染出空内容）是**空内容文件**，不是「模板没有它」：
+		// 归一成非 nil 空切片，使下游按「键存在」判定的全链（classifyMerges 的
+		// b != nil / tb == nil 守卫、conflicts/ 内容条目、--accept、答 n 后不再重问）
+		// 与 buildChanges:791 / advanceState:1102 的键存在语义一致（2026-10-11 M7）。
+		if data == nil {
+			data = []byte{}
+		}
+		rendered[e.Dst] = data
+		srcOf[e.Dst] = e.Src
+	}
+	for i, cs := range compiled.Subst {
+		if hitTotals[i] == 0 {
+			fmt.Fprintf(os.Stderr,
+				"xinit: 警告: 替换规则 %d (%q) 在渲染结果中命中 0 次 —— 模板里可能已无此字面量\n",
+				i, cs.Spec.From)
+		}
+	}
+	return entries, rendered, srcOf, nil
+}
+
+// snapFromRendered 把模板侧的渲染结果变成 plan 快照——对派生侧用
+// worktree.Scan，两边同一套探测与 hash（fsutil.ContentHash/IsBinary/DetectEOL），
+// 同一份内容在两侧得到同一个 hash。
+func snapFromRendered(entries []render.Entry, rendered map[string][]byte) plan.Snap {
+	snap := make(plan.Snap, len(entries))
+	for _, e := range entries {
+		content := rendered[e.Dst]
+		snap[e.Dst] = plan.FileMeta{
+			Kind:      e.Kind,
+			Exec:      e.Exec,
+			Binary:    e.Binary,
+			MixedEOL:  fsutil.DetectEOL(content) == fsutil.EOLMixed,
+			Generated: e.Generated,
+			Hash:      fsutil.ContentHash(content),
+		}
+	}
+	return snap
+}
+
+// unionKeys 返回 base ∪ theirs 的路径（字节序）。与 plan 内部的并集同一
+// 定义（R18）——ours 的扫描范围必须一致，否则行语义会漂。
+func unionKeys(base, theirs plan.Snap) []string {
+	seen := make(map[string]bool, len(base)+len(theirs))
+	var out []string
+	for _, s := range []plan.Snap{base, theirs} {
+		for p := range s {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// expandPrune 读 .xinit/prune.txt 并把 glob 展开到并集路径上（§8.0、R4）。
+func expandPrune(projectDir string, paths []string) (plan.PruneSet, error) {
+	patterns, err := state.ReadPrune(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	set := plan.PruneSet{}
+	if len(patterns) == 0 {
+		return set, nil
+	}
+	matcher, err := fsutil.CompileGlob(patterns)
+	if err != nil {
+		return nil, fmt.Errorf("解析 .xinit/prune.txt: %w", err)
+	}
+	for _, p := range paths {
+		if matcher.Match(p) {
+			set[p] = true
+		}
+	}
+	return set, nil
+}
+
+// classifyMerges 对每个 Merge 动作跑 merge-file 并落定 NewBase（§10.2 第 3
+// 步、§8.6、R3/R19）：
+//
+//	rc 0      → plan.SettleMergeClean（NewBase = theirs[P] + §8.3/§8.5 修整），
+//	            合并结果按 ours 的 EOL 还原、写回工作树（进 merged）；
+//	rc 1–127  → 占位保持旧值（Plan 的 Merge 占位就是 files[P]，无需还原），
+//	            theirs 渲染字节进 conflicts/（§8.6「冲突的 theirs 写到 conflicts/」）；
+//	rc ≥128   → 改判 ConflictBinary，同上进 conflicts/。
+//
+// 四类冲突动作（Merge 冲突、ConflictBinary、ConflictBothAdded、ConflictKind）
+// 都进 conflicts/ 内容表；内容 = theirsRendered[P]，**键缺失**时跳过——键缺失
+// = 模板没有该路径（如行 6 的 binary 在 theirs 里存在则不会缺；Kind 冲突在
+// theirs 里存在）；键在且值为空切片 = 空内容文件（renderTheirs 已把空渲染
+// 归一成非 nil 空切片，2026-10-11 M7），照常落 0 字节条目。
+func classifyMerges(actions []plan.Action, baseSnap *baseSnapshot, oursSnap plan.Snap,
+	oursBytes map[string][]byte, theirsSnap plan.Snap, theirsRendered map[string][]byte,
+) (map[string][]byte, map[string]bool, map[string][]byte, error) {
+	merged := map[string][]byte{}
+	conflicted := map[string]bool{}
+	conflicts := map[string][]byte{}
+
+	for i := range actions {
+		switch actions[i].Kind {
+		case plan.ConflictBinary, plan.ConflictBothAdded, plan.ConflictKind:
+			conflicted[actions[i].Path] = true
+			if b := theirsRendered[actions[i].Path]; b != nil {
+				conflicts[actions[i].Path] = b
+			}
+		}
+	}
+
+	for i := range actions {
+		a := &actions[i]
+		if a.Kind != plan.Merge {
+			continue
+		}
+		ob := oursBytes[a.Path]
+		bb := baseSnap.Bytes[a.Path]
+		tb := theirsRendered[a.Path]
+		if ob == nil || bb == nil || tb == nil {
+			return nil, nil, nil, fmt.Errorf("内部错误：Merge 路径 %q 缺三方内容", a.Path)
+		}
+		res, err := merge.ThreeWay(ob, bb, tb)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		switch res.Outcome {
+		case merge.Clean:
+			plan.SettleMergeClean(a, baseSnap.Metas, oursSnap, theirsSnap)
+			merged[a.Path] = fsutil.FromLF(res.Bytes, fsutil.DetectEOL(ob))
+		case merge.Conflicts:
+			conflicted[a.Path] = true
+			conflicts[a.Path] = tb
+		case merge.Error:
+			a.Kind = plan.ConflictBinary
+			conflicted[a.Path] = true
+			conflicts[a.Path] = tb
+		}
+	}
+	return merged, conflicted, conflicts, nil
+}
+
+// buildChanges 把动作翻译成 apply.Changes（§10.2 第 8 步的输入）。
+//
+// Writes：WriteTheirs（theirs 渲染字节）与干净 Merge（合并结果，EOL 已还原）；
+// Deletes：Delete 行的路径（§9.5 安全由 Execute 先查）；
+// ExecBits：§8.3 给结论的路径（R7 前件，见 execConclusion）；
+// Conflicts：四类冲突动作的 theirs 字节（重建式，§10.4）。
+func buildChanges(base plan.Snap, oursSnap, theirsSnap plan.Snap, actions []plan.Action,
+	theirsRendered map[string][]byte, merged, conflicts map[string][]byte,
+) (apply.Changes, error) {
+	c := apply.Changes{
+		Writes:    map[string][]byte{},
+		ExecBits:  map[string]bool{},
+		Conflicts: map[string][]byte{},
+	}
+	for _, a := range actions {
+		switch a.Kind {
+		case plan.WriteTheirs:
+			b, ok := theirsRendered[a.Path]
+			if !ok {
+				return c, fmt.Errorf("内部错误：%q 判为写入但模板没有对应内容", a.Path)
+			}
+			c.Writes[a.Path] = b
+		case plan.Merge:
+			// 冲突的 Merge（§8.6 rc 1–127）占位保持旧值：不写工作树，
+			// 内容只进 conflicts/（见 classifyMerges）——merged 里没有它
+			// 是正常态，不是内部错误。判据取 conflicts 表：Merge 动作被
+			// 判冲突时必在其中（tb 非 nil，classifyMerges 已确证）。
+			if _, isConflict := conflicts[a.Path]; isConflict {
+				break
+			}
+			b, ok := merged[a.Path]
+			if !ok {
+				return c, fmt.Errorf("内部错误：%q 判为干净合并但没有合并结果", a.Path)
+			}
+			c.Writes[a.Path] = b
+		case plan.Delete:
+			c.Deletes = append(c.Deletes, a.Path)
+		}
+		if target, ok := execConclusion(a, base, oursSnap, theirsSnap); ok {
+			c.ExecBits[a.Path] = target
+		}
+	}
+	for p, b := range conflicts {
+		c.Conflicts[p] = b
+	}
+	return c, nil
+}
+
+// execConclusion 报告该路径本轮是否有 §8.3 的 exec 结论（R7 前件）：
+//
+//	迁移 Merge（MigratedFrom ≠ ""，§17.3）       → 恒有结论（见 migratedExec）；
+//	Kind ∉ {Noop, WriteTheirs, Merge}          → 无结论；
+//	三方都在 ∧ ours.exec == base.exec          → 有结论，目标 = NewBase.Exec；
+//	ours✗ ∧ WriteTheirs（行 13，模板新增）      → 有结论 = theirs 的 exec；
+//	其余（§8.3「不动」、base✗ 的行 14/15、行 10/11、冲突行）→ 无结论（磁盘原样）。
+//
+// 结论与磁盘一致（NewBase.Exec == ours.exec）也不给出——省掉一次无意义的
+// chmod 记账（R7 的「NewBase.Exec ≠ 磁盘 exec」条件），dry-run 的预测因此准确。
+func execConclusion(a plan.Action, base, ours, theirs plan.Snap) (bool, bool) {
+	if a.NewBase == nil {
+		return false, false
+	}
+	// §22.6：无 x 位语义平台（Windows）入口短路——不产 ExecBits/chmod 结论。
+	// dry-run 的 chmodPredictions 与真跑 res.Chmodded 同源本函数 ⇒ 两径同口径（均 0）。
+	if !fsutil.ExecSupported {
+		return false, false
+	}
+	switch a.Kind {
+	case plan.Noop, plan.WriteTheirs, plan.Merge:
+	default:
+		return false, false
+	}
+	// §17.3：Q 是磁盘新建文件——必须在 !ook 提前返回之前，且不套用「与磁盘
+	// 一致则省略」（无结论即以默认权限落盘、丢 exec 位，N3）。
+	if a.Kind == plan.Merge && a.MigratedFrom != "" {
+		return migratedExec(a, base, ours), true
+	}
+	o, ook := ours[a.Path]
+	if !ook {
+		if a.Kind == plan.WriteTheirs {
+			return a.NewBase.Exec, true // 行 13：模板新增，磁盘上没有可保持的 exec
+		}
+		return false, false // 行 10/11：文件不存在（用户删除），不涉及 exec
+	}
+	b, bok := base[a.Path]
+	if _, tok := theirs[a.Path]; !bok || !tok {
+		return false, false // base✗（行 14/15）或 theirs✗：无 §8.3 结论
+	}
+	if o.Exec != b.Exec {
+		return false, false // §8.3 第二分支：本地改过权限 → 不动（每轮重复警告，出口 prune）
+	}
+	if a.NewBase.Exec == o.Exec {
+		return false, false // 与磁盘一致：无需 chmod
+	}
+	return a.NewBase.Exec, true
+}
+
+// ListConflicts 精确列举 .xinit/conflicts/ 的条目（相对项目根、/ 分隔）。
+// 目录不存在 = 没有未解决冲突。
+func ListConflicts(projectDir string) ([]string, error) {
+	root := filepath.Join(projectDir, state.DirName, "conflicts")
+	var out []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("列举 conflicts/: %w", err)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// step4Unresolved 是 §10.2 第 4 步：conflicts/ 里的条目若本轮仍判为冲突动作
+// → 拒绝（必须先解决）。正向判据（F9）：不穷举「已解决」的诸情形；本轮不再
+// 判冲突的条目一概放行，其删除由第 8 步的 rebuild 统一做。
+func step4Unresolved(existing []string, conflicted map[string]bool) []string {
+	var out []string
+	for _, p := range existing {
+		if conflicted[p] {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// warnIfDirty 是 §10.2 第 5 步：git 仓脏 → 警告；非 git 仓 → 警告后继续。
+// --force 跳过检查（§11.2）。两条路都不阻止执行。
+func warnIfDirty(projectDir string, force bool) {
+	if force {
+		return
+	}
+	out, err := exec.Command("git", "-C", projectDir, "status", "--porcelain").Output()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "xinit: 警告: 当前目录不是 git 仓库：出问题只能靠 .xinit/backup/ 还原")
+		return
+	}
+	if s := strings.TrimSpace(string(out)); s != "" {
+		n := len(strings.Split(s, "\n"))
+		fmt.Fprintf(os.Stderr,
+			"xinit: 警告: 工作树有 %d 处未提交改动；update 会直接改写工作树，建议先提交（或用 --force 跳过检查）\n", n)
+	}
+}
+
+// backupTargets 是 §10.1 的备份对象：计划内会被写入或删除、且 ours 侧确实是
+// 常规文件的路径（含纯 exec 变更；删除也记入备份）。
+//
+// 过滤依据是 worktree.Scan 的快照（不穿透符号链接），而不是让 apply.Backup
+// 的 os.Lstat 判定（穿透语义）：中间段是软链的路径在 ours 侧「不存在」，
+// 穿透的 Lstat 却会看到链后的文件——错位备份（裁定 U/Z）。
+// ours 不存在 → 无原内容可备份；目录/符号链接 → 本轮不会被改动。
+func backupTargets(c apply.Changes, oursSnap plan.Snap) []string {
+	targets := make([]string, 0, len(c.Writes)+len(c.Deletes)+len(c.ExecBits))
+	add := func(p string) {
+		if m, ok := oursSnap[p]; ok && m.Kind == render.KindRegular {
+			targets = append(targets, p)
+		}
+	}
+	for _, p := range sortedStringKeys(c.Writes) {
+		add(p)
+	}
+	for _, p := range c.Deletes {
+		add(p)
+	}
+	for _, p := range sortedStringKeys(c.ExecBits) {
+		if _, inWrites := c.Writes[p]; !inWrites {
+			add(p)
+		}
+	}
+	sort.Strings(targets)
+	return targets
+}
+
+// predictRefusals 是 dry-run 的只读预测：经 apply.Forecast 单点，与 Execute
+// 的前两步同源（删除的 §9.5、写前检查），只是不落盘——diff 因此能在不改任何
+// 东西的前提下报告折叠拒绝与障碍物。
+func predictRefusals(projectDir string, c apply.Changes) ([]apply.Refusal, error) {
+	return apply.Forecast(projectDir, c)
+}
+
+func refusalSet(refs []apply.Refusal) map[string]bool {
+	set := make(map[string]bool, len(refs))
+	for _, r := range refs {
+		set[r.Path] = true
+	}
+	return set
+}
+
+// keysExcept 是 map 的键（排序）减去 drop 集合。
+func keysExcept(m map[string][]byte, drop map[string]bool) []string {
+	var out []string
+	for _, p := range sortedStringKeys(m) {
+		if !drop[p] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// except 从 xs 里剔除 drop 中的元素（保持输入顺序；输入均已排序）。
+func except(xs []string, drop map[string]bool) []string {
+	out := make([]string, 0, len(xs))
+	for _, x := range xs {
+		if !drop[x] {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// chmodPredictions 预测 dry-run 下会发生的纯 exec 变更（R7 通道）：
+// ExecBits 里不在 Writes、也未被拒的路径。
+func chmodPredictions(c apply.Changes, refused map[string]bool) []string {
+	var out []string
+	for _, p := range sortedStringKeys(c.ExecBits) {
+		if _, inWrites := c.Writes[p]; inWrites || refused[p] {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// dryRunExit 是 diff/dry-run 的终局语义（§11.5；M1 起返回 Verdict，cli 单点
+// 映射为码）：有非 Noop → VerdictChanged（5），否则 VerdictOK（0）。
+// 不模拟 2——没有执行，就没有「待解决」的写盘后果要报。
+func dryRunExit(actions []plan.Action) Verdict {
+	for _, a := range actions {
+		if a.Kind != plan.Noop {
+			return VerdictChanged
+		}
+	}
+	return VerdictOK
+}
+
+// restoreRefused 把被拒路径（折叠拒绝、障碍物、删除路径逃逸）的 NewBase
+// 还原为「本轮开始时的 base 条目」（§8.5 折叠拒绝行）——base✗ → nil
+// （与行 15 的「保持旧值 = nil」同形）。必须在第 9 步之前调用。
+func restoreRefused(actions []plan.Action, baseMeta plan.Snap, refused map[string]bool) []plan.Action {
+	for i := range actions {
+		a := &actions[i]
+		if !refused[a.Path] {
+			continue
+		}
+		if old, ok := baseMeta[a.Path]; ok {
+			m := old
+			a.NewBase = &m
+		} else {
+			a.NewBase = nil
+		}
+		a.Note = joinNote(a.Note, "本轮被拒绝（折叠/障碍物）：未落盘，保持旧 base，下一轮重新判定")
+	}
+	return actions
+}
+
+// joinNote 把追加文案并入 Note（与 plan 内部的 noteJoin 同形；Note 是
+// 用户可见文案，不做去重）。
+func joinNote(note, extra string) string {
+	if note == "" {
+		return extra
+	}
+	return note + "；" + extra
+}
+
+// advanceState 按 §10.2 第 9 步推进 state.json 与 .xinit/base/。
+//
+// 顺序固定：先写 base 文件（SyncBase 全量同步 + 清残片）→ 写入自检
+// （不变量 5：落盘字节的 hash == 记账的 hash）→ 最后写 state.json。
+//
+// 新 files/base 只从 Action 构建：NewBase == nil 与「不在 Action 里的旧键」
+// （prune §8.0、行 12，R5）都自动移出；对应的 base/<Dst> 残片由 SyncBase 的
+// removeStale 清掉。「旧值」一律指本轮开始时的 files[P]（§10.2 第 9 步）。
+//
+// pending（本轮仍以退出码 2 结束：有冲突或折叠拒绝/障碍物）时**不推进
+// 模板 revision/commit**：冲突与被拒路径的 base 保持旧版本，而 §5.2 的
+// 逐路径恢复要用记录的 commit 重渲染这些路径——提前推进 commit 会让它们
+// 的重建 hash 必然不符 → 降级成 base✗。收敛后的重跑再推进（F6 语义保证
+// 「没有更高的 tag 时取当前 revision」，重跑不会空转）。
+func advanceState(projectDir string, st *state.State, baseSnap *baseSnapshot,
+	actions []plan.Action, theirsRendered map[string][]byte,
+	newSrc map[string]string, vars render.Vars, src *template.Source, pending bool,
+	cacheRoot, engineVersion string,
+) error {
+	newFiles := make(map[string]state.FileState, len(actions))
+	entries := make([]render.Entry, 0, len(actions))
+	blobs := make(map[string][]byte, len(actions))
+
+	for _, a := range actions {
+		if a.NewBase == nil {
+			continue // 移除（行 8/12/16、prune）
+		}
+		old, hadOld := st.Files[a.Path]
+		oldMeta, hadMeta := baseSnap.Metas[a.Path]
+		advanced := !hadMeta || *a.NewBase != oldMeta // 推进到 theirs（含位被 settle 调整的行）
+
+		var content []byte
+		var srcPath string
+		switch {
+		case advanced:
+			b, ok := theirsRendered[a.Path]
+			if !ok {
+				return fmt.Errorf("内部错误：%q 推进 base 但模板没有对应内容", a.Path)
+			}
+			content = b
+			if srcPath = newSrc[a.Path]; srcPath == "" {
+				return fmt.Errorf("内部错误：%q 推进 base 但拿不到模板原路径", a.Path)
+			}
+		default:
+			b, ok := baseSnap.Bytes[a.Path]
+			if !ok {
+				return fmt.Errorf("内部错误：%q 保持旧 base 但旧 base 内容缺失", a.Path)
+			}
+			if !hadOld {
+				// base✗（BothAdded）的 --accept 干净路径：base′ 由 7b 重写为
+				// conflicts/<P> 内容，files 条目缺失——Src 取本轮模板映射
+				//（M9 C-1；修复前此分支报「内部错误」、accept 不可用）。
+				if srcPath = newSrc[a.Path]; srcPath == "" {
+					return fmt.Errorf("内部错误：%q 保持旧 base 但 files 里没有它（且拿不到模板原路径）", a.Path)
+				}
+			} else {
+				srcPath = old.Src
+			}
+			content = b
+		}
+
+		newFiles[a.Path] = state.FileState{
+			Src:       srcPath,
+			Hash:      a.NewBase.Hash,
+			Exec:      a.NewBase.Exec,
+			Binary:    a.NewBase.Binary,
+			MixedEOL:  a.NewBase.MixedEOL,
+			Generated: a.NewBase.Generated,
+		}
+		entries = append(entries, render.Entry{
+			Src:       srcPath,
+			Dst:       a.Path,
+			Kind:      a.NewBase.Kind,
+			Exec:      a.NewBase.Exec,
+			Binary:    a.NewBase.Binary,
+			Generated: a.NewBase.Generated,
+		})
+		blobs[a.Path] = content
+	}
+
+	if err := state.SyncBase(projectDir, entries, blobs); err != nil {
+		return fmt.Errorf("同步 base: %w", err)
+	}
+
+	// 写入自检（不变量 5 / §7.6）：落盘字节的 hash 必须等于记账的 hash。
+	for p, fst := range newFiles {
+		data, err := state.ReadBase(projectDir, p)
+		if err != nil {
+			return err
+		}
+		if got := fsutil.ContentHash(data); got != fst.Hash {
+			return fmt.Errorf("写入自检失败：base/%s 落盘 hash %s ≠ 记账 %s（中止）", p, got, fst.Hash)
+		}
+	}
+
+	// vars：解析出的覆盖冻结值；清单里已删除的变量保留旧值（§3.4）
+	if st.Vars == nil {
+		st.Vars = map[string]string{}
+	}
+	for k, v := range vars {
+		st.Vars[k] = v
+	}
+
+	st.Files = newFiles
+	st.EngineVersion = engineVersion
+	// Source 不变：openTarget 就是从 st.Template.Source 打开的
+	//（template.Source 不携带来源字符串，报告侧用 st.Template.Source）。
+	st.Template.Kind = src.Kind.String()
+	if !pending {
+		// 只有本轮全清（无冲突、无折叠拒绝/障碍物）才推进模板版本与
+		// commit——未收敛时保持旧值，理由见函数注释。
+		st.Template.Revision = src.Revision
+		st.Template.Commit = src.Commit
+	}
+	if err := st.Save(projectDir); err != nil {
+		return err
+	}
+
+	// 快照写侧挂点（§21.5）：必须在 st.Save 成功之后（键的 vars 分量 =
+	// 停盘值）；pending 轮 commit 不推进，写了 anchor 由 st.Template.Commit
+	// 派生即等于它，tree 装的却是本轮（新目标 commit）渲染原文——会把当下
+	// 唯一对该 anchor 有效的条目覆写成与旧 commit 原文不一致的内容（旧原文
+	// 从此不可恢复），故跳过。字节源 = theirsRendered（全量渲染原文；不得取
+	// blobs 混合体——保持旧值路径装的是旧 base 字节）。best-effort：失败只
+	// 警告，不影响命令。
+	if !pending {
+		renderstore.WriteBestEffort(cacheRoot, st, theirsRendered)
+	}
+	return nil
+}
+
+// hasConfirmed 报告 trusted 里是否存在任何已确认记录（非空版本值）。
+// 仅 marker（""）不算——首次确认前没有可做 diff 的基线（M3-R5）。
+func hasConfirmed(trusted map[string]string) bool {
+	for _, v := range trusted {
+		if v != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// hookDiffAgainstBase 取「已记录版本」（st.Template.Revision/Commit）的模板
+// 清单里同字段钩子，与新块做行级 diff（M3-R5、§10.5「打印全文与 diff」）。
+// 任何一步不可得（dir 源无历史、首次确认、旧清单读不到）→ ("", "")，调用方
+// 省略 diff 段：不阻断确认流程。
+func hookDiffAgainstBase(st *state.State, cacheRoot, newBlock string) (oldVer, diff string) {
+	if st.Template.Kind != template.KindGit.String() {
+		return "", "" // dir 源没有历史版本可比
+	}
+	if !hasConfirmed(st.TrustedHooks) {
+		return "", "" // 首次确认：无基线
+	}
+	// allowClone=true：镜像优先，缺失回退首次 clone（取旧版本清单的
+	// 功能性回退；失败本就不阻断确认流程）。
+	src, err := template.Open(st.Template.Source, st.Template.Commit, cacheRoot, false, true)
+	if err != nil {
+		return "", ""
+	}
+	mdata, err := fs.ReadFile(src.FS, "xinit.yml")
+	if err != nil {
+		return "", ""
+	}
+	m, err := manifest.Parse(mdata)
+	if err != nil {
+		return "", ""
+	}
+	if _, err := m.Compile(); err != nil {
+		return "", "" // 旧清单编译不过 = 不可得
+	}
+	d := hooks.LineDiff(m.Hooks.PostUpdate, newBlock)
+	if d == "" {
+		return "", ""
+	}
+	return orNone(st.Template.Revision), d
+}
+
+// findAction 在按路径排序的动作表里定位路径（线性；规模 = 并集大小）。
+// 返回的是切片内元素的指针——后处理的修改直接生效。
+func findAction(actions []plan.Action, p string) *plan.Action {
+	for i := range actions {
+		if actions[i].Path == p {
+			return &actions[i]
+		}
+	}
+	return nil
+}
+
+// isConflictAction 报告动作是否仍属冲突类（Merge 冲突、Binary、BothAdded、
+// ConflictKind）——--accept 后处理据此决定是否还原 NewBase（§10.3）。
+func isConflictAction(a *plan.Action, conflicted map[string]bool) bool {
+	switch a.Kind {
+	case plan.ConflictBinary, plan.ConflictBothAdded, plan.ConflictKind:
+		return true
+	case plan.Merge:
+		return conflicted[a.Path]
+	}
+	return false
+}
+
+// acceptDetachedNote 是 --accept 对「模板已删除该路径」的覆盖文案（§10.3）。
+const acceptDetachedNote = "已按 --accept 声明解决：模板已删除该路径，本轮脱离管理（不再有 base 记录；磁盘不动）"
+
+// overwrittenPaths 是本轮「会被 generated 覆盖（§8.2 行 5）、且未被写前检查
+// 拒绝」的路径（排序）——13b 的落盘清单与 dry-run 的预测共用同一出处。
+//
+// refused 必须原样来自 predictRefusals（与 apply.Execute 步骤 1-2 同一组
+// 函数）：被拒的路径没有被覆盖，另存义务不触发；换成手写近似判据会同时开出
+// 「Execute 写而没另存」（漏档）与「没写而记档」（虚账）两个窗口。
+func overwrittenPaths(actions []plan.Action, refused map[string]bool) []string {
+	var out []string
+	for _, a := range actions {
+		if a.OverwriteGenerated && !refused[a.Path] {
+			out = append(out, a.Path)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

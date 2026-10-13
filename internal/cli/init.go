@@ -17,6 +17,7 @@ import (
 	"github.com/xbcio/xinit/internal/hooks"
 	"github.com/xbcio/xinit/internal/manifest"
 	"github.com/xbcio/xinit/internal/render"
+	"github.com/xbcio/xinit/internal/renderstore"
 	"github.com/xbcio/xinit/internal/state"
 	"github.com/xbcio/xinit/internal/template"
 )
@@ -161,7 +162,7 @@ func Init(
 	//    --config > 交互回答 > 清单 default。全部交互都在任何内容写入之前。
 	provided := map[string]string{}
 	if configPath != "" {
-		if provided, err = LoadConfig(configPath); err != nil {
+		if provided, err = manifest.LoadVarsFile(configPath); err != nil {
 			return err
 		}
 	}
@@ -186,9 +187,9 @@ func Init(
 			// 跳过执行也记录内容（§10.5）：下次不带 --no-hooks 仍需确认。
 			hooks.Seen(trusted, h)
 		} else if hooks.NeedConfirm(trusted, h) {
-			printHookNotice(os.Stdout, "post_init", m.Hooks.PostInit, "", "")
+			hooks.PrintNotice(os.Stdout, "post_init", m.Hooks.PostInit, "", "")
 			if !yes {
-				printHookAsk(os.Stdout) // T4-R2：--yes 预先确认时不打指引
+				hooks.PrintAsk(os.Stdout) // T4-R2：--yes 预先确认时不打指引
 			}
 			// 守卫是 ps != nil（而非 hooks.Interactive）：非 --interactive
 			// 时二者等价，--interactive 时信任门才第一次能在管道下被驱动
@@ -321,7 +322,7 @@ func Init(
 	// 快照写侧挂点（§21.5）：EnsureGitExcluded 是最后一个可触发 cleanup() 回删
 	// 的步骤——此后写快照，回删窗口零孤儿；钩子失败不回删，快照照常与已落盘
 	// base 一致。best-effort：失败只警告（钩子段之前，钩子失败也不影响）。
-	writeSnapshotBestEffort(cacheRoot, st, rendered)
+	renderstore.WriteBestEffort(cacheRoot, st, rendered)
 
 	// 10. 跑 post_init（§6 第 10 步、§10.2 第 11 步语义）。失败不回删
 	//（§6.1）：渲染产物是正确的，只报告并给出退出码 3。
@@ -347,10 +348,10 @@ func Init(
 			}
 		}
 		unplanned, modified := hooks.Classify(before, after, planned, generated)
-		printHookRun(os.Stdout, "post_init", res)
-		printHookSideEffects(os.Stdout, unplanned, modified)
+		hooks.PrintRun(os.Stdout, "post_init", res)
+		hooks.PrintSideEffects(os.Stdout, unplanned, modified)
 		if res.ExitCode != 0 {
-			printHookFailure(os.Stdout, "post_init", m.Hooks.PostInit, res.ExitCode)
+			hooks.PrintFailure(os.Stdout, "post_init", m.Hooks.PostInit, res.ExitCode)
 			return &ExitError{Code: CodeHookFail, Silent: true, msg: "post_init 失败（exit 3）"}
 		}
 	}

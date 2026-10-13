@@ -67,6 +67,18 @@ func (s *promptSession) askLine(q string) (line string, eof bool, err error) {
 	return line, false, nil
 }
 
+// ConfirmTrust / AskConflict / Out 是 update.Interactive 接缝的三个导出转发
+// （§2.4；M1 落地为第 ⑥ 类登记变化）：纪律仍由 promptSession 内部独占——唯一
+// bufio.Reader、EOF 锁存都不外泄，管线只拿到判定结果与打印通道。
+func (s *promptSession) ConfirmTrust() (bool, error) { return s.confirm() }
+
+// AskConflict 转发 askYesNo：打印 q 后读一行，y/Y/yes/YES（不区分大小写）
+// 为真，其余与 EOF 为假。
+func (s *promptSession) AskConflict(q string) (yes, eof bool, err error) { return s.askYesNo(q) }
+
+// Out 返回交互输出的唯一通道（冲突表头/EOF 行的落点，§19.4）。
+func (s *promptSession) Out() io.Writer { return s.out }
+
 // askYesNo 打印 q 后读一行；y/Y/yes/YES（不区分大小写）为真，其余与 EOF 为假。
 func (s *promptSession) askYesNo(q string) (yes bool, eof bool, err error) {
 	line, eof, err := s.askLine(q)

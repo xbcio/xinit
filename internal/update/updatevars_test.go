@@ -1,4 +1,6 @@
-package cli
+package update
+
+// 来源：internal/cli/updatevars_test.go（§4.3 整文件随迁，I-2 实施批 T2/M1）。
 
 import (
 	"strings"

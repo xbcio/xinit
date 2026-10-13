@@ -1,8 +1,13 @@
-package cli
+package update
+
+// 来源：internal/cli/promptconflicts_test.go（§4.3 整文件随迁 + fakeInteractive
+// 改写，I-2 实施批 T2/M1）——断言面零改动，仅夹具构造改写。
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -244,7 +249,7 @@ func newCFFixture() *cfFixture {
 	}
 }
 
-func (f *cfFixture) run(ps *promptSession) (int, error) {
+func (f *cfFixture) run(ps Interactive) (int, error) {
 	return promptConflicts(ps, f.actions, f.conflicted, f.conflicts, f.base, f.ours, f.theirs, f.theirsRendered)
 }
 
@@ -253,7 +258,7 @@ func (f *cfFixture) run(ps *promptSession) (int, error) {
 func TestPromptConflictsFlow(t *testing.T) {
 	t.Run("y/n/回车组合", func(t *testing.T) {
 		f := newCFFixture()
-		ps, out := newTestSession("y\nn\n\n")
+		ps, out := newFakeInteractive("y\nn\n\n")
 		taken, err := f.run(ps)
 		if err != nil || taken != 1 {
 			t.Fatalf("taken=%d err=%v，期望 1/nil（只 a.txt 回答 y）", taken, err)
@@ -304,7 +309,7 @@ func TestPromptConflictsFlow(t *testing.T) {
 		// 只给一行 y：a.txt 改写后输入耗尽 ⇒ C3 打印一次（%d = 剩余可问条数）、
 		// 其余保持「保留本地」；EOF 锁存使第三条的提示不再打印。
 		f := newCFFixture()
-		ps, out := newTestSession("y\n")
+		ps, out := newFakeInteractive("y\n")
 		taken, err := f.run(ps)
 		if err != nil || taken != 1 {
 			t.Fatalf("taken=%d err=%v，期望 1/nil", taken, err)
@@ -337,7 +342,7 @@ func TestPromptConflictsFlow(t *testing.T) {
 		f.actions = []plan.Action{{Path: "c.txt", Kind: plan.ConflictKind}}
 		f.conflicted = map[string]bool{"c.txt": true}
 		f.conflicts = map[string][]byte{"c.txt": []byte("theirs-c\n")}
-		ps, out := newTestSession("y\n")
+		ps, out := newFakeInteractive("y\n")
 		taken, err := f.run(ps)
 		if err != nil || taken != 0 {
 			t.Fatalf("taken=%d err=%v，期望 0/nil", taken, err)
@@ -355,7 +360,7 @@ func TestPromptConflictsFlow(t *testing.T) {
 		f2.actions = []plan.Action{{Path: "c.txt", Kind: plan.ConflictBinary}}
 		f2.conflicted = map[string]bool{"c.txt": true}
 		f2.conflicts = map[string][]byte{"c.txt": []byte("theirs-c\n")}
-		ps2, out2 := newTestSession("\n")
+		ps2, out2 := newFakeInteractive("\n")
 		if _, err := f2.run(ps2); err != nil {
 			t.Fatalf("对照夹具不应出错：%v", err)
 		}
@@ -367,7 +372,8 @@ func TestPromptConflictsFlow(t *testing.T) {
 	t.Run("读错误上抛", func(t *testing.T) {
 		// 非 EOF 的读错误是普通错误（退 1）：带前缀上抛、保留根因，且不打印 C3。
 		f := newCFFixture()
-		ps := newPromptSession(errReader{}, &strings.Builder{})
+		ps, _ := newFakeInteractive("")
+		ps.err = errFakeRead
 		taken, err := f.run(ps)
 		if taken != 0 || err == nil {
 			t.Fatalf("taken=%d err=%v，期望 0/非 nil", taken, err)
@@ -375,12 +381,87 @@ func TestPromptConflictsFlow(t *testing.T) {
 		if !strings.Contains(err.Error(), "冲突交互读取失败: ") {
 			t.Errorf("错误应带前缀：%v", err)
 		}
-		if !errors.Is(err, errBoom) {
+		if !errors.Is(err, errFakeRead) {
 			t.Errorf("应保留根因（%%w）：%v", err)
 		}
-		var ee *ExitError
-		if errors.As(err, &ee) {
-			t.Errorf("读错误上抛是普通错误（退 1），不应是 ExitError：%v", err)
-		}
+		// 原 cli 侧断言「不应是 ExitError」在 update 包内不可表达：ExitError 是
+		// cli 侧进程级类型（§2.7 #1），本包不定义它 ⇒ 管线根本不可能返回它。
+		// 该断言的职责（读错误退 1、不被吞成终局码）由上面 err == nil 与
+		// errors.Is 两条 + cli 侧 Update 的错误包装路径共同兜住。
 	})
 }
+
+// fakeInteractive 是 Interactive 接缝的测试实现（§4.3/§2.4，v2-I-5）：answers
+// 逐行喂入（与 cli 的 newTestSession 同语义：输入耗尽 = EOF 且锁存，此后不再
+// 打印提问行）；err 非 nil 时每次提问打印后返回它（模拟非 EOF 读错误，与
+// promptSession.askLine 同序）；Out() 返回同一 buffer，供表头/提问行/EOF 行
+// 断言（生产侧对应 ps.out，§19.4）。
+type fakeInteractive struct {
+	answers []string
+	err     error
+	eof     bool
+	buf     bytes.Buffer
+}
+
+// newFakeInteractive 构造注入式会话：answers 逐行喂入，返回会话与输出缓冲
+// （缓冲与 Out() 同源，断言与原 cli 夹具逐字兼容）。
+func newFakeInteractive(answers string) (*fakeInteractive, *bytes.Buffer) {
+	f := &fakeInteractive{}
+	if answers != "" {
+		f.answers = strings.Split(strings.TrimSuffix(answers, "\n"), "\n")
+	}
+	return f, &f.buf
+}
+
+func (f *fakeInteractive) Out() io.Writer { return &f.buf }
+
+// AskConflict 与 promptSession.askLine/askYesNo 同序：先打印 q，再取答复；
+// EOF 锁存后不再打印（C3 计数断言依赖这一点）。
+func (f *fakeInteractive) AskConflict(q string) (yes, eof bool, err error) {
+	if f.eof {
+		return false, true, nil // 锁存：不打印
+	}
+	fmt.Fprint(&f.buf, q)
+	if f.err != nil {
+		return false, false, f.err // 提示已打印（同 askLine 的读错误路径）
+	}
+	line, eof := f.next()
+	if eof {
+		return false, true, nil
+	}
+	switch strings.ToLower(line) {
+	case "y", "yes":
+		return true, false, nil
+	}
+	return false, false, nil
+}
+
+// ConfirmTrust 供信任门用例（本文件不覆盖；语义与 ps.confirm 一致：锁存后
+// 直接按未确认返回）。
+func (f *fakeInteractive) ConfirmTrust() (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
+	if f.eof {
+		return false, nil
+	}
+	line, eof := f.next()
+	if eof {
+		return false, nil
+	}
+	return strings.ToLower(line) == "y" || strings.ToLower(line) == "yes", nil
+}
+
+// next 取下一行答复；耗尽即锁存 EOF（脚本无半行，半行规则不适用）。
+func (f *fakeInteractive) next() (string, bool) {
+	if len(f.answers) == 0 {
+		f.eof = true
+		return "", true
+	}
+	line := f.answers[0]
+	f.answers = f.answers[1:]
+	return line, false
+}
+
+// errFakeRead 是注入的读错误根因（替代 cli 侧 errBoom；断言 errors.Is 逐字保留）。
+var errFakeRead = errors.New("boom")

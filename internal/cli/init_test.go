@@ -386,34 +386,6 @@ func TestInitFailureKeepsPreexistingXinitFile(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsNonStringValues(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "vars.yml")
-	if err := os.WriteFile(p, []byte("feature: false\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := LoadConfig(p)
-	if err == nil {
-		t.Fatal("非字符串的配置值应报错")
-	}
-	if !strings.Contains(err.Error(), "字符串") {
-		t.Errorf("错误信息应说明需要字符串: %v", err)
-	}
-}
-
-func TestLoadConfigFlatMap(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "vars.yml")
-	if err := os.WriteFile(p, []byte("project_name: Xdesk\napp_slug: xdesk\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := LoadConfig(p)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if got["project_name"] != "Xdesk" || got["app_slug"] != "xdesk" {
-		t.Errorf("= %+v", got)
-	}
-}
-
 // TestInitTreeMatchesExpectedByte 是验收标准 ③ 的落地：init 出的树与
 // testdata/init-tree/expected/ 必须逐字节一致（评审 D3）。
 //

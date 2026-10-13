@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/xbcio/xinit/internal/update"
 )
 
 func newDiffCmd() *cobra.Command {
@@ -26,21 +28,22 @@ func newDiffCmd() *cobra.Command {
 	return cmd
 }
 
-// Diff 是 update 的只读镜像：同一个 runUpdate、同一个报告，只换标题。
+// Diff 是 update 的只读镜像：同一条管线、同一份报告，只换模式（报告头由
+// Mode 派生，§2.4——cli 不再事后覆盖 Header）。
 // 只读 ⇒ 不加锁（R12）；退出码 5/0（§11.5，不模拟 2）。
 func Diff(o UpdateOptions) error {
 	o.DryRun = true
-	rep, err := runUpdate(o)
+	o.mode = update.ModeDiff
+	rep, err := runReport(o)
 	if err != nil {
 		return err
 	}
-	rep.Header = "xinit diff"
 	rep.Print(os.Stdout)
-	if rep.ExitCode != CodeOK {
+	if code := codeOf(rep.Verdict); code != CodeOK {
 		return &ExitError{
-			Code:   rep.ExitCode,
+			Code:   code,
 			Silent: true,
-			msg:    fmt.Sprintf("diff 以退出码 %d 结束", rep.ExitCode),
+			msg:    fmt.Sprintf("diff 以退出码 %d 结束", code),
 		}
 	}
 	return nil

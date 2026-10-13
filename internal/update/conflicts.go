@@ -1,4 +1,6 @@
-package cli
+package update
+
+// 来源：internal/cli/promptconflicts.go（1:1 整文件搬迁，I-2 实施批 T2/M1）。
 
 import (
 	"fmt"
@@ -60,7 +62,7 @@ func acceptableConflicts(conflicted []string, actions []plan.Action) []string {
 // promptConflicts 是第 4b 步的问答循环（§19.4.4）：对每条可问路径按字节序问
 // 「改用模板版？」，回答 y 的就地改写动作与两个集合。返回被改写条数。
 // 可问集合为空时不打印任何文本。
-func promptConflicts(ps *promptSession, actions []plan.Action, conflicted map[string]bool,
+func promptConflicts(ps Interactive, actions []plan.Action, conflicted map[string]bool,
 	conflicts map[string][]byte, base, ours, theirs plan.Snap,
 	theirsRendered map[string][]byte) (int, error) {
 	askable := make([]string, 0, len(conflicted))
@@ -72,16 +74,16 @@ func promptConflicts(ps *promptSession, actions []plan.Action, conflicted map[st
 	if len(askable) == 0 {
 		return 0, nil
 	}
-	fmt.Fprintf(ps.out, conflictHeader, len(askable))
+	fmt.Fprintf(ps.Out(), conflictHeader, len(askable))
 	taken := 0
 	for i, p := range askable {
 		a := findAction(actions, p)
-		yes, eof, err := ps.askYesNo(fmt.Sprintf("%s（%s）改用模板版？[y/N] ", p, kindLabel(*a, conflicted[p]))) // C2
+		yes, eof, err := ps.AskConflict(fmt.Sprintf("%s（%s）改用模板版？[y/N] ", p, kindLabel(*a, conflicted[p]))) // C2
 		if err != nil {
 			return taken, fmt.Errorf("冲突交互读取失败: %w", err)
 		}
 		if eof {
-			fmt.Fprintf(ps.out, "输入已结束（EOF）：其余 %d 条冲突按「保留本地」处理（§19.4）。\n", len(askable)-i) // C3
+			fmt.Fprintf(ps.Out(), "输入已结束（EOF）：其余 %d 条冲突按「保留本地」处理（§19.4）。\n", len(askable)-i) // C3
 			return taken, nil
 		}
 		if !yes {

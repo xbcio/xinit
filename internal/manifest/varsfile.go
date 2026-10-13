@@ -1,4 +1,4 @@
-package cli
+package manifest
 
 import (
 	"fmt"
@@ -8,12 +8,15 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// LoadConfig 读一个扁平的 key-value 变量文件。
+// 来源：internal/cli/config.go（M0b 归位；I-2 实施批并入 T2）——符号体逐字
+// 不变，仅 LoadConfig → LoadVarsFile、包位 cli → manifest（§3-M0b 表指定目的地）。
+
+// LoadVarsFile 读一个扁平的 key-value 变量文件。
 //
 // 值必须是字符串：YAML 里写 feature: false 会被 goccy 静默转成字符串
 // "false"，而它在 {{ if .feature }} 里是真值。类型系统拦不住，必须
 // 显式查（与 manifest 的同名检查同一个理由）。
-func LoadConfig(path string) (map[string]string, error) {
+func LoadVarsFile(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("读取配置 %s: %w", path, err)

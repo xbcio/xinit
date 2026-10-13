@@ -10,6 +10,7 @@ import (
 
 	"github.com/xbcio/xinit/internal/fsutil"
 	"github.com/xbcio/xinit/internal/plan"
+	"github.com/xbcio/xinit/internal/update"
 )
 
 // contentsT 是整棵树的「相对路径 → 内容」快照（Noop 路径的字节不变断言用）。
@@ -53,11 +54,11 @@ func TestDiffMatchesRealRun(t *testing.T) {
 	beforeTree := readTreeT(t, proj)
 	beforeC := contentsT(t, proj)
 	stBefore := mustLoadState(t, proj)
-	rep, err := runUpdate(UpdateOptions{ProjectDir: proj, DryRun: true})
+	rep, err := runReport(UpdateOptions{ProjectDir: proj, DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.ExitCode != CodeChanged {
+	if codeOf(rep.Verdict) != CodeChanged {
 		t.Fatalf("有非 Noop → 5: %+v", rep)
 	}
 	if after := readTreeT(t, proj); !reflect.DeepEqual(beforeTree, after) {
@@ -65,11 +66,11 @@ func TestDiffMatchesRealRun(t *testing.T) {
 	}
 
 	// 2) 实跑
-	real, err := runUpdate(UpdateOptions{ProjectDir: proj})
+	real, err := runReport(UpdateOptions{ProjectDir: proj})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if real.ExitCode != CodePending {
+	if codeOf(real.Verdict) != CodePending {
 		t.Fatalf("含冲突的实跑应退出 2: %+v", real)
 	}
 
@@ -145,8 +146,8 @@ func TestDiffReportsSuspectedRename(t *testing.T) {
 	}
 	commitT(t, repo, map[string]string{"new.txt": "shared\ncontent\n"}, "v1.1.0")
 
-	want := []MigrationNote{{Old: "old.txt", New: "new.txt", Status: "migrated"}}
-	rep, err := runUpdate(UpdateOptions{ProjectDir: proj, DryRun: true})
+	want := []update.MigrationNote{{Old: "old.txt", New: "new.txt", Status: "migrated"}}
+	rep, err := runReport(UpdateOptions{ProjectDir: proj, DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,7 @@ func TestDiffReportsSuspectedRename(t *testing.T) {
 		t.Errorf("旧「疑似改名」节应随 §17.6 退役:\n%s", buf.String())
 	}
 
-	real, err := runUpdate(UpdateOptions{ProjectDir: proj})
+	real, err := runReport(UpdateOptions{ProjectDir: proj})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +209,7 @@ func TestDiffMigrationPairingAmbiguityNotReported(t *testing.T) {
 	}
 	commitT(t, repo, map[string]string{"c.txt": "same\n"}, "v1.1.0")
 
-	rep, err := runUpdate(UpdateOptions{ProjectDir: proj, DryRun: true})
+	rep, err := runReport(UpdateOptions{ProjectDir: proj, DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +224,7 @@ func TestDiffNoChangesExitsZero(t *testing.T) {
 		"a.txt":     "one\n",
 	})
 	commitT(t, repo, map[string]string{"a.txt": "two\n"}, "v1.1.0")
-	if _, err := runUpdate(UpdateOptions{ProjectDir: proj}); err != nil {
+	if _, err := runReport(UpdateOptions{ProjectDir: proj}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -243,19 +244,19 @@ func TestDiffBlockedShowsUnresolvedAndKeepsGoing(t *testing.T) {
 	})
 	writeFilesT(t, proj, map[string]string{"a.txt": "a\nB_ours\nc\n"})
 	commitT(t, repo, map[string]string{"a.txt": "a\nB_theirs\nc\n"}, "v1.1.0")
-	if _, err := runUpdate(UpdateOptions{ProjectDir: proj}); err != nil {
+	if _, err := runReport(UpdateOptions{ProjectDir: proj}); err != nil {
 		t.Fatal(err)
 	}
 
 	before := readTreeT(t, proj)
-	rep, err := runUpdate(UpdateOptions{ProjectDir: proj, DryRun: true})
+	rep, err := runReport(UpdateOptions{ProjectDir: proj, DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(rep.Blocked, []string{"a.txt"}) {
 		t.Errorf("Blocked = %v", rep.Blocked)
 	}
-	if rep.ExitCode != CodeChanged {
+	if codeOf(rep.Verdict) != CodeChanged {
 		t.Errorf("仍应给出 5（有非 Noop）: %+v", rep)
 	}
 	if len(rep.Actions) == 0 {

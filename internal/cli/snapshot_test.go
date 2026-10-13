@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/xbcio/xinit/internal/state"
+	"github.com/xbcio/xinit/internal/update"
 )
 
 // ── 局部 helper（只服务快照写侧测试；夹具自证用） ─────────────────────────
@@ -131,11 +132,11 @@ func TestUpdateSnapshotUsesTheirsRendered(t *testing.T) {
 		"gen.txt": "g2\n",
 	}, "v1.1.0")
 
-	rep, err := runUpdate(UpdateOptions{ProjectDir: proj})
+	rep, err := runReport(UpdateOptions{ProjectDir: proj})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.ExitCode != CodeOK {
+	if codeOf(rep.Verdict) != CodeOK {
 		t.Fatalf("干净合并 + 跳过轮应无待解决项: %+v", rep)
 	}
 	if !slices.Contains(rep.Merged, "x.txt") {
@@ -233,11 +234,11 @@ func TestUpdatePendingRoundSkipsSnapshot(t *testing.T) {
 	renderDir := filepath.Join(cacheRoot, "render")
 	before := readTreeT(t, renderDir)
 
-	rep, err := runUpdate(UpdateOptions{ProjectDir: proj})
+	rep, err := runReport(UpdateOptions{ProjectDir: proj})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.ExitCode != CodePending {
+	if codeOf(rep.Verdict) != CodePending {
 		t.Fatalf("同点修改应入冲突轮（退出码 2）: %+v", rep)
 	}
 	if got := mustContent(t, proj, "b.txt"); got != "new-b\n" {
@@ -249,11 +250,11 @@ func TestUpdatePendingRoundSkipsSnapshot(t *testing.T) {
 
 	// 收敛轮：本地对齐到 theirs → 非 pending → 条目重写、anchor 更新。
 	writeFilesT(t, proj, map[string]string{"a.txt": "a\nB_theirs\nc\n"})
-	rep2, err := runUpdate(UpdateOptions{ProjectDir: proj})
+	rep2, err := runReport(UpdateOptions{ProjectDir: proj})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep2.ExitCode != CodeOK {
+	if codeOf(rep2.Verdict) != CodeOK {
 		t.Fatalf("对齐内容后应变干净轮: %+v", rep2)
 	}
 	m := readSnapManifestT(t, entry)
@@ -286,11 +287,11 @@ func TestSnapshotWriteFailureDoesNotFailCommand(t *testing.T) {
 	commitT(t, repo, map[string]string{"a.txt": "two\n"}, "v1.1.0")
 
 	// 对照轮（无故障）：拿到正常轮的退出码。
-	repCtl, err := runUpdate(UpdateOptions{ProjectDir: projCtl})
+	repCtl, err := runReport(UpdateOptions{ProjectDir: projCtl})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repCtl.ExitCode != CodeOK {
+	if codeOf(repCtl.Verdict) != CodeOK {
 		t.Fatalf("对照轮应成功: %+v", repCtl)
 	}
 
@@ -303,17 +304,17 @@ func TestSnapshotWriteFailureDoesNotFailCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var rep *UpdateReport
+	var rep *update.Report
 	var uerr error
 	stderrOut := captureStderrT(t, func() {
-		rep, uerr = runUpdate(UpdateOptions{ProjectDir: projFault})
+		rep, uerr = runReport(UpdateOptions{ProjectDir: projFault})
 	})
 	if uerr != nil {
 		t.Fatalf("快照写失败不得让命令报错: %v", uerr)
 	}
-	if rep.ExitCode != repCtl.ExitCode {
+	if codeOf(rep.Verdict) != codeOf(repCtl.Verdict) {
 		t.Errorf("ExitCode = %d（无故障对照 %d）——快照写失败不得影响命令退出码",
-			rep.ExitCode, repCtl.ExitCode)
+			codeOf(rep.Verdict), codeOf(repCtl.Verdict))
 	}
 	if got := mustContent(t, projFault, "a.txt"); got != "two\n" {
 		t.Errorf("快照写失败不影响命令正常落盘: a.txt = %q", got)
