@@ -272,6 +272,10 @@ func TestExecuteConflictsRebuild(t *testing.T) {
 // 必须给出逐条相等的拒绝集。M0a 之后两侧共用 forecast 单点，本测试钉的是
 // 「此后任一侧改回独立实现/改叶子调用即红」——它钉两侧漂移，不钉单点内部
 // 文案（单点内的文案语义由既有 check_test.go 与 txtar 面兜底）。
+//
+// M3a（R-M3a-4 合并增强）：扩输入域——追加第二组 fail-closed 与「不穿透」
+// 场景（悬空链接、指向项目内的中间段链接 R16、路径本身符号链接）；两径
+// 相等断言抽 mustExecuteAgreeWithForecast 供两组共用。
 func TestForecastMatchesExecuteRefusals(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir()
@@ -324,6 +328,65 @@ func TestForecastMatchesExecuteRefusals(t *testing.T) {
 		t.Fatalf("拒绝集应按 Path 排序且只含夹具构造的四条：%v", got)
 	}
 
+	mustExecuteAgreeWithForecast(t, dir, changes, predicted)
+	// 拒绝之外的路径照常落盘（§9.3 不中止其余路径）——确认执行确实走到了写段。
+	if got := mustContent(t, dir, "ok.txt"); got != "o" {
+		t.Errorf("ok.txt = %q", got)
+	}
+
+	// 第二组（M3a 扩输入域）：fail-closed 与「不穿透」三变体——悬空链接
+	// （EvalSymlinks 失败）、指向项目内的中间段链接（R16）、路径本身是链接。
+	dir2 := t.TempDir()
+	if err := os.Symlink("nowhere", filepath.Join(dir2, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir2, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(dir2, "in-link")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir2, "real.txt", "x", 0o644)
+	if err := os.Symlink("real.txt", filepath.Join(dir2, "alias.txt")); err != nil {
+		t.Fatal(err)
+	}
+	changes2 := Changes{
+		Writes: map[string][]byte{
+			"dangling/x.txt": []byte("a"),
+			"in-link/f.txt":  []byte("b"),
+			"alias.txt":      []byte("c"),
+			"fresh.txt":      []byte("d"), // 干净路径：不得被牵连
+		},
+	}
+	predicted2, err := Forecast(dir2, changes2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 夹具自检：三类拒绝都真出现（否则相等断言会退化为空洞通过）。
+	for _, want := range []struct{ path, reasonContains string }{
+		{"dangling/x.txt", "无法安全解析"},
+		{"in-link/f.txt", "符号链接"},
+		{"alias.txt", "符号链接"},
+	} {
+		r, ok := refusalFor(t, predicted2, want.path)
+		if !ok || !strings.Contains(r.Reason, want.reasonContains) {
+			t.Fatalf("第二组夹具自检失败：%s 应被拒且理由含 %q，got %+v", want.path, want.reasonContains, r)
+		}
+	}
+	if got := refusalPaths(predicted2); !slices.Equal(got, []string{"alias.txt", "dangling/x.txt", "in-link/f.txt"}) {
+		t.Fatalf("第二组拒绝集应按 Path 排序且只含三条：%v", got)
+	}
+	mustExecuteAgreeWithForecast(t, dir2, changes2, predicted2)
+	if got := mustContent(t, dir2, "fresh.txt"); got != "d" {
+		t.Errorf("fresh.txt = %q", got)
+	}
+}
+
+// mustExecuteAgreeWithForecast 断言 Execute 的拒绝集与 Forecast 预测逐条相等
+// （Path/Reason 逐字且同序）——M3a 起供 TestForecastMatchesExecuteRefusals
+// 的两组输入共用（R-M3a-4 合并增强的抽取）。
+func mustExecuteAgreeWithForecast(t *testing.T, dir string, changes Changes, predicted []Refusal) {
+	t.Helper()
 	res, err := Execute(dir, changes)
 	if err != nil {
 		t.Fatal(err)
@@ -337,10 +400,6 @@ func TestForecastMatchesExecuteRefusals(t *testing.T) {
 			t.Errorf("第 %d 条拒绝漂移（Path/Reason 须逐字且同序）：\nExecute =%+v\nForecast=%+v",
 				i, res.Refusals[i], predicted[i])
 		}
-	}
-	// 拒绝之外的路径照常落盘（§9.3 不中止其余路径）——确认执行确实走到了写段。
-	if got := mustContent(t, dir, "ok.txt"); got != "o" {
-		t.Errorf("ok.txt = %q", got)
 	}
 }
 
