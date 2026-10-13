@@ -120,9 +120,10 @@ func isConflictAction(a *plan.Action, conflicted map[string]bool) bool {
 	return false
 }
 
-// refineDecision 是 P6（§2.2）：迁移分类（块 16）+ accept 后处理（块 17）+
-// Acceptable 派生（块 18）——就地补全/改写 d 与 b（b 经单点方法 a.restore）。
-// rep.Migrations/Acceptable 依 R-M2-3 留守 Run（值经 d）。§2.6 行内旧名
+// refineDecision 是 P6（§2.2）：迁移分类（块 16）+ accept 后处理（块 17）
+// ——就地补全/改写 d 与 b（b 经单点方法 a.restore）。
+// rep.Migrations 依 R-M2-3 留守 Run（值经 d）；rep.Acceptable 由 report()
+// 经 derivedFields 单点派生（批末回写）。§2.6 行内旧名
 // refineAccept 与本名不一致（批末回写；task-5-report.md 备案）。
 func refineDecision(s *session, t *Template, b *Base, o *Ours, d *Decision, a *AcceptRewrite) error {
 	// 8a. 路径迁移分类（§17）：动作表后处理——可迁移对改写为 Delete+Merge 并注入 merged。
@@ -168,8 +169,7 @@ func refineDecision(s *session, t *Template, b *Base, o *Ours, d *Decision, a *A
 	}
 
 	// --accept 可用集：冲突全集里非 ConflictKind 的路径（打 accept 命令用）。
-	// 经单点（I17 第三消费者顺带收敛）：与 report() 两处同一表达式出处。
-	_, _, d.Acceptable = derivedFields(d)
+	// 由 report() 经 derivedFields 单点实时派生（I17；批末回写删除缓存字段）。
 	return nil
 }
 

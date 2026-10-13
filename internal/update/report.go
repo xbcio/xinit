@@ -154,7 +154,7 @@ func report(s *session, t *Template, b *Base, o *Ours, d *Decision, g *Gate, w *
 
 	rep.Actions = d.Actions
 	// 派生字段单点（I17/I18）：conflicted/conflictFiles/acceptable 的唯一
-	// 表达式出处（decide.go derivedFields——与 P6 的 d.Acceptable 同式）。
+	// 表达式出处（decide.go derivedFields 单点）。
 	rep.Conflicted, rep.ConflictFiles, rep.Acceptable = derivedFields(d)
 	// conflicts/ 内容条目 ⊆ 冲突全集（ConflictKind 且 theirs 缺失时无条目）：
 	// 报告据此决定是否打印「参考：conflicts/」行（评审 E1/m-3）。实跑写入的

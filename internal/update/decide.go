@@ -24,7 +24,6 @@ type Decision struct {
 	Conflicted map[string]bool   // 全集合（含 ConflictKind；I11）
 	Conflicts  map[string][]byte // ⊆ Conflicted 的内容条目（I21）
 	Migrations []MigrationNote   // §17.6（P6 补）
-	Acceptable []string          // §10.3（P6 补；I17）
 }
 
 // hooksRun（§4.2）：未给 --no-hooks 且清单声明了 post_update。
@@ -208,8 +207,7 @@ func execConclusion(a plan.Action, base, ours, theirs plan.Snap) (bool, bool) {
 }
 
 // derivedFields 是派生字段的单点重算（I17/I18，M3a）：Conflicted/ConflictFiles/
-// Acceptable 的唯一表达式出处——report() 主装配、taken 段重算与 P6 的
-// d.Acceptable 落值共用。内部序固定：conflicted 先于 acceptable（后者依赖它；
+// Acceptable 的唯一表达式出处——report() 主装配与 taken 段重算共用。内部序固定：conflicted 先于 acceptable（后者依赖它；
 // ConflictFiles 与两者无依赖，居中不变）。
 func derivedFields(d *Decision) (conflicted, conflictFiles, acceptable []string) {
 	conflicted = sortedStringKeys(d.Conflicted)
