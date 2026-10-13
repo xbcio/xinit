@@ -5,8 +5,8 @@ package update
 // 声明（§2.3、§2.6 M2 布局：update.go = 包文档/Input/IO/Mode/Verdict/Run）；
 // Interactive 已随 P0 迁 session.go、模板侧 helper 随 P1 迁 template.go、
 // base 装载随 P2 阶段化、ours 快照随 P3 迁 ours.go（M2a/T4）；accept 预检随
-// P4 迁 accept.go（M2b/T5）。M2 拆阶段进行中：块 1-13 已抽，块 14-32 仍逐字
-// 留在 Run（bridge 兜住引用，R-M2-2）。
+// P4 迁 accept.go、plan/merge 分类随 P5 迁 decide.go（M2b/T5）。M2 拆阶段
+// 进行中：块 1-15 已抽，块 16-32 仍逐字留在 Run（bridge 兜住引用，R-M2-2）。
 
 import (
 	"fmt"
@@ -127,7 +127,7 @@ func Run(in Input) (*Report, error) {
 	projectDir, st, cacheRoot, ps := s.dir, s.st, s.cacheRoot, s.interactive
 	src, m, vars, theirsRendered, newSrc, theirsSnap := t.Src, t.Manifest, t.Vars, t.Rendered, t.SrcOf, t.Snap
 	baseSnap := b // 别名引用：后半（块 14-32）的就地改写语义不变——baseSnap 与 b 是同一对象
-	oursSnap, oursBytes, pruned := o.Snap, o.Bytes, o.Prune
+	oursSnap, oursBytes := o.Snap, o.Bytes
 
 	a, err := rewriteAccept(s, b, o, in.Accept)
 	if err != nil {
@@ -135,21 +135,18 @@ func Run(in Input) (*Report, error) {
 	}
 	acceptOlds, acceptSet := a.Olds, a.Set
 
-	// hooksRun（§4.2）：未给 --no-hooks 且清单声明了 post_update。
-	hooksRun := !in.NoHooks && m.Hooks.PostUpdate != ""
-	actions := plan.Plan(baseSnap.Metas, oursSnap, theirsSnap, pruned, hooksRun)
-	rep.Actions = actions
-
-	// 8. merge 分类（§10.2 第 3 步；R3/R19）——就地改写 actions 的元素
-	merged, conflicted, conflicts, err := classifyMerges(actions, baseSnap, oursSnap, oursBytes, theirsSnap, theirsRendered)
+	d, err := buildDecision(s, t, b, o, a, hooksRun(s, t))
 	if err != nil {
 		return nil, err
 	}
-	rep.Conflicted = sortedStringKeys(conflicted)
+	rep.Actions = d.Actions
+	rep.Conflicted = sortedStringKeys(d.Conflicted)
 	// conflicts/ 内容条目 ⊆ 冲突全集（ConflictKind 且 theirs 缺失时无条目）：
 	// 报告据此决定是否打印「参考：conflicts/」行（评审 E1/m-3）。实跑写入的
 	// 条目与 c.Conflicts 一致（apply.rebuildConflicts 全量重建），无需另取。
-	rep.ConflictFiles = sortedStringKeys(conflicts)
+	rep.ConflictFiles = sortedStringKeys(d.Conflicts)
+	actions, merged, conflicted, conflicts := d.Actions, d.Merged, d.Conflicted, d.Conflicts
+	hooksRun := hooksRun(s, t)
 
 	// 8a. 路径迁移分类（§17）：动作表后处理——可迁移对改写为 Delete+Merge 并注入 merged。
 	mignotes, err := classifyMigrations(projectDir, actions, baseSnap, oursSnap, oursBytes, theirsSnap, theirsRendered, newSrc, st, merged)
