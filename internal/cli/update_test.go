@@ -54,6 +54,11 @@ func mustContent(t *testing.T, dir, rel string) string {
 
 // captureStdoutT 捕获 f 执行期间写到 os.Stdout 的全部输出（报告断言用；
 // 报告走 stdout、错误走返回值的同一次运行内对照）。
+//
+// f() panic 时由 defer 兜底还原 os.Stdout 并关掉 pipe 两端（fd 不泄漏）；
+// 正常路径行序不变——defer 里的 Close 是 double-close，忽略错误即可。注意
+// defer 不得把 pw.Close() 推迟到 io.ReadAll(pr) 之后：pw 未关时 ReadAll
+// 会阻塞（死锁），故下方显式 Close 保持原位。
 func captureStdoutT(t *testing.T, f func()) string {
 	t.Helper()
 	pr, pw, err := os.Pipe()
@@ -62,6 +67,11 @@ func captureStdoutT(t *testing.T, f func()) string {
 	}
 	oldStdout := os.Stdout
 	os.Stdout = pw
+	defer func() {
+		os.Stdout = oldStdout
+		pw.Close()
+		pr.Close()
+	}()
 	f()
 	os.Stdout = oldStdout
 	pw.Close()
@@ -71,6 +81,27 @@ func captureStdoutT(t *testing.T, f func()) string {
 		t.Fatal(err)
 	}
 	return string(out)
+}
+
+// TestCaptureStdoutTRestoresOnPanic 钉 N2（park 清零）：f() panic 时
+// captureStdoutT 必须还原 os.Stdout——删掉函数里的 defer 兜底 ⇒ 本测试红
+// （os.Stdout 停在 pipe 写端，未被还原）。
+func TestCaptureStdoutTRestoresOnPanic(t *testing.T) {
+	before := os.Stdout
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("夹具前提：f() 应 panic 且被 recover 接住")
+			}
+		}()
+		captureStdoutT(t, func() { panic("boom") })
+	}()
+	if os.Stdout != before {
+		t.Errorf("panic 路径未还原 os.Stdout：got %v，want %v", os.Stdout, before)
+	}
+	if got := captureStdoutT(t, func() { fmt.Fprint(os.Stdout, "still works") }); got != "still works" {
+		t.Errorf("panic 之后捕获应仍工作：got %q，want %q", got, "still works")
+	}
 }
 
 // readTreeT 是整棵树的快照（相对路径 → "perm:content"），dry-run 的
