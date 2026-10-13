@@ -122,7 +122,7 @@ func TestUpdateAppliesTemplateChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	if codeOf(rep.Verdict) != CodeOK {
-		t.Fatalf("ExitCode = %d，报告 = %+v", codeOf(rep.Verdict), rep)
+		t.Fatalf("codeOf(rep.Verdict) = %d，报告 = %+v", codeOf(rep.Verdict), rep)
 	}
 	if !slices.Equal(rep.Written, []string{"b.txt", "c.txt"}) {
 		t.Errorf("Written = %v，want [b.txt c.txt]", rep.Written)
@@ -375,7 +375,7 @@ func TestUpdateDryRunBaseRecoveryDoesNotWrite(t *testing.T) {
 	// 重建结果照常进内存：a.txt 的 base 参与 plan（base=one、ours=one、
 	// theirs=two → 写）；若恢复未进内存（base✗）会判冲突而不是写入。
 	if codeOf(rep.Verdict) != CodeChanged {
-		t.Errorf("ExitCode = %d，want %d", codeOf(rep.Verdict), CodeChanged)
+		t.Errorf("codeOf(rep.Verdict) = %d，want %d", codeOf(rep.Verdict), CodeChanged)
 	}
 	if !slices.Contains(rep.Written, "a.txt") {
 		t.Errorf("Written = %v，应含 a.txt（内存重建须照常参与 plan）", rep.Written)
@@ -404,7 +404,7 @@ func TestUpdateDeletesPathAndBacksUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	if codeOf(rep.Verdict) != CodeOK {
-		t.Fatalf("ExitCode = %d: %+v", codeOf(rep.Verdict), rep)
+		t.Fatalf("codeOf(rep.Verdict) = %d: %+v", codeOf(rep.Verdict), rep)
 	}
 	if !slices.Equal(rep.Deleted, []string{"gone.txt"}) {
 		t.Errorf("Deleted = %v", rep.Deleted)

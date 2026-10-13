@@ -258,7 +258,7 @@ func (r *Report) Print(w io.Writer) {
 				blockedAccept = true
 			}
 		}
-		// 被阻断的路径由 listConflicts 从磁盘枚举而来——conflicts/ 文件确实
+		// 被阻断的路径由 ListConflicts 从磁盘枚举而来——conflicts/ 文件确实
 		// 在，参考句成立。
 		fmt.Fprint(w, conflictExitsFor(true, blockedAccept, allKindConflicts(r.Blocked, r.Actions)))
 		if !r.DryRun {

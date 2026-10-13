@@ -191,10 +191,10 @@ func Init(
 			if !yes {
 				hooks.PrintAsk(os.Stdout) // T4-R2：--yes 预先确认时不打指引
 			}
-			// 守卫是 ps != nil（而非 hooks.Interactive）：非 --interactive
+			// 守卫是 ps != nil（而非 Interactive 接口判定）：非 --interactive
 			// 时二者等价，--interactive 时信任门才第一次能在管道下被驱动
 			//（§19.2.3；信任判据本身不变——仍须显式 y/yes）。走 ps.confirm：
-			// 会话已 EOF 锁存时省掉提问行、输出走 ps.out（M3/M4，M7）。
+			// 会话已 EOF 锁存时省掉提问行、输出走 ps.Out()（M3/M4，M7）。
 			ok := yes
 			if !ok && ps != nil {
 				var cerr error

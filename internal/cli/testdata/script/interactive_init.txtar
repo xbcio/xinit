@@ -21,7 +21,7 @@ stdout '产品显示名 \[Demo\]: 团队（可留空）: 组件名（必填）: 
 ! stdout '\[x\]: '
 # 信任门照旧，且第 4 行 y 被**同一个** reader 消费（§19.2.3 共享 reader）
 stdout '信任并执行？\[y/N\]'
-# §19.7 #5：信任门提问的通道证据（`？` 是 Confirm 的正文，与 printHookAsk 的
+# §19.7 #5：信任门提问的通道证据（`？` 是 Confirm 的正文，与 hooks.PrintAsk 的
 # 「信任并执行：…」指引行不混淆）
 ! stderr '信任并执行？'
 # 回答落地：生成内容（空答取 default、team 段为空）+ state.vars 逐字节

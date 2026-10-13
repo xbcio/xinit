@@ -313,7 +313,7 @@ func TestSnapshotWriteFailureDoesNotFailCommand(t *testing.T) {
 		t.Fatalf("快照写失败不得让命令报错: %v", uerr)
 	}
 	if codeOf(rep.Verdict) != codeOf(repCtl.Verdict) {
-		t.Errorf("ExitCode = %d（无故障对照 %d）——快照写失败不得影响命令退出码",
+		t.Errorf("codeOf(rep.Verdict) = %d（无故障对照 %d）——快照写失败不得影响命令退出码",
 			codeOf(rep.Verdict), codeOf(repCtl.Verdict))
 	}
 	if got := mustContent(t, projFault, "a.txt"); got != "two\n" {

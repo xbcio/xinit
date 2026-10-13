@@ -38,7 +38,7 @@ type Delivery struct {
 func deliver(s *session, b *Base, o *Ours, d *Decision, g *Gate) (*Delivery, error) {
 	w := &Delivery{}
 	// 13. 备份（§10.2 第 7 步、§10.1）：计划内会被写入或删除的路径；目标以
-	// oursSnap（Scan，不穿透软链）为准过滤——中间段是软链的路径（将被
+	// o.Snap（Scan，不穿透软链）为准过滤——中间段是软链的路径（将被
 	// CheckWrites 拒绝）不得进备份，否则 Backup 的穿透 Lstat 会错位备份
 	// 链后文件（裁定 U/Z）。
 	backupDir, err := apply.Backup(s.dir, s.now().Format("20060102-150405"), backupTargets(g.Changes, o.Snap))
@@ -54,7 +54,7 @@ func deliver(s *session, b *Base, o *Ours, d *Decision, g *Gate) (*Delivery, err
 	// 先取「写前检查的拒绝集」再落盘：被折叠拒绝/障碍物挡下的路径**没有被
 	// 覆盖**，§8.2 的另存义务只在真的发生覆盖时触发——既不写副本、也不进
 	// 报告。拒绝集原样来自 predictRefusals（与 Execute 步骤 1-2 同一组函数、
-	// 同一 changes），绝不手写近似判据：手写判据会开出「Execute 会写、却没
+	// 同一 g.Changes），绝不手写近似判据：手写判据会开出「Execute 会写、却没
 	// 另存」的窗口。
 	if slices.ContainsFunc(d.Actions, func(a plan.Action) bool { return a.OverwriteGenerated }) {
 		refusals, err := predictRefusals(s.dir, g.Changes)

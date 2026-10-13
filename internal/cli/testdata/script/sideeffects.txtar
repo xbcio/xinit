@@ -7,7 +7,7 @@ cp $WORK/hooks.yml $WORK/tpl/xinit.yml
 cd out
 
 xinit-code update --yes
-# 成功路径的输出节（评审 Minor-2：printHookOutput 头行与行缩进此前零覆盖）
+# 成功路径的输出节（评审 Minor-2：hooks.PrintOutput 头行与行缩进此前零覆盖）
 stdout 'post_update 输出（退出码 0）：'
 stdout '^  ok$'
 stdout '计划外副作用（1 条'
