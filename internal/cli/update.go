@@ -972,33 +972,11 @@ func backupTargets(c apply.Changes, oursSnap plan.Snap) []string {
 	return targets
 }
 
-// predictRefusals 是 dry-run 的只读预测：与 Execute 的前两步同判据
-// （删除的 §9.5、写前检查），只是不落盘——diff 因此能在不改任何东西的
-// 前提下报告折叠拒绝与障碍物。
+// predictRefusals 是 dry-run 的只读预测：经 apply.Forecast 单点，与 Execute
+// 的前两步同源（删除的 §9.5、写前检查），只是不落盘——diff 因此能在不改任何
+// 东西的前提下报告折叠拒绝与障碍物。
 func predictRefusals(projectDir string, c apply.Changes) ([]apply.Refusal, error) {
-	var out []apply.Refusal
-	deleteSet := make(map[string]bool, len(c.Deletes))
-	for _, rel := range c.Deletes {
-		ok, err := worktree.WithinResolvedRoot(projectDir, rel)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			out = append(out, apply.Refusal{
-				Path:   rel,
-				Reason: "删除路径解析后落在项目根之外（父路径有指向外部的符号链接）；请移走它，或把该路径写进 .xinit/prune.txt（§9.5）",
-			})
-			continue
-		}
-		deleteSet[rel] = true
-	}
-	refusals, err := apply.CheckWrites(projectDir, sortedStringKeys(c.Writes), deleteSet)
-	if err != nil {
-		return nil, err
-	}
-	out = append(out, refusals...)
-	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out, nil
+	return apply.Forecast(projectDir, c)
 }
 
 func refusalSet(refs []apply.Refusal) map[string]bool {

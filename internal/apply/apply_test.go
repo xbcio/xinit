@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xbcio/xinit/internal/fsutil"
@@ -264,6 +265,91 @@ func TestExecuteConflictsRebuild(t *testing.T) {
 	if !slices.Equal(res.Resolved, []string{"a.txt"}) {
 		t.Errorf("Resolved = %v", res.Resolved)
 	}
+}
+
+// TestForecastMatchesExecuteRefusals 是 I10 的防漂移回归闸（设计稿 §3-M0a，
+// 评审 WN-7）：dry-run 的拒绝预测（Forecast）与实际落盘（Execute 步骤 1-2）
+// 必须给出逐条相等的拒绝集。M0a 之后两侧共用 forecast 单点，本测试钉的是
+// 「此后任一侧改回独立实现/改叶子调用即红」。
+func TestForecastMatchesExecuteRefusals(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dir, "link-dir")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "blocker", "我是文件", 0o644)
+	writeFile(t, dir, "license", "用户的", 0o644)
+	writeFile(t, dir, "trash.txt", "旧", 0o644)
+
+	changes := Changes{
+		// 删除段 §9.5：父路径外指 → 拒绝；trash.txt 是放行的正常删除。
+		Deletes: []string{"link-dir/old.txt", "trash.txt"},
+		Writes: map[string][]byte{
+			"LICENSE":           []byte("模板"), // 折叠：未跟踪的 license 挡道
+			"blocker/child.txt": []byte("x"),  // 障碍物：父路径是常规文件
+			"link-dir/new.txt":  []byte("y"),  // 写入段 §9.5：父路径外指
+			"ok.txt":            []byte("o"),  // 干净路径：不得被牵连
+		},
+		ExecBits: map[string]bool{"LICENSE": false, "ok.txt": false},
+	}
+
+	// Forecast 是只读预测：先跑它、再跑 Execute——预测若动了盘，Execute 看到的
+	// 输入就与预测不同，两径相等这一断言本身即被破坏。
+	predicted, err := Forecast(dir, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "ok.txt")); !os.IsNotExist(err) {
+		t.Fatal("Forecast 不得落盘")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "trash.txt")); err != nil {
+		t.Fatalf("Forecast 不得落盘：%v", err)
+	}
+
+	// 夹具自检：四类拒绝都得真出现，且按 Path 排序（否则相等断言会退化为
+	// 对空集/单条的空洞通过）。
+	for _, want := range []struct{ path, reasonContains string }{
+		{"LICENSE", "折叠等价"},           // 折叠（§9.3）
+		{"blocker/child.txt", "常规文件"}, // 障碍物（§9.3）
+		{"link-dir/new.txt", "项目根之外"}, // 写入段 §9.5
+		{"link-dir/old.txt", "项目根之外"}, // 删除段 §9.5
+	} {
+		r, ok := refusalFor(t, predicted, want.path)
+		if !ok || !strings.Contains(r.Reason, want.reasonContains) {
+			t.Fatalf("夹具自检失败：%s 应被拒且理由含 %q，got %+v", want.path, want.reasonContains, r)
+		}
+	}
+	if got := refusalPaths(predicted); !slices.Equal(got, []string{"LICENSE", "blocker/child.txt", "link-dir/new.txt", "link-dir/old.txt"}) {
+		t.Fatalf("拒绝集应按 Path 排序且只含夹具构造的四条：%v", got)
+	}
+
+	res, err := Execute(dir, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Refusals) != len(predicted) {
+		t.Fatalf("拒绝集条数漂移：Execute=%d Forecast=%d\nExecute=%v\nForecast=%v",
+			len(res.Refusals), len(predicted), res.Refusals, predicted)
+	}
+	for i := range predicted {
+		if res.Refusals[i] != predicted[i] {
+			t.Errorf("第 %d 条拒绝漂移（Path/Reason 须逐字且同序）：\nExecute =%+v\nForecast=%+v",
+				i, res.Refusals[i], predicted[i])
+		}
+	}
+	// 拒绝之外的路径照常落盘（§9.3 不中止其余路径）——确认执行确实走到了写段。
+	if got := mustContent(t, dir, "ok.txt"); got != "o" {
+		t.Errorf("ok.txt = %q", got)
+	}
+}
+
+// refusalPaths 按顺序取拒绝集的 Path（夹具自检与相等断言的诊断用）。
+func refusalPaths(rs []Refusal) []string {
+	paths := make([]string, 0, len(rs))
+	for _, r := range rs {
+		paths = append(paths, r.Path)
+	}
+	return paths
 }
 
 // §10.4：冲突全清后连 .xinit/conflicts/ 目录一起消失（「存在即未解决冲突」）。

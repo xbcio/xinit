@@ -41,43 +41,22 @@ type Result struct {
 // 纯 exec 变更（R7）→ conflicts/ 重建（§10.4）。
 // 折叠拒绝与障碍物路径跳过、不中止其余路径（§9.3）；
 // IO 错误返回 error，已写内容保留（§10.2：没有回滚，备份可恢复）。
+//
+// 步骤 1-2 走 forecast 单点判定序列（与 Forecast 同源，dry-run 预测不会漂移）。
 func Execute(projectDir string, c Changes) (Result, error) {
 	var res Result
 	umask := currentUmask()
 
-	// 1. 删除路径先过 §9.5；只有真会删掉的删除才能让折叠检查放行——
-	//    否则「放行」会把写入打到仍然存在的旧条目上（折叠文件系统上丢数据）。
-	deletes := append([]string(nil), c.Deletes...)
-	sort.Strings(deletes)
-	liveDeletes := make([]string, 0, len(deletes))
-	for _, rel := range deletes {
-		ok, err := worktree.WithinResolvedRoot(projectDir, rel)
-		if err != nil {
-			return Result{}, err
-		}
-		if !ok {
-			res.Refusals = append(res.Refusals, Refusal{Path: rel, Reason: "删除路径解析后落在项目根之外（父路径有指向外部的符号链接）；请移走它，或把该路径写进 .xinit/prune.txt（§9.5）"})
-			continue
-		}
-		liveDeletes = append(liveDeletes, rel)
-	}
-	deleteSet := make(map[string]bool, len(liveDeletes))
-	for _, rel := range liveDeletes {
-		deleteSet[rel] = true
-	}
-
-	// 2. 写前检查（§9.3）
-	writes := sortedKeys(c.Writes)
-	refusals, err := CheckWrites(projectDir, writes, deleteSet)
+	// 1-2. 拒绝判定（§9.5 删除安全 + 写前检查）：与 Forecast 共用单点。
+	liveDeletes, writes, refusals, err := forecast(projectDir, c)
 	if err != nil {
 		return Result{}, err
 	}
-	res.Refusals = append(res.Refusals, refusals...)
+	res.Refusals = refusals
 	refused := make(map[string]bool, len(refusals))
 	for _, r := range refusals {
 		refused[r.Path] = true
 	}
-	sort.Slice(res.Refusals, func(i, j int) bool { return res.Refusals[i].Path < res.Refusals[j].Path })
 
 	// 3. 先删后写
 	for _, rel := range liveDeletes {
@@ -133,6 +112,55 @@ func Execute(projectDir string, c Changes) (Result, error) {
 		return Result{}, err
 	}
 	return res, nil
+}
+
+// forecast 是拒绝判定的唯一序列：执行（Execute 步骤 1-2）与预测（Forecast）
+// 共用，两侧不可能漂移。序列固定：
+//  1. 删除路径先过 §9.5；只有真会删掉的删除才能让折叠检查放行——
+//     否则「放行」会把写入打到仍然存在的旧条目上（折叠文件系统上丢数据）。
+//  2. 写前检查（§9.3），拒绝集合并后按 Path 排序。
+//
+// 返回执行后续步骤需要的中介（liveDeletes/writes）与拒绝集；
+// IO 错误原样上抛（§9.3 的路径拒绝不在此列）。
+func forecast(projectDir string, c Changes) (liveDeletes, writes []string, refusals []Refusal, err error) {
+	deletes := append([]string(nil), c.Deletes...)
+	sort.Strings(deletes)
+	liveDeletes = make([]string, 0, len(deletes))
+	for _, rel := range deletes {
+		ok, err := worktree.WithinResolvedRoot(projectDir, rel)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if !ok {
+			refusals = append(refusals, Refusal{Path: rel, Reason: "删除路径解析后落在项目根之外（父路径有指向外部的符号链接）；请移走它，或把该路径写进 .xinit/prune.txt（§9.5）"})
+			continue
+		}
+		liveDeletes = append(liveDeletes, rel)
+	}
+	deleteSet := make(map[string]bool, len(liveDeletes))
+	for _, rel := range liveDeletes {
+		deleteSet[rel] = true
+	}
+
+	writes = sortedKeys(c.Writes)
+	wr, err := CheckWrites(projectDir, writes, deleteSet)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	refusals = append(refusals, wr...)
+	sort.Slice(refusals, func(i, j int) bool { return refusals[i].Path < refusals[j].Path })
+	return liveDeletes, writes, refusals, nil
+}
+
+// Forecast 返回与 Execute 步骤 1-2 完全相同的拒绝集（删除段 §9.5 拒绝 +
+// 写前检查拒绝，按 Path 排序），但不落盘。dry-run 的拒绝预测与 overwritten
+// 落盘判据都经这里——唯一判定序列在 forecast，两径不会漂移。
+func Forecast(projectDir string, c Changes) ([]Refusal, error) {
+	_, _, refusals, err := forecast(projectDir, c)
+	if err != nil {
+		return nil, err
+	}
+	return refusals, nil
 }
 
 // writeMode 计算写入用的 mode（§10.1）：
