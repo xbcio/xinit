@@ -179,34 +179,31 @@ func Init(
 	}
 
 	// 4. 钩子信任确认（§6 第 4 步、§10.5）——在写任何文件之前。
+	//    编排单点 = hooks.ConfirmGate（I-2 M5）。
 	trusted := map[string]string{}
 	postInitWillRun := !noHooks && m.Hooks.PostInit != ""
 	if m.Hooks.PostInit != "" {
-		h := hooks.Hash(m.Hooks.PostInit)
-		if noHooks {
-			// 跳过执行也记录内容（§10.5）：下次不带 --no-hooks 仍需确认。
-			hooks.Seen(trusted, h)
-		} else if hooks.NeedConfirm(trusted, h) {
-			hooks.PrintNotice(os.Stdout, "post_init", m.Hooks.PostInit, "", "")
-			if !yes {
-				hooks.PrintAsk(os.Stdout) // T4-R2：--yes 预先确认时不打指引
-			}
-			// 守卫是 ps != nil（而非 Interactive 接口判定）：非 --interactive
-			// 时二者等价，--interactive 时信任门才第一次能在管道下被驱动
-			//（§19.2.3；信任判据本身不变——仍须显式 y/yes）。走 ps.confirm：
-			// 会话已 EOF 锁存时省掉提问行、输出走 ps.Out()（M3/M4，M7）。
-			ok := yes
-			if !ok && ps != nil {
-				var cerr error
-				if ok, cerr = ps.confirm(); cerr != nil {
-					return cerr
-				}
-			}
-			if !ok {
-				return &ExitError{Code: CodeNeedTrust, Silent: true,
-					msg: "需要信任确认（exit 4）"}
-			}
-			hooks.Consent(trusted, h, hookVersion(src))
+		// 守卫是 ps != nil（而非 Interactive 接口判定）：非 --interactive
+		// 时二者等价，--interactive 时信任门才第一次能在管道下被驱动
+		//（§19.2.3；信任判据本身不变——仍须显式 y/yes）。走 ps.confirm：
+		// 会话已 EOF 锁存时省掉提问行、输出走 ps.Out()（M3/M4，M7）。
+		var confirm func() (bool, error)
+		if ps != nil {
+			confirm = ps.confirm
+		}
+		declined, cerr := hooks.ConfirmGate(trusted, hooks.GateInput{
+			Name:    "post_init",
+			Block:   m.Hooks.PostInit,
+			Version: hookVersion(src),
+			Out:     os.Stdout,
+			Confirm: confirm,
+		}, noHooks, yes)
+		if cerr != nil {
+			return cerr
+		}
+		if declined {
+			return &ExitError{Code: CodeNeedTrust, Silent: true,
+				msg: "需要信任确认（exit 4）"}
 		}
 	}
 

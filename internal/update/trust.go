@@ -5,6 +5,7 @@ package update
 // trust.go 行；hookVersion 为该表未列项——按消费者 = trust 归此，登记）。
 // 阶段判据（§3-M2）：函数体与源区间逐字对应，差异仅「参数接入」「返回值包装」
 // 与附加裁定类——逐条见 task-6-report.md。
+// M5：编排内环抽至 hooks.ConfirmGate（本文件仅剩 update 侧差异）。
 
 import (
 	"io/fs"
@@ -16,38 +17,31 @@ import (
 )
 
 // trust 是 P8（§2.2）：信任确认（块 24）——bool = 终局（rc4，零写）。
+// 编排单点 = hooks.ConfirmGate（I-2 M5）；本函数只负责 update 侧差异：
+// trusted 非空保证、diff 懒求值、interactive 守卫、终局语义。
 func trust(s *session, t *Template, noHooks, yes bool) (bool, error) {
 	// 12. 信任确认（§10.2 第 6 步、§10.5）——在备份与任何写入之前。
 	if t.Manifest.Hooks.PostUpdate != "" {
 		if s.st.TrustedHooks == nil {
 			s.st.TrustedHooks = map[string]string{}
 		}
-		h := hooks.Hash(t.Manifest.Hooks.PostUpdate)
-		if noHooks {
-			// 跳过执行也记录内容（§10.5）：下次不带 --no-hooks 仍需确认。
-			hooks.Seen(s.st.TrustedHooks, h)
-		} else if hooks.NeedConfirm(s.st.TrustedHooks, h) {
-			oldVer, diff := hookDiffAgainstBase(s.st, s.cacheRoot, t.Manifest.Hooks.PostUpdate)
-			hooks.PrintNotice(s.io.Out, "post_update", t.Manifest.Hooks.PostUpdate, oldVer, diff)
-			if !yes {
-				hooks.PrintAsk(s.io.Out) // T4-R2：--yes 预先确认时不打指引
-			}
-			// 守卫是 interactive != nil（而非 Interactive 接口判定）：非 --interactive
-			// 时二者等价，--interactive 时信任门才第一次能在管道下被驱动
-			//（§19.2.3；信任判据本身不变——仍须显式 y/yes）。走 ConfirmTrust：
-			// 会话已 EOF 锁存时省掉提问行、输出走 io.Out（M3/M4，M7）。
-			ok := yes
-			if !ok && s.interactive != nil {
-				var cerr error
-				if ok, cerr = s.interactive.ConfirmTrust(); cerr != nil {
-					return false, cerr
-				}
-			}
-			if !ok {
-				return true, nil // 未做任何修改；Update() 特判此码（不打印动作报告）
-			}
-			hooks.Consent(s.st.TrustedHooks, h, hookVersion(t.Src))
+		// 守卫是 interactive != nil（而非 Interactive 接口判定）：非 --interactive
+		// 时二者等价，--interactive 时信任门才第一次能在管道下被驱动
+		//（§19.2.3；信任判据本身不变——仍须显式 y/yes）。
+		var confirm func() (bool, error)
+		if s.interactive != nil {
+			confirm = s.interactive.ConfirmTrust
 		}
+		return hooks.ConfirmGate(s.st.TrustedHooks, hooks.GateInput{
+			Name:    "post_update",
+			Block:   t.Manifest.Hooks.PostUpdate,
+			Version: hookVersion(t.Src),
+			Out:     s.io.Out,
+			Confirm: confirm,
+			PrepareDiff: func() (string, string) {
+				return hookDiffAgainstBase(s.st, s.cacheRoot, t.Manifest.Hooks.PostUpdate)
+			},
+		}, noHooks, yes)
 	}
 	return false, nil
 }
