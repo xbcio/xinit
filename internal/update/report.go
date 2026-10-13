@@ -122,6 +122,108 @@ type Report struct {
 	Verdict Verdict
 }
 
+// headerFor 派生报告头（可观测字符串，逐字不变）：diff 恒 "xinit diff"；
+// update 的 dry-run 轮带 --dry-run 后缀。cli 侧不再事后覆盖 Header
+// （§2.4 报告归属段，评审 IM-5）。
+func headerFor(mode Mode, dryRun bool) string {
+	if mode == ModeDiff {
+		return "xinit diff"
+	}
+	if dryRun {
+		return "xinit update --dry-run"
+	}
+	return "xinit update"
+}
+
+// report 是终局单点组装（§2.3 写者表「Report.*」行）：三个终局点各调一次
+// （§2.2 Run 骨架），只消费不推断——最终 Verdict 由 v 参数带入（gate /
+// 字面 VerdictNeedTrust / verdictOf 三处显式产生）。w == nil = 未走到 P9 的
+// 终局（①pending/dry-run、②needTrust）；w/h 非 nil = 终局③（实跑全字段）。
+func report(s *session, t *Template, b *Base, o *Ours, d *Decision, g *Gate, w *Delivery, v Verdict, h *HookOutcome) *Report {
+	rep := &Report{Header: headerFor(s.mode, s.dryRun)}
+	rep.DryRun = s.dryRun
+	rep.Source = s.st.Template.Source
+	rep.OldRevision = s.st.Template.Revision
+	rep.OldCommit = s.st.Template.Commit
+
+	rep.NewRevision = t.Src.Revision
+	rep.NewCommit = t.Src.Commit
+
+	rep.Degraded = b.Degraded
+	rep.Restored = b.Restored
+
+	rep.Actions = d.Actions
+	rep.Conflicted = sortedStringKeys(d.Conflicted)
+	// conflicts/ 内容条目 ⊆ 冲突全集（ConflictKind 且 theirs 缺失时无条目）：
+	// 报告据此决定是否打印「参考：conflicts/」行（评审 E1/m-3）。实跑写入的
+	// 条目与 c.Conflicts 一致（apply.rebuildConflicts 全量重建），无需另取。
+	rep.ConflictFiles = sortedStringKeys(d.Conflicts)
+	rep.Migrations = d.Migrations
+	rep.Acceptable = d.Acceptable
+	rep.Blocked = g.Blocked // 原第 4 步两行赋值折叠一行（值等价；D2 先例）
+	if g.Taken > 0 {
+		// 派生字段与两个 map 同步：按与创建时逐字相同的表达式重算
+		// （不逐字段手工增删，避免静默不一致）。
+		rep.Conflicted = sortedStringKeys(d.Conflicted)
+		rep.ConflictFiles = sortedStringKeys(d.Conflicts)
+		rep.Acceptable = acceptableConflicts(rep.Conflicted, d.Actions)
+	}
+
+	if v == VerdictNeedTrust { // 终局②：rc4（零写）——报告只带头部与决策派生
+		rep.Verdict = v
+		return rep
+	}
+	if w == nil { // 终局①：pending / dry-run
+		if v == VerdictPending {
+			// 早退轮同样「版本记录不推进」（第 9 步的推进根本不会走到）：报告
+			// 顶部的版本行必须跟 AR 注解，否则与下方待解决轮的报告自相矛盾。
+			rep.Pending = true
+			rep.Verdict = v
+			return rep
+		}
+		refused := refusalSet(g.Forecast)
+		rep.Refused = g.Forecast
+		rep.Written = keysExcept(g.Changes.Writes, refused)
+		rep.Deleted = except(g.Changes.Deletes, refused)
+		rep.Chmodded = chmodPredictions(g.Changes, refused)
+		rep.Merged = sortedStringKeys(d.Merged)
+		rep.Overwritten = overwrittenPaths(d.Actions, refused)
+		rep.Resolved = except(g.Existing, d.Conflicted)
+		rep.Verdict = v
+		return rep
+	}
+
+	// 终局③：实跑全字段（w/h 非 nil）
+	rep.BackupDir = w.BackupDir
+	rep.Overwritten = w.Overwritten
+	rep.Written = w.Result.Written
+	rep.Deleted = w.Result.Deleted
+	rep.Chmodded = w.Result.Chmodded
+	// rep.Conflicted 保持第 8 步的冲突全集（不覆盖为 res.Conflicts：后者只含
+	// 已写盘条目，会把 ConflictKind 且 theirs 缺失的冲突漏报成「冲突 0」——
+	// 评审 E1。conflicts/ 条目由 rep.ConflictFiles 单独承载）。
+	rep.Resolved = w.Result.Resolved
+	rep.Refused = w.Result.Refusals
+	rep.Merged = sortedStringKeys(d.Merged)
+
+	// 本轮是否仍有待解决项（冲突/折叠拒绝/障碍物）——决定第 9 步是否推进
+	// 模板版本与 commit，也决定第 19 步的退出码（§11.5）。冲突用第 8 步全集
+	// （评审 E1：res.Conflicts 只有已写盘条目，ConflictKind 且 theirs 缺失时
+	// 会漏算 → 退 0 且版本照推，绕开 D3 门禁）。
+	rep.Pending = w.Pending
+	if hooksRun(s, t) { // 门（函数重算；Name/Block 非零值域）
+		rep.HookName = "post_update"
+		rep.HookBlock = t.Manifest.Hooks.PostUpdate // m→t.Manifest
+	}
+	rep.HookExitCode = h.ExitCode
+	rep.HookOutput = h.Output
+	rep.HookUnplanned = h.Unplanned
+	rep.HookModified = h.Modified
+	rep.HookFailed = h.Failed
+	rep.Verdict = v
+	return rep
+}
+
 // Print 输出报告。行前缀（kindLabel）是稳定标识，供脚本 grep。
 func (r *Report) Print(w io.Writer) {
 	fmt.Fprintf(w, "%s: %s\n", r.Header, r.Source)
