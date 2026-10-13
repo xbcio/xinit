@@ -4,8 +4,9 @@ package update
 // 函数闭包；I-2 实施批 T2/M1）。本文件头部承载 Input/IO/Mode/Verdict 接缝
 // 声明（§2.3、§2.6 M2 布局：update.go = 包文档/Input/IO/Mode/Verdict/Run）；
 // Interactive 已随 P0 迁 session.go、模板侧 helper 随 P1 迁 template.go、
-// base 装载随 P2 阶段化、ours 快照随 P3 迁 ours.go（M2a/T4）。M2 拆阶段
-// 进行中：块 1-12 已抽，块 13-32 仍逐字留在 Run（bridge 兜住引用，R-M2-2）。
+// base 装载随 P2 阶段化、ours 快照随 P3 迁 ours.go（M2a/T4）；accept 预检随
+// P4 迁 accept.go（M2b/T5）。M2 拆阶段进行中：块 1-13 已抽，块 14-32 仍逐字
+// 留在 Run（bridge 兜住引用，R-M2-2）。
 
 import (
 	"fmt"
@@ -125,64 +126,15 @@ func Run(in Input) (*Report, error) {
 	// M2c 终局化时消除。
 	projectDir, st, cacheRoot, ps := s.dir, s.st, s.cacheRoot, s.interactive
 	src, m, vars, theirsRendered, newSrc, theirsSnap := t.Src, t.Manifest, t.Vars, t.Rendered, t.SrcOf, t.Snap
-	baseSnap := b // 别名引用：块 13-32 的就地改写（P4/P6 的 Metas/Bytes）语义不变
-	union, oursSnap, oursBytes, pruned := o.Union, o.Snap, o.Bytes, o.Prune
-	// 7b. --accept 预检与 base 重写（§10.3，在算 plan 之前）：把 P 的 base
-	// 快照条目换成 .xinit/conflicts/<P> 的内容——三方比较的 base 从此是
-	// 「用户上次看到并认可的那份」，而不是本次运行的 theirs（第五轮 D2）。
-	type acceptOld struct {
-		meta  plan.FileMeta
-		bytes []byte
-		had   bool // base 快照里原有该条目（Metas/Bytes 同源）
-	}
-	acceptOlds := map[string]acceptOld{}
-	acceptSet := map[string]bool{}
-	// prune 判定的候选集另算（T7 评审 Nit-3，§10.3 :906「P 已在 prune.txt
-	// 中」是字面承诺）：并集 ∪ in.Accept——陈旧 conflicts 项（P 已不在并集）
-	// 的字面 prune 行同样拒。**独立变量**：绝不可并入喂给 plan.Plan 的
-	// pruned（那会让 accept 路径凭空移出并集）。
-	acceptCand := append(append([]string{}, union...), in.Accept...)
-	prunedWithAccept, err := expandPrune(projectDir, acceptCand)
+	baseSnap := b // 别名引用：后半（块 14-32）的就地改写语义不变——baseSnap 与 b 是同一对象
+	oursSnap, oursBytes, pruned := o.Snap, o.Bytes, o.Prune
+
+	a, err := rewriteAccept(s, b, o, in.Accept)
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range in.Accept {
-		if acceptSet[p] {
-			continue
-		}
-		if !fsutil.ValidRelPath(p) {
-			return nil, fmt.Errorf("--accept %s：必须是 .xinit/conflicts/ 下的规范相对路径（不接受空串、绝对路径、.. 段、含 `\\` 或 `:` 或未规范化写法，§10.3）", p)
-		}
-		if prunedWithAccept[p] {
-			return nil, fmt.Errorf("--accept %s：该路径已在 .xinit/prune.txt 中，已脱离管理、无需 accept（§10.3）", p)
-		}
-		content, err := os.ReadFile(filepath.Join(projectDir, state.DirName, "conflicts", filepath.FromSlash(p)))
-		if err != nil {
-			return nil, fmt.Errorf("--accept %s：.xinit/conflicts/%s 不存在或不可读——--accept 只能声明「已解决的冲突」（§10.3）：%v", p, p, err)
-		}
-		old := acceptOld{bytes: baseSnap.Bytes[p]}
-		if m, ok := baseSnap.Metas[p]; ok {
-			old.meta, old.had = m, true
-		}
-		acceptOlds[p] = old
-		acceptSet[p] = true
-		binary := fsutil.IsBinary(content)
-		exec := false
-		if old.had {
-			exec = old.meta.Exec
-		} else if m, ok := oursSnap[p]; ok {
-			exec = m.Exec // 第五轮 F8：base✗ 取 ours.exec
-		}
-		baseSnap.Metas[p] = plan.FileMeta{
-			Kind:      render.KindRegular,
-			Exec:      exec,
-			Binary:    binary,
-			MixedEOL:  fsutil.DetectEOL(content) == fsutil.EOLMixed,
-			Generated: old.had && old.meta.Generated,
-			Hash:      fsutil.CompareHash(content, binary),
-		}
-		baseSnap.Bytes[p] = content
-	}
+	acceptOlds, acceptSet := a.Olds, a.Set
+
 	// hooksRun（§4.2）：未给 --no-hooks 且清单声明了 post_update。
 	hooksRun := !in.NoHooks && m.Hooks.PostUpdate != ""
 	actions := plan.Plan(baseSnap.Metas, oursSnap, theirsSnap, pruned, hooksRun)
