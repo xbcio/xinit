@@ -192,3 +192,6 @@ func (a *AcceptRewrite) restore(b *Base, act *plan.Action, p string) {
 		delete(b.Bytes, p)
 	}
 }
+
+// acceptDetachedNote 是 --accept 对「模板已删除该路径」的覆盖文案（§10.3）。
+const acceptDetachedNote = "已按 --accept 声明解决：模板已删除该路径，本轮脱离管理（不再有 base 记录；磁盘不动）"

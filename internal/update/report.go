@@ -2,6 +2,7 @@ package update
 
 // 来源：internal/cli/report.go 行 43-427（报告类型 + 打印族搬迁，I-2 实施批 T2/M1）。
 // 未搬：退出码常量 Code* 与 ExitError（§2.7 #1/#2，留 cli）。
+// M2c/T6：report() 终局组装与 headerFor 迁入（C5）；hookVersion 迁 trust.go（C6）。
 
 import (
 	"fmt"
@@ -11,7 +12,6 @@ import (
 	"github.com/xbcio/xinit/internal/apply"
 	"github.com/xbcio/xinit/internal/hooks"
 	"github.com/xbcio/xinit/internal/plan"
-	"github.com/xbcio/xinit/internal/template"
 )
 
 // conflictExitsMain 是出路一第一行（两种变体共用；§10.3：M3 起 --accept 真实
@@ -416,14 +416,4 @@ func hookBlockLines(s string) []string {
 		return nil
 	}
 	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
-}
-
-// hookVersion 是信任记录的版本值：git 源 = revision，dir 源 = 树 hash
-// （§4.3；dir 源 Revision 为空，用 Commit 保证记录非空——空串是 Seen 的
-// marker，两者不可混）。
-func hookVersion(src *template.Source) string {
-	if src.Revision != "" {
-		return src.Revision
-	}
-	return src.Commit
 }

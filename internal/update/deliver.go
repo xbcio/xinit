@@ -1,8 +1,9 @@
 package update
 
 // 来源：internal/update/update.go 的 Run 块 25-28（M2-P9 deliver 抽取；I-2
-// 实施批 T6/M2c）+ warnIfDirty/backupTargets/restoreRefused/overwrittenPaths
-// 整函数搬家（§2.6 deliver.go 行）。阶段判据（§3-M2）：函数体与源区间逐字
+// 实施批 T6/M2c）+ warnIfDirty/backupTargets/restoreRefused/overwrittenPaths/
+// joinNote 整函数搬家（§2.6 deliver.go 行；joinNote 按消费者 = restoreRefused
+// 实证归此，brief「migrate.go 优先」为未命中猜测）。阶段判据（§3-M2）：函数体与源区间逐字
 // 对应，差异仅「参数接入」「返回值包装」与附加裁定类（R-M2c-5）——逐条见
 // task-6-report.md。
 
@@ -177,4 +178,13 @@ func overwrittenPaths(actions []plan.Action, refused map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// joinNote 把追加文案并入 Note（与 plan 内部的 noteJoin 同形；Note 是
+// 用户可见文案，不做去重）。
+func joinNote(note, extra string) string {
+	if note == "" {
+		return extra
+	}
+	return note + "；" + extra
 }

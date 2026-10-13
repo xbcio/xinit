@@ -1,7 +1,8 @@
 package update
 
 // 来源：internal/update/update.go 的 Run 块 24（M2-P8 trust 抽取；I-2 实施批
-// T6/M2c）+ hasConfirmed/hookDiffAgainstBase 整函数搬家（§2.6 trust.go 行）。
+// T6/M2c）+ hasConfirmed/hookDiffAgainstBase/hookVersion 整函数搬家（§2.6
+// trust.go 行；hookVersion 为该表未列项——按消费者 = trust 归此，登记）。
 // 阶段判据（§3-M2）：函数体与源区间逐字对应，差异仅「参数接入」「返回值包装」
 // 与附加裁定类——逐条见 task-6-report.md。
 
@@ -96,4 +97,14 @@ func hookDiffAgainstBase(st *state.State, cacheRoot, newBlock string) (oldVer, d
 		return "", ""
 	}
 	return orNone(st.Template.Revision), d
+}
+
+// hookVersion 是信任记录的版本值：git 源 = revision，dir 源 = 树 hash
+// （§4.3；dir 源 Revision 为空，用 Commit 保证记录非空——空串是 Seen 的
+// marker，两者不可混）。
+func hookVersion(src *template.Source) string {
+	if src.Revision != "" {
+		return src.Revision
+	}
+	return src.Commit
 }
