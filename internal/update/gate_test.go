@@ -9,6 +9,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/xbcio/xinit/internal/apply"
+	"github.com/xbcio/xinit/internal/plan"
 	"github.com/xbcio/xinit/internal/state"
 )
 
@@ -54,5 +56,46 @@ func TestGateBlockedStopsBeforeDeliver(t *testing.T) {
 	}
 	if got := mustContent(t, dir, "a.txt"); got != "O\n" {
 		t.Errorf("blocked 轮不得写工作树：a.txt = %q，want %q", got, "O\n")
+	}
+}
+
+// TestChmodPredictionMatchesConclusion 钉 I23（§2.3 Chmodded / §22.6）：dry-run
+// 的 rep.Chmodded（chmodPredictions，gate.go）与真跑 res.Chmodded
+// （apply.Execute）集合相等——两径同源 execConclusion（decide.go），预测不
+// 漂移；夹具为纯 exec 变更（R7 通道），两径都必须产生同一记账。
+func TestChmodPredictionMatchesConclusion(t *testing.T) {
+	dir := t.TempDir()
+	writeFilesT(t, dir, map[string]string{"a.txt": "same\n"})
+	changes := apply.Changes{
+		Writes:    map[string][]byte{}, // 纯 exec 变更
+		ExecBits:  map[string]bool{"a.txt": true},
+		Conflicts: map[string][]byte{},
+	}
+	// 径 1：dry-run——经 report() 终局① 取 rep.Chmodded（预测径）。
+	refusals, err := predictRefusals(dir, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &Gate{Changes: changes, Forecast: refusals}
+	rep := report(reportSessionT(t, true), reportTplT(), &Base{}, &Ours{},
+		&Decision{Actions: []plan.Action{}, Merged: map[string][]byte{}, Conflicted: map[string]bool{}, Conflicts: map[string][]byte{}},
+		g, nil, VerdictChanged, nil)
+	// 径 2：真跑——apply.Execute 的 res.Chmodded。
+	res, err := apply.Execute(dir, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res.Chmodded, []string{"a.txt"}) {
+		t.Fatalf("夹具前置：纯 exec 变更应产生 chmod 记账；got %v", res.Chmodded)
+	}
+	if !slices.Equal(rep.Chmodded, res.Chmodded) {
+		t.Errorf("dry-run 预测 %v ≠ 真跑 %v（同源 execConclusion 不得漂移）", rep.Chmodded, res.Chmodded)
+	}
+	info, err := os.Stat(filepath.Join(dir, "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("a.txt 权限 = %v，want 0755", info.Mode().Perm())
 	}
 }

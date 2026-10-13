@@ -706,3 +706,55 @@ func TestLocalExecDiff(t *testing.T) {
 		}
 	}
 }
+
+// TestMigrationRewriteInjectsMergedAtomically 钉 I34（§17.3 改写段，migrate.go
+// 「P→Delete、Q→Merge+MigratedFrom」与 merged[Q] 注入同段）：两种结局下断言
+// 四元组同现/同不现——锁死中间态（不存在「动作改写了而 merged 未注入」或
+// 反向的可观测组合）。
+func TestMigrationRewriteInjectsMergedAtomically(t *testing.T) {
+	const p, q = "old/a.txt", "new/a.txt"
+	// 原子等价式：改写发生 ⟺ merged 注入。
+	checkAtomic := func(t *testing.T, f *migFixture, merged map[string][]byte) (rewritten, injected bool) {
+		t.Helper()
+		pa, qa := f.actions[1], f.actions[0] // newMigFixture 序：[Q, P]
+		rewritten = pa.Kind == plan.Delete && pa.NewBase == nil &&
+			qa.Kind == plan.Merge && qa.MigratedFrom == p
+		_, injected = merged[q]
+		if rewritten != injected {
+			t.Fatalf("中间态：动作改写=%v merged 注入=%v（必须同现/同不现）：\nP=%+v\nQ=%+v\nmerged 键=%v",
+				rewritten, injected, pa, qa, sortedStringKeys(merged))
+		}
+		return rewritten, injected
+	}
+
+	t.Run("同现（migrated：direct 迁移）", func(t *testing.T) {
+		ours := []byte("local\n")
+		f := newMigFixture([]byte("x\n"), ours, []byte("x\n"))
+		notes, merged := f.run(t, t.TempDir())
+		rewritten, injected := checkAtomic(t, f, merged)
+		if !rewritten || !injected {
+			t.Fatalf("成功迁移应改写并注入：rewritten=%v injected=%v", rewritten, injected)
+		}
+		if !bytes.Equal(merged[q], ours) {
+			t.Errorf("merged[Q] = %q，want %q（direct 原样字节）", merged[q], ours)
+		}
+		if len(notes) != 1 || notes[0].Status != "migrated" {
+			t.Errorf("notes = %+v", notes)
+		}
+	})
+
+	t.Run("同不现（fallback：三方冲突）", func(t *testing.T) {
+		f := newMigFixture([]byte("x\n"), []byte("ours\n"), []byte("theirs\n"))
+		notes, merged := f.run(t, t.TempDir())
+		rewritten, injected := checkAtomic(t, f, merged)
+		if rewritten || injected {
+			t.Fatalf("fallback 不得改写也不得注入：rewritten=%v injected=%v", rewritten, injected)
+		}
+		if f.actions[1].Kind != plan.KeepWarned || f.actions[0].Kind != plan.WriteTheirs {
+			t.Errorf("动作必须原样：P=%+v Q=%+v", f.actions[1], f.actions[0])
+		}
+		if len(notes) != 1 || notes[0].Status != "fallback" {
+			t.Errorf("notes = %+v", notes)
+		}
+	})
+}
