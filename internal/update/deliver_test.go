@@ -216,3 +216,30 @@ func TestIOInjectionRoutesWarnings(t *testing.T) {
 		t.Errorf("注入的 Err 通道应收到非 git 仓警告；got %q", errBuf.String())
 	}
 }
+
+// TestRenderWarningsRouteToInjectedErr 钉 template 侧警告族的注入通道（I-2
+// final-review O-4 建议落地；备案终裁 T8-O4）：11 点替换中 template 侧警告族
+// （template.go:159/174/188 三处）此前无行为断言、仅 grep 机械锁——本测试用
+// 「零命中替换规则」在真跑 Run 里触发 template.go:188 的按规则汇总警告，断言
+// 它经末位 errW 参数落在注入的 IO.Err 缓冲（改回 os.Stderr ⇒ 本测试红）。
+func TestRenderWarningsRouteToInjectedErr(t *testing.T) {
+	isolateCacheT(t)
+	const zeroHitYAML = "manifest_version: 1\n" +
+		"substitute:\n" +
+		"  - from: 'zzz-never'\n" +
+		"    to: 'yyy'\n" +
+		"    paths: ['a.txt']\n"
+	repo, commit := mkTemplateRepoT(t, map[string]string{"xinit.yml": zeroHitYAML, "a.txt": "new\n"})
+	dir := projectWithState(t, state.TemplateRef{Source: repo, Kind: "git", Revision: "main", Commit: commit},
+		map[string]state.FileState{"a.txt": textState("a.txt", "old\n")})
+	writeFilesT(t, dir, map[string]string{"a.txt": "old\n"})
+	writeFilesT(t, filepath.Join(dir, state.DirName, "base"), map[string]string{"a.txt": "old\n"})
+
+	var errBuf bytes.Buffer
+	if _, err := Run(Input{ProjectDir: dir, Revision: commit, IO: IO{Err: &errBuf}}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errBuf.String(), "替换规则") || !strings.Contains(errBuf.String(), "命中 0 次") {
+		t.Errorf("注入的 Err 通道应收到零命中替换规则警告；got %q", errBuf.String())
+	}
+}
