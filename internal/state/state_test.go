@@ -216,6 +216,7 @@ func TestLoadHintReadErrorIsNotMissing(t *testing.T) {
 	// 指引不得落回缺失句（误指 init/adopt），也不得说「可能已损坏」。
 	// 夹具用「state.json 做成目录」：os.ReadFile 稳定失败于非 notexist，且
 	// Linux 容器 root 下同样失败（chmod 000 会被 root 读穿，测试会假绿）。
+	// 尾段断言（评审 O-1）锁整句尾段，MV-4 类逃逸（删「文件权限或」）自此红。
 	dir := t.TempDir()
 	if err := os.MkdirAll(Path(dir), 0o755); err != nil {
 		t.Fatal(err)
@@ -236,6 +237,9 @@ func TestLoadHintReadErrorIsNotMissing(t *testing.T) {
 	}
 	if strings.Contains(hint, "可能已损坏") {
 		t.Errorf("读取错误不得沿用损坏句 = %q", hint)
+	}
+	if !strings.Contains(hint, "请修复文件权限或路径问题后重试") {
+		t.Errorf("读取错误指引尾段 = %q，want 含 %q", hint, "请修复文件权限或路径问题后重试")
 	}
 }
 
@@ -276,7 +280,7 @@ func TestLoadHintSplitsCorruptKinds(t *testing.T) {
 }
 
 func TestErrCorruptIsImpliesAs(t *testing.T) {
-	// 不变量（O-2 硬化）：LoadHint 用 errors.As 认损坏（state.go:62-64）；凡
+	// 不变量（O-2 硬化）：LoadHint 用 errors.As 认损坏（state.go:66-68）；凡
 	// Is 为真者 As 必真——今日三构造路径全经 corrupt() 成立；未来若新增不经
 	// corrupt() 的 ErrCorrupt 形态，本测试红。
 	kindOf := func(t *testing.T, err error, want corruptKind) {
