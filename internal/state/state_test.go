@@ -247,6 +247,66 @@ func TestLoadHintSplitsCorruptKinds(t *testing.T) {
 	}
 }
 
+func TestErrCorruptIsImpliesAs(t *testing.T) {
+	// 不变量（O-2 硬化）：LoadHint 用 errors.As 认损坏（state.go:62-64）；凡
+	// Is 为真者 As 必真——今日三构造路径全经 corrupt() 成立；未来若新增不经
+	// corrupt() 的 ErrCorrupt 形态，本测试红。
+	kindOf := func(t *testing.T, err error, want corruptKind) {
+		t.Helper()
+		if !errors.Is(err, ErrCorrupt) {
+			t.Errorf("errors.Is(err, ErrCorrupt) = false: %v", err)
+		}
+		var ce corruptError
+		if !errors.As(err, &ce) {
+			t.Fatalf("errors.As(err, &corruptError) = false —— Is 真而 As 假，等价性破裂: %v", err)
+		}
+		if ce.kind != want {
+			t.Errorf("As 取出的 kind = %v，want %v", ce.kind, want)
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		payload string
+		kind    corruptKind
+	}{
+		{"parse", "{ 不是 JSON\n", corruptParse},
+		{"version-too-new", `{"version": 2}`, corruptMismatch},
+		{"hash-algo-mismatch", `{"version": 1, "hash_algo": "md5"}`, corruptMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := Path(dir)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(tc.payload), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(dir)
+			if err == nil {
+				t.Fatalf("夹具前提：payload %s 应使 Load 失败", tc.payload)
+			}
+			kindOf(t, err, tc.kind)
+			// 五调用点同款包装（fmt.Errorf("%w\n%s", err, LoadHint(err))，
+			// 如 update/session.go:96）不得破 Is⇒As 等价。
+			kindOf(t, fmt.Errorf("%w\n%s", err, LoadHint(err)), tc.kind)
+		})
+	}
+
+	// 缺失：Is 假 ∧ As 假——缺失不是损坏类，也不携带 corruptError 形态。
+	_, err := Load(t.TempDir())
+	if err == nil {
+		t.Fatal("夹具前提：状态缺失应报错")
+	}
+	if errors.Is(err, ErrCorrupt) {
+		t.Errorf("缺失不应判为 ErrCorrupt: %v", err)
+	}
+	var ce corruptError
+	if errors.As(err, &ce) {
+		t.Errorf("缺失不应携带 corruptError: %v", err)
+	}
+}
+
 func TestLoadCorruptIsErrCorrupt(t *testing.T) {
 	// 「文件在但不可用」= 损坏类（评审 I-1）：解析失败与截断都归这里，
 	// 且不得被当成缺失。
