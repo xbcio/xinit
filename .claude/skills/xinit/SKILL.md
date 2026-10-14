@@ -1,5 +1,5 @@
 ---
-name: xinit-templateize
+name: xinit
 description: 把一个现有项目/模板库快速改造成 xinit 模板（编写 xinit.yml：vars / substitute / protected_literals / rename / generated / upstream / hooks），并以「渲染等价性对拍 + 异身份冒烟」双门禁验证。Use when：将某个库接入 xinit 作为模板、为仓库编写或审阅 xinit.yml、把旧机制模板（template/identity.yml）迁移到 xinit、为模板打版本 tag。
 ---
 
