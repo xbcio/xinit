@@ -182,7 +182,7 @@ func TestLoadMissing(t *testing.T) {
 		}
 	}
 	if errors.Is(err, ErrCorrupt) {
-		t.Errorf("缺失不属于损坏类，CLI 的两条指引靠这条界线分流: %v", err)
+		t.Errorf("缺失不属于损坏类，CLI 指引的缺失/损坏/读取错误三分流以此为界: %v", err)
 	}
 }
 
@@ -208,6 +208,34 @@ func TestLoadHintSplitsMissingAndCorrupt(t *testing.T) {
 	if !strings.Contains(hint, "解析失败（文件可能已损坏）") ||
 		!strings.Contains(hint, "如存在 .xinit/state.json.prev，可将其复制为 .xinit/state.json 后重试") {
 		t.Errorf("损坏指引 = %q", hint)
+	}
+}
+
+func TestLoadHintReadErrorIsNotMissing(t *testing.T) {
+	// R2（备案终裁）：state.json 在但读不动（EISDIR 等）既非缺失也非损坏——
+	// 指引不得落回缺失句（误指 init/adopt），也不得说「可能已损坏」。
+	// 夹具用「state.json 做成目录」：os.ReadFile 稳定失败于非 notexist，且
+	// Linux 容器 root 下同样失败（chmod 000 会被 root 读穿，测试会假绿）。
+	dir := t.TempDir()
+	if err := os.MkdirAll(Path(dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("夹具前提：state.json 为目录应使 Load 失败")
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("夹具前提：EISDIR 不应判为不存在: %v", err)
+	}
+	hint := LoadHint(err)
+	if !strings.Contains(hint, "无法读取 .xinit/state.json") {
+		t.Errorf("读取错误指引 = %q，want 含 %q", hint, "无法读取 .xinit/state.json")
+	}
+	if strings.Contains(hint, "这不是 xinit 项目") {
+		t.Errorf("读取错误不得落回缺失句（误指 init/adopt）= %q", hint)
+	}
+	if strings.Contains(hint, "可能已损坏") {
+		t.Errorf("读取错误不得沿用损坏句 = %q", hint)
 	}
 }
 

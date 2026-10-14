@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -19,7 +20,8 @@ const DirName = ".xinit"
 
 // ErrCorrupt 标记「state.json 在磁盘上，但不可用」这一类载入失败：解析失败、
 // 未知字段、版本高于本工具、hash 算法不匹配（均属「文件在但不可用」）。
-// 与「文件缺失」（fs.ErrNotExist）相对——CLI 据此在两条指引间分流（评审 I-1）；
+// 载入失败按指引三分流：缺失（fs.ErrNotExist）/ 损坏（本类）/ 其它读取错误
+// （权限、路径等，如 EISDIR）——CLI 据此分流（评审 I-1；第三支见 LoadHint）；
 // 类内成因细分（解析失败 vs 版本/算法错配）见 corruptKind。
 //
 // 它只是分类标记：不进错误消息（消息逐字是契约），用 errors.Is 判。
@@ -56,7 +58,9 @@ func corrupt(err error, kind corruptKind) error {
 // 不得分叉（分档在本函数内部完成，调用点不感知 kind）：缺失 → init/adopt
 // 指引（既有文案逐字）；损坏分两支——解析失败 →「可能已损坏」+ .prev 句；
 // 版本/算法错配 → 升级 xinit 指引 + .prev 备选（错配不是文件坏了，指引的
-// 第一动作应是升级，而非恢复旧状态）。
+// 第一动作应是升级，而非恢复旧状态）；兜底是**其它读取错误**（权限、路径
+// 等，非缺失、非损坏）→ 修复权限/路径指引——它不是缺失，不得落回缺失句
+// 误指 init/adopt（备案终裁·读取错误分支）。
 //
 // 「如存在 .xinit/state.json.prev」不查盘（简单优先）：句子自带条件，不做 IO。
 func LoadHint(err error) string {
@@ -67,7 +71,10 @@ func LoadHint(err error) string {
 		}
 		return "state.json 解析失败（文件可能已损坏）；如存在 .xinit/state.json.prev，可将其复制为 .xinit/state.json 后重试"
 	}
-	return "这不是 xinit 项目，或 .xinit/state.json 缺失；请从模板 init 生成，或用 xinit adopt 重建基线（§5.3）"
+	if errors.Is(err, fs.ErrNotExist) {
+		return "这不是 xinit 项目，或 .xinit/state.json 缺失；请从模板 init 生成，或用 xinit adopt 重建基线（§5.3）"
+	}
+	return "无法读取 .xinit/state.json（见上方错误）；请修复文件权限或路径问题后重试"
 }
 
 // State 是 .xinit/state.json 的全部内容。
