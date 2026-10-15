@@ -84,7 +84,7 @@ func SelectRevision(src, cacheRoot string, fetch bool, current string) (string, 
 	}
 	if !semver.IsValid(current) {
 		return "", fmt.Errorf(
-			"当前记录的 revision %q 不是 vX.Y.Z 格式，无法做版本比较；请显式指定 --revision（此后默认模式即可继续工作）",
+			"当前记录的 revision %q 不是 vX.Y.Z 格式，无法做版本比较；请显式指定 --revision <vX.Y.Z 形式的 tag>（对齐到该 tag 后，默认模式即可继续工作）",
 			current)
 	}
 	best := ""

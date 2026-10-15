@@ -4,7 +4,9 @@
 #      （记 tag ⇒ 可 semver 比较，无需先做显式对齐；对照记 "HEAD" 时必须先 update --revision）；
 #      默认取最高 tag（v1.1.0），不是未打 tag 的 HEAD（unreleased）——判别点；
 #   ③ 无效 ref：退 1、stderr 点名「模板中不存在版本」、dest 无任何产物（checkDestUsable
-#      先建出空目录，故 out2 存在但为空）。
+#      先建出空目录，故 out2 存在但为空）；
+#   ④ 不带 --revision 的 init 记 "HEAD"，随后不带旗标 update 退 1：选版报错须说明对齐目标
+#      必须是 vX.Y.Z 形式的 tag（锁 version.go 的报错文案；此前无任何测试锁这句）。
 # 模板是 $WORK 下的本地 git 工作仓（isGitRepo ⇒ 直用、不走镜像 ⇒ 无需缓存接线）。
 # 所有仓路径用 $WORK 绝对路径：脚本中途会 cd 进 out，相对路径会落到错误的 cwd。
 
@@ -56,6 +58,19 @@ exists out2
 exec sh -c 'test -z "$(ls -A out2)"'
 ! exists out2/.xinit
 ! exists out2/a.txt
+
+# ── ④ 不带 --revision 的 init 记 "HEAD"：随后不带旗标 update 退 1，且报错须说明对齐目标
+#    必须是 vX.Y.Z 形式的 tag（锁 version.go 的选版报错文案；对齐到分支名之后默认模式仍不可用）──
+xinit init --template $WORK/w --yes out3
+grep '"revision": "HEAD"' out3/.xinit/state.json
+exec git init -q $WORK/out3
+cd $WORK/out3
+xinit-code update
+stdout 'exit=1'
+stderr '不是 vX\.Y\.Z 格式'
+stderr '<vX\.Y\.Z 形式的 tag>'
+stderr '对齐到该 tag 后，默认模式即可继续工作'
+cd $WORK
 
 -- xinit.yml --
 manifest_version: 1
