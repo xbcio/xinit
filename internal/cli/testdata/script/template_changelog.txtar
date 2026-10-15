@@ -1,0 +1,117 @@
+# xinit template [--changelog] [--revision]：模板侧只读视图。
+#   ① 不带旗标：模板侧摘要（来源、记录版本、可用更新），不列变更；
+#   ② --changelog：按稳定 tag 分段、新版本在前，段内提交标题新→旧；预发布 tag 不单列；
+#   ③ --revision 限定终点，不越过它；
+#   ④ 已是最新 / 显式更旧目标（回退）各有明确措辞；
+#   ⑤ 错误路径：--revision 缺 --changelog、目标不存在、dir 源不适用 --changelog；
+#   ⑥ 全程只读：不产生 .xinit/lock，退出码只有 0 / 1。
+# 模板是 $WORK 下的本地 git 工作仓（直用、不走镜像）；路径一律用 $WORK 绝对路径。
+
+env GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=x@x GIT_COMMITTER_NAME=x GIT_COMMITTER_EMAIL=x@x
+env GIT_CEILING_DIRECTORIES=$WORK
+
+# 旗标与交叉引用已出现在 help 里
+xinit template --help
+stdout '--changelog'
+stdout '--revision'
+stdout '--fetch'
+stdout 'xinit changelog'
+
+# 模板：v1.0.0 → alpha（无 tag）→ beta（v1.1.0）→ rc（v1.2.0-rc1，预发布）→ gamma（v1.2.0）
+exec git -c init.defaultBranch=main init -q $WORK/w
+cp $WORK/xinit.yml $WORK/w/xinit.yml
+cp $WORK/v1.txt $WORK/w/a.txt
+exec git -C $WORK/w add -A
+exec git -C $WORK/w commit -qm 'init: first cut'
+exec git -C $WORK/w tag v1.0.0
+cp $WORK/v2.txt $WORK/w/a.txt
+exec git -C $WORK/w commit -qam 'feat: alpha'
+cp $WORK/v3.txt $WORK/w/a.txt
+exec git -C $WORK/w commit -qam 'feat: beta'
+exec git -C $WORK/w tag v1.1.0
+cp $WORK/v4.txt $WORK/w/a.txt
+exec git -C $WORK/w commit -qam 'chore: rc prep'
+exec git -C $WORK/w tag v1.2.0-rc1
+cp $WORK/v5.txt $WORK/w/a.txt
+exec git -C $WORK/w commit -qam 'fix: gamma'
+exec git -C $WORK/w tag v1.2.0
+
+xinit init --template $WORK/w --revision v1.0.0 --yes out
+cd $WORK/out
+
+# ── ① 摘要：有两个可用更新，不列变更 ──
+xinit template
+stdout '^xinit template: '
+stdout '模板侧:'
+stdout '记录版本: v1\.0\.0（commit '
+stdout '可用更新 2 个: v1\.1\.0, v1\.2\.0（最新 v1\.2\.0）'
+! stdout '变更'
+! stdout 'feat: beta'
+
+# ── ② --changelog：默认终点 = 最新稳定 tag v1.2.0（不是未打 tag 的 HEAD，也不是 rc1）──
+xinit template --changelog
+stdout '变更（v1\.0\.0 → v1\.2\.0）:'
+# 新版本在前
+stdout '(?s)\nv1\.2\.0\n.*\nv1\.1\.0\n'
+# 段内新→旧：v1.1.0 段里 beta 先于 alpha
+stdout '(?s)\nv1\.1\.0\n  - feat: beta\n  - feat: alpha\n'
+# rc1 的提交并入下一个稳定段，rc1 自己不单列
+stdout '(?s)\nv1\.2\.0\n  - fix: gamma\n  - chore: rc prep\n'
+! stdout '\nv1\.2\.0-rc1\n'
+# 起点之前的提交不出现
+! stdout 'init: first cut'
+
+# ── ③ --revision 限定终点，不越过它 ──
+xinit template --changelog --revision v1.1.0
+stdout '变更（v1\.0\.0 → v1\.1\.0）:'
+stdout '  - feat: beta'
+! stdout 'fix: gamma'
+
+# ── ⑤ 错误路径 ──
+! xinit template --revision v1.1.0
+stderr '--changelog'
+! xinit template --changelog --revision no-such-ref
+stderr '模板中不存在版本 "no-such-ref"'
+xinit-code template --changelog --revision no-such-ref
+stdout 'exit=1'
+
+# ── ⑥ 只读：没有锁、没有任何新文件 ──
+! exists .xinit/lock
+
+# ── ④ 升到最新后：已是最新；显式指定更旧目标：回退措辞 ──
+cd $WORK
+xinit init --template $WORK/w --revision v1.2.0 --yes latest
+cd $WORK/latest
+xinit template --changelog
+stdout '变更: 无（记录版本已是最新稳定版本 v1\.2\.0）'
+xinit template --changelog --revision v1.0.0
+stdout '比记录版本更旧'
+stdout '回退'
+! stdout 'feat: alpha'
+
+# ── ⑤ dir 源：摘要可用（无版本概念），--changelog 不适用 ──
+cd $WORK
+xinit init --template $WORK/dirtpl --yes fromdir
+cd $WORK/fromdir
+xinit template
+stdout 'dir 源：无版本概念'
+! xinit template --changelog
+stderr 'dir 源没有版本历史'
+! exists .xinit/lock
+
+-- xinit.yml --
+manifest_version: 1
+-- v1.txt --
+v1
+-- v2.txt --
+v2
+-- v3.txt --
+v3
+-- v4.txt --
+v4
+-- v5.txt --
+v5
+-- dirtpl/xinit.yml --
+manifest_version: 1
+-- dirtpl/a.txt --
+dir template

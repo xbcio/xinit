@@ -1,0 +1,40 @@
+# xinit changelog：显示 xinit 自身内嵌的变更日志。
+#   ① 无参输出全文；
+#   ② 给版本只输出该章节（1.0.0 / v1.0.0 等价），不带前言与其它版本；
+#   ③ 不存在的版本退 1，错误里点名该版本并列出可用版本；
+#   ④ 不依赖 cwd：在没有 .xinit、也不是 git 仓的目录里照常工作（只读、零写入）。
+# 脚本里的 xinit 由测试宿主注入真实的 CHANGELOG.md（模拟 main.go 的内嵌）。
+
+# ── ④ cwd 是空的 $WORK：既无项目状态也无 git ──
+! exists .xinit
+
+# ── ① 全文 ──
+xinit changelog
+stdout '^# 变更日志'
+stdout '^## \[1\.0\.0\] - '
+
+# ── ② 单个版本：带不带 v 等价；只含该章节 ──
+xinit changelog 1.0.0
+stdout '^## \[1\.0\.0\] - '
+! stdout '^# 变更日志'
+cp stdout bare.txt
+xinit changelog v1.0.0
+cmp stdout bare.txt
+
+# ── ③ 不存在的版本 ──
+! xinit changelog 9.9.9
+stderr '变更日志里没有版本 "9\.9\.9"'
+stderr '可用版本: .*1\.0\.0'
+xinit-code changelog 9.9.9
+stdout 'exit=1'
+
+# 多于一个参数同样是错误
+! xinit changelog 1.0.0 1.1.0
+
+# 全程零写入：前后各拍一次文件清单，逐字节比对（评审 M-3(e)——只查 .xinit
+# 存在与否是伪断言，该命令根本不认识这个路径）
+exec sh -c 'find . -type f ! -name "*snap*.txt" | LC_ALL=C sort > before.snap.txt'
+xinit changelog
+xinit changelog 1.0.0
+exec sh -c 'find . -type f ! -name "*snap*.txt" | LC_ALL=C sort > after.snap.txt'
+cmp before.snap.txt after.snap.txt

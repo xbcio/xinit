@@ -38,6 +38,38 @@ func cacheIsolationEnv(home string) [][2]string {
 	}
 }
 
+// repoChangelog 读仓库根的 CHANGELOG.md。路径取自本源文件的编译期位置
+// （runtime.Caller）：脚本里 xinit 子进程的 cwd 是脚本工作目录，相对路径不可用。
+func repoChangelog() (string, error) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", fmt.Errorf("无法定位测试源文件")
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "CHANGELOG.md"))
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// loadRepoChangelog 是 repoChangelog 的测试封装。
+func loadRepoChangelog(t *testing.T) string {
+	t.Helper()
+	doc, err := repoChangelog()
+	if err != nil {
+		t.Fatalf("读取仓库 CHANGELOG.md: %v", err)
+	}
+	return doc
+}
+
+// injectChangelog 模拟 main.go 的 go:embed 注入，让脚本里的 xinit 子进程
+// 也带着真实的变更日志（读不到则保持为空，只有依赖它的脚本会红）。
+func injectChangelog() {
+	if doc, err := repoChangelog(); err == nil {
+		Changelog = doc
+	}
+}
+
 func TestMain(m *testing.M) {
 	// 测试隔离（M10 前置）：把用户缓存目录（os.UserCacheDir 据 HOME/
 	// XDG_CACHE_HOME 推导）引到一次性暂存目录，Go 单测不再脏写真实缓存。
@@ -68,6 +100,7 @@ func TestMain(m *testing.M) {
 		// xinit：与真实二进制的退出码一致（testscript 的 ! 只能断言非零，
 		// 具体码用下面的 xinit-code）。
 		"xinit": func() {
+			injectChangelog()
 			if err := Execute(); err != nil {
 				os.Exit(exitCode(err))
 			}
@@ -76,6 +109,7 @@ func TestMain(m *testing.M) {
 		// 正常返回（进程退 0）——go-internal v1.16.0 没有断言具体退出码的
 		// 原生语法，这是 M2 验收（退出码 2/5）唯一可靠的断言方式。
 		"xinit-code": func() {
+			injectChangelog()
 			code := 0
 			if err := Execute(); err != nil {
 				code = exitCode(err)

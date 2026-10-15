@@ -49,6 +49,8 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newRestoreCmd())
 	root.AddCommand(newBackflowCmd())
 	root.AddCommand(newBackupCmd())
+	root.AddCommand(newTemplateCmd())
+	root.AddCommand(newChangelogCmd())
 	return root
 }
 

@@ -96,33 +96,11 @@ func runStatus(o StatusOptions) (*statusReport, error) {
 	}
 
 	// 第 1 段：模板侧。dir 源没有版本概念；git 源读本地镜像（--fetch 才联网）。
-	if st.Template.Kind == template.KindDir.String() {
-		rep.TemplateNote = "dir 源：无版本概念（commit 是树 hash）"
-	} else {
-		cacheRoot, err := template.DefaultCacheRoot()
-		if err != nil {
-			return nil, err
-		}
-		// allowClone=false：status 默认不联网、不创建缓存根（§11.4；评审
-		// M-1/F2）——镜像缺失走下面的降级说明，不静默 clone。
-		tags, err := template.ListTags(st.Template.Source, cacheRoot, o.Fetch, false)
-		switch {
-		case err != nil:
-			rep.TemplateNote = fmt.Sprintf(
-				"无法读取模板 tag（本地没有模板镜像缓存——status 不创建缓存、--fetch 只刷新已有镜像；"+
-					"先运行 xinit update 建立缓存后重试）：%v", err)
-		case !semver.IsValid(st.Template.Revision):
-			rep.TemplateNote = fmt.Sprintf(
-				"记录的 revision %q 不是 vX.Y.Z 格式，无法做版本比较（update 需要显式 --revision）",
-				st.Template.Revision)
-		default:
-			for _, t := range template.SemverTags(tags) {
-				if semver.Compare(t, st.Template.Revision) > 0 {
-					rep.NewerTags = append(rep.NewerTags, t)
-				}
-			}
-		}
+	side, err := inspectTemplateSide(st.Template, o.Fetch, "status")
+	if err != nil {
+		return nil, err
 	}
+	rep.NewerTags, rep.TemplateNote = side.NewerTags, side.Note
 
 	// 第 2 段：本地改动。精确列举 + 逐路径 hash（与 update 的 ours 快照同法）。
 	paths := sortedStringKeys(st.Files)
@@ -161,21 +139,69 @@ func runStatus(o StatusOptions) (*statusReport, error) {
 	return rep, nil
 }
 
+// templateSide 是报告里「模板侧」一段的数据，status 与 template 命令共用。
+type templateSide struct {
+	NewerTags []string // 高于记录版本的稳定 semver tag（升序）
+	Note      string   // 无法比较时的说明（dir 源、镜像未命中、revision 非 semver）
+}
+
+// inspectTemplateSide 只读地查看模板侧：dir 源没有版本概念；git 源读本地镜像，
+// fetch=true 才联网刷新已有镜像。
+//
+// cmdName 是调用方的命令名（"status" / "template"），只用于镜像缺失时把降级
+// 说明里的命令名说对——该文案为两个命令共用（措辞单一来源）。
+func inspectTemplateSide(ref state.TemplateRef, fetch bool, cmdName string) (templateSide, error) {
+	var side templateSide
+	if ref.Kind == template.KindDir.String() {
+		side.Note = "dir 源：无版本概念（commit 是树 hash）"
+		return side, nil
+	}
+	cacheRoot, err := template.DefaultCacheRoot()
+	if err != nil {
+		return side, err
+	}
+	// allowClone=false：默认不联网、不创建缓存根（§11.4；评审 M-1/F2）——
+	// 镜像缺失走降级说明，不静默 clone。
+	tags, err := template.ListTags(ref.Source, cacheRoot, fetch, false)
+	switch {
+	case err != nil:
+		side.Note = fmt.Sprintf(
+			"无法读取模板 tag（本地没有模板镜像缓存——%s 不创建缓存、--fetch 只刷新已有镜像；"+
+				"先运行 xinit update 建立缓存后重试）：%v", cmdName, err)
+	case !semver.IsValid(ref.Revision):
+		side.Note = fmt.Sprintf(
+			"记录的 revision %q 不是 vX.Y.Z 格式，无法做版本比较（update 需要显式 --revision）",
+			ref.Revision)
+	default:
+		for _, t := range template.SemverTags(tags) {
+			if semver.Compare(t, ref.Revision) > 0 {
+				side.NewerTags = append(side.NewerTags, t)
+			}
+		}
+	}
+	return side, nil
+}
+
+// printTemplateSide 输出「模板侧」一段（status 与 template 共用，措辞一处维护）。
+func printTemplateSide(w io.Writer, revision, commit string, side templateSide) {
+	fmt.Fprintf(w, "模板侧:\n")
+	fmt.Fprintf(w, "  记录版本: %s（commit %s）\n", orNone(revision), orNone(commit))
+	switch {
+	case side.Note != "":
+		fmt.Fprintf(w, "  %s\n", side.Note)
+	case len(side.NewerTags) == 0:
+		fmt.Fprintf(w, "  已是最新（没有更高的 semver tag）\n")
+	default:
+		fmt.Fprintf(w, "  可用更新 %d 个: %s（最新 %s）\n",
+			len(side.NewerTags), strings.Join(side.NewerTags, ", "), side.NewerTags[len(side.NewerTags)-1])
+	}
+}
+
 // Print 输出四段报告。行前缀（modified/generated/missing）是稳定标识。
 func (r *statusReport) Print(w io.Writer) {
 	fmt.Fprintf(w, "xinit status: %s\n", r.Source)
 
-	fmt.Fprintf(w, "模板侧:\n")
-	fmt.Fprintf(w, "  记录版本: %s（commit %s）\n", orNone(r.Revision), orNone(r.Commit))
-	switch {
-	case r.TemplateNote != "":
-		fmt.Fprintf(w, "  %s\n", r.TemplateNote)
-	case len(r.NewerTags) == 0:
-		fmt.Fprintf(w, "  已是最新（没有更高的 semver tag）\n")
-	default:
-		fmt.Fprintf(w, "  可用更新 %d 个: %s（最新 %s）\n",
-			len(r.NewerTags), strings.Join(r.NewerTags, ", "), r.NewerTags[len(r.NewerTags)-1])
-	}
+	printTemplateSide(w, r.Revision, r.Commit, templateSide{NewerTags: r.NewerTags, Note: r.TemplateNote})
 
 	fmt.Fprintf(w, "本地改动（相对 base）: %d 条\n", len(r.Modified))
 	for _, p := range r.Modified {
