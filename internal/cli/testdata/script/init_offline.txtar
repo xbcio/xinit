@@ -1,5 +1,5 @@
 [windows] skip '缓存接线为 darwin/Linux 形态；Windows 变体待真机'
-# init --offline 真离线（§21.12 候选收口）三场景：
+# init --offline 真离线（§21.12 候选收口）四场景：
 #   A 镜像命中 = 真离线可用：先不带 --offline 建立镜像 → 把裸仓源 mv 走（此后
 #     任何触源行为都会失败：clone 致命、fetch 只打 stderr 警告）→ 对新 dest 加
 #     --offline → 成功 ⇒ 只读镜像。`! stderr 更新模板镜像失败` 把 fetch 侧也锁
@@ -10,6 +10,12 @@
 #     allowClone 传回 true 时此场景会 clone 成功 ⇒ 必红（变异实证见任务报告）。
 #   C 对照组：同 B 条件（空缓存 + 源可达）去掉 --offline → 首次 clone 回退
 #     成功（R3：默认路径未越权收紧）。
+#   D --offline × --revision：模板打 tag v1.0.0 后再提交一个未打 tag 的 v2 内容，
+#     不带 --offline 刷新镜像（fetch --tags，镜像拿到 tag 与新提交）→ 裸仓源 mv
+#     走 → 离线 --revision v1.0.0 得 v1 内容且 state 记 tag（不带 --revision 的
+#     对照组得 v2，证明 tag 与 HEAD 内容不同、断言有判别力）；离线 --revision
+#     给镜像里没有的 ref → 硬错 rc=1、零产物。变异「--offline 时丢弃 revision」
+#     此前全绿（init --revision 批终审备案），本场景补上这个洞。
 # 缓存路径归一 preamble：darwin/Linux 收敛到 $WORK/cache/xinit（fresh cache 用
 # 单路径 rm -rf 覆盖两平台）；符号链接须建在 $WORK/cache 之后——悬挂符号链接
 # 会让 MkdirAll 得 EEXIST。
@@ -63,7 +69,44 @@ cmp fallback/a.txt $WORK/a.txt
 exists fallback/.xinit/base/a.txt
 exists $WORK/cache/xinit
 
+# ── 场景 D：--offline × --revision（离线选版取镜像里的 tag）──
+# 此刻缓存里的镜像停在 v1 提交。给模板打 tag（指向 v1 提交）并提交未打 tag 的 v2
+# 内容，推回裸仓；不带 --offline 的 init 触发 fetch --tags 刷新镜像，cmp 确认镜像
+# 确实拿到了新提交（断言只建立在观察到的行为上）；随后把裸仓源 mv 走。
+exec git -C $WORK/w tag v1.0.0
+cp $WORK/a2.txt $WORK/w/a.txt
+exec git -C $WORK/w commit -qam v2
+exec git -C $WORK/w push -q $WORK/tpl.git HEAD:refs/heads/main refs/tags/v1.0.0
+xinit init --template $WORK/tpl.git --yes refresh
+cmp refresh/a.txt $WORK/a2.txt
+mv $WORK/tpl.git $WORK/tpl.git.away
+
+# D1：离线 + --revision v1.0.0 → 成功，内容是 v1（不是 HEAD 的 v2），state 记 tag 原文。
+# 源已 mv 走：能成功只可能是镜像里有该 tag；`! stderr 更新模板镜像失败` 锁住 fetch=false。
+xinit init --template $WORK/tpl.git --offline --revision v1.0.0 --yes pinned
+stdout '已生成 1 个文件到'
+! stderr '更新模板镜像失败'
+cmp pinned/a.txt $WORK/a.txt
+grep '"revision": "v1.0.0"' pinned/.xinit/state.json
+! grep 'HEAD' pinned/.xinit/state.json
+
+# D1 对照：同条件不带 --revision → 取 HEAD 的 v2 内容、state 记 "HEAD"。
+# 若 pinned 的内容与它相同，上面的 cmp 就没有判别力；二者不同才算锁住 revision 透传。
+xinit init --template $WORK/tpl.git --offline --yes unpinned
+cmp unpinned/a.txt $WORK/a2.txt
+grep '"revision": "HEAD"' unpinned/.xinit/state.json
+
+# D2：离线 + 镜像里没有的 ref → 硬错 rc=1，发生在任何写入之前（目标目录由
+# checkDestUsable 先建出，故 bad 存在但无 a.txt、无 .xinit）。
+xinit-code init --template $WORK/tpl.git --offline --revision no-such-ref --yes bad
+stdout 'exit=1'
+stderr '模板中不存在版本 "no-such-ref"'
+! exists bad/a.txt
+! exists bad/.xinit
+
 -- xinit.yml --
 manifest_version: 1
 -- a.txt --
 v1 content
+-- a2.txt --
+v2 unreleased
