@@ -42,6 +42,12 @@ func ListTags(src, cacheRoot string, fetch, allowClone bool) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return listTagsAt(repoDir)
+}
+
+// listTagsAt 列出已定位仓库的全部 tag 短名（ListTags 与 BuildChangelog 共用，
+// 后者已自行定位 repoDir，不能再走一遍 fetch）。
+func listTagsAt(repoDir string) ([]string, error) {
 	// lstrip=2 而非 refname:short：分支与 tag 同名时 short 会回退成 "tags/<name>"，
 	// 静默丢掉该 tag（评审 Task 2 ；不变量 9）。
 	out, err := runGit(repoDir, "for-each-ref", "--format=%(refname:lstrip=2)", "refs/tags")
@@ -108,6 +114,11 @@ func IsAncestor(src, cacheRoot string, fetch bool, older, newer string) (bool, e
 	if err != nil {
 		return false, err
 	}
+	return isAncestorAt(repoDir, older, newer)
+}
+
+// isAncestorAt 是 IsAncestor 在已定位仓库上的部分（BuildChangelog 只读定位后复用）。
+func isAncestorAt(repoDir, older, newer string) (bool, error) {
 	for _, r := range []string{older, newer} {
 		if err := checkRefArg("rev", r); err != nil {
 			return false, err
@@ -117,7 +128,7 @@ func IsAncestor(src, cacheRoot string, fetch bool, older, newer string) (bool, e
 		"--end-of-options", older, newer)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err == nil {
 		return true, nil
 	}
