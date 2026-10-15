@@ -36,6 +36,7 @@ func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "xinit",
 		Short:         "根据模板项目初始化新项目",
+		Version:       versionString(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
