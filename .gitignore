@@ -1,6 +1,6 @@
 /xinit
 /bin
 
-# OMC 本地运行状态（.omc/skills/ 为可提交例外）
-/.omc/*
-!/.omc/skills/
+# OMC 本地运行状态（.omc/skills/ 为可提交例外；**/ 覆盖子目录里的 .omc）
+**/.omc/*
+!**/.omc/skills/
