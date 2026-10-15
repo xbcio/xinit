@@ -259,7 +259,7 @@ xinit adopt: /path/to/minimal-template@v1.1.0
 
 ## 4. 命令面
 
-`init` 与 `backflow <commit>` 以外，所有命令都作用于**当前目录**、没有位置参数（`restore <path>...` 除外——它的位置参数是项目内的记账相对路径）。
+`init`、`backflow <commit>` 与 `changelog [版本]` 以外，所有命令都作用于**当前目录**、没有位置参数（`restore <path>...` 除外——它的位置参数是项目内的记账相对路径；`changelog` 的位置参数是版本标签）。`changelog` 显示的是 xinit 自己的变更日志，不依赖当前目录。
 
 > 下表是旗标速查；**权威说明以 `xinit <命令> --help` 为准**。为便于阅读，表格里省略了 `--help` 原文中的内部章节号（如 `（§10.3）`，本 README 后面引用到的输出里也保留了这类编号——它们只是工具内部的文档索引，不影响使用）。
 
@@ -315,7 +315,53 @@ xinit adopt: /path/to/minimal-template@v1.1.0
 | --- | --- |
 | `--fetch` | 联网更新模板镜像缓存，并检查可用更新 |
 
-默认**不联网**、**不写任何文件**（包括 `.git/info/exclude`）。不带 `--fetch` 时恒为退出码 0（除非出错）。
+默认**不联网**、**不写项目内任何文件**（包括 `.git/info/exclude`；模板镜像存在时，缓存的镜像目录下会创建/删除一个临时锁文件）。不带 `--fetch` 时恒为退出码 0（除非出错）。
+
+### `xinit template` — 只读查看模板侧
+
+不带旗标时输出**模板侧摘要**：模板来源、项目记录的版本与 commit、比它更高的稳定 semver tag——与 `status` 的「模板侧」一段是同一份排版。想看「升级到新版本会带来什么」，加 `--changelog`：
+
+```
+$ xinit template --changelog
+xinit template: /path/to/tpl
+模板侧:
+  记录版本: v1.0.0（commit acc24f24f653f937cdc168f43ba8bbc94c7a4c0c）
+  可用更新 2 个: v1.1.0, v1.2.0（最新 v1.2.0）
+变更（v1.0.0 → v1.2.0）:
+
+v1.2.0
+  - fix: gamma
+  - chore: rc prep
+
+v1.1.0
+  - feat: beta
+  - feat: alpha
+```
+
+| 旗标 | 语义 |
+| --- | --- |
+| `--changelog` | 再列出记录版本到目标版本之间的变更 |
+| `--revision <ref>` | 变更区间的终点（tag / 分支 / commit；默认取最新稳定 tag；**须与 `--changelog` 联用**） |
+| `--fetch` | 联网刷新**已有的**模板镜像缓存 |
+
+变更的计算规则：
+
+- 区间是「记录的 commit（不含）到目标（含）」，**按稳定 semver tag 分段**，新版本在前；段内是该区间的提交标题（不含 merge 提交），新→旧。预发布 tag（如 `v1.2.0-rc1`）不单列，其提交并入下一个稳定段；同一 commit 上的多个稳定 tag 合并为一段。
+- `--revision` 给的不是稳定 tag（分支名、sha、`HEAD`、预发布 tag 如 `v1.2.0-rc1`）时，末段以你给的原文命名。
+- 记录版本不是 `vX.Y.Z`（例如 `init` 时没钉版本记成了 `HEAD`）时，区间标题的起点显示 8 位短 commit。
+- 区间里没有可列的内容时给出明确说明而不是空输出：记录版本已是最新稳定版本、已领先于最新稳定 tag、`--revision` 指的是更旧的版本（回退目标）、或两者不在同一条历史线上。
+- 分段顺序是版本序，不是拓扑序：若 tag 的历史位置与版本号不一致（例如维护分支上的回退 tag），个别段可能为空、个别提交可能在相邻段重复出现——都不报错，属可见降级。
+- 提交标题来自模板仓库（可能是第三方）：输出前会剥离控制字符（含 ESC 转义序列）和 Unicode 双向覆盖字符。
+
+**dir 源没有版本历史**，`--changelog` 直接报错；不带 `--changelog` 的摘要照常可用。默认**不联网**：只读本地镜像缓存，镜像缺失时摘要降级为说明、`--changelog` 报错（均不会克隆）。**只读**：不加项目锁、不写项目内任何文件（模板镜像存在时，缓存的镜像目录下会创建/删除一个临时锁文件）；退出码只用 0 / 1（见第 8 节）。
+
+xinit 自己的变更日志不在这里，见下一条 `xinit changelog`。
+
+### `xinit changelog [版本]` — 显示 xinit 自身的变更日志
+
+输出随二进制内嵌的 `CHANGELOG.md`：不带参数是全文；给出版本（`1.0.0` 或 `v1.0.0`，`Unreleased` 不区分大小写）只输出该版本的章节。版本不存在时报错并列出可用版本。
+
+不联网、不读 git、不依赖当前目录（在任何目录都能用），也不写任何文件。退出码 0 / 1。模板自己的变更历史见 `xinit template --changelog`。
 
 ### `xinit check` — 只读门禁检查
 
@@ -664,6 +710,8 @@ $ xinit update
 
 `backup prune` **只用 0 / 1（不新增码）**：0 = 完成（含无删除项）；1 = 错误（`--keep < 1`、不是 xinit 项目——这两者都零磁盘动作；以及删除失败）。
 
+`template` 与 `changelog` **只用 0 / 1（不新增码）**：0 = 报告已输出（含「没有可列的变更」）；1 = 错误（`--revision` 缺 `--changelog`、dir 源用 `--changelog`、镜像缺失下的 `--changelog`、目标版本不存在、模板没有任何稳定 tag 且未给 `--revision`、记录 commit 不在模板历史、`changelog` 的版本不存在）。「有可用更新」不是 5——5 是 `status --fetch` 专属的语义；要在脚本里判断有无更新请用 `status --fetch`。
+
 交互回答不引入新退出码：vars 采集中止（EOF）= 1、冲突默认回答 = 现状（2）、改用模板版 = 正常写入通道（收敛轮 0）、信任拒绝 = 4。
 
 ## 9. 回流
@@ -758,4 +806,4 @@ make check     # fmt + vet + test，提交前跑这个
 测试结构：
 
 - **单元测试**在各 `internal/*` 包里（渲染、清单、决策表、合并、状态、模板获取等）。
-- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（69 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`check`/`adopt`/`restore`/`backflow`/`backup prune` 的全流程（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
+- **端到端测试**在 `internal/cli/testdata/script/*.txtar`（71 个脚本，`go test ./internal/cli` 时执行）。每个脚本是一个真实的命令序列，在临时目录里跑 `init`/`update`/`diff`/`status`/`template`/`check`/`adopt`/`restore`/`backflow`/`backup prune` 的全流程（`changelog` 脚本不建项目、只验只读输出）（含冲突、钩子信任、生成物、备份、路径迁移、回流往返、退出码断言），脚本内用 `xinit` 与 `xinit-code` 两个命令调用同一入口 `Execute()`；`xinit-code` 会把退出码打成 `exit=N` 供断言。
