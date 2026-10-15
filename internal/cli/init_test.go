@@ -682,3 +682,122 @@ func TestInitOfflineMissingMirrorIsHardError(t *testing.T) {
 		t.Errorf("--offline 失败不得留下产物: %v", ents)
 	}
 }
+
+// mkRevisionTemplateT 建「v1.0.0 之后又有一次未打 tag 提交」的本地 git 模板
+// （isGitRepo ⇒ 直用工作仓，不走镜像、无需缓存接线）。a.txt 在 v1.0.0 是
+// "v1\n"、在 HEAD 是 "unreleased\n"：两版内容不同，断言才有判别力。
+// 返回 (模板源, v1.0.0 的 commit, HEAD 的 commit)。
+func mkRevisionTemplateT(t *testing.T) (src, v1Commit, headCommit string) {
+	t.Helper()
+	src, _ = mkTemplateRepoT(t, map[string]string{"xinit.yml": tmplYAML, "a.txt": "v1\n"})
+	runGitT(t, src, "tag", "v1.0.0")
+	writeFilesT(t, src, map[string]string{"a.txt": "unreleased\n"})
+	runGitT(t, src, "add", "-A")
+	runGitT(t, src, "commit", "-q", "-m", "unreleased")
+	return src,
+		runGitT(t, src, "rev-parse", "v1.0.0^{commit}"),
+		runGitT(t, src, "rev-parse", "HEAD")
+}
+
+// --revision 选版（重开 D2）：tag 钉住 v1.0.0，派生树是 v1 的内容、state 记 tag
+// 原文与该 tag 解引用后的 commit。判别力：若 revision 没透传到 template.Open
+// （或 state 仍写死 "HEAD"），内容会是 HEAD 的 "unreleased\n"、revision 会是 "HEAD"。
+func TestInitRevisionTagPinsVersion(t *testing.T) {
+	src, v1Commit, headCommit := mkRevisionTemplateT(t)
+	if v1Commit == headCommit {
+		t.Fatal("夹具失效：v1.0.0 与 HEAD 应是不同提交")
+	}
+	dest := t.TempDir()
+
+	if err := Init(dest, src, "", "v1.0.0", false, true, false, true, false); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dest, "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "v1\n" {
+		t.Errorf("a.txt = %q，want v1.0.0 的内容 %q", got, "v1\n")
+	}
+	if strings.Contains(string(got), "unreleased") {
+		t.Errorf("派生树混入了 HEAD 才有的内容: %q", got)
+	}
+	st := mustLoadState(t, dest)
+	if st.Template.Revision != "v1.0.0" {
+		t.Errorf("template.revision = %q, want %q", st.Template.Revision, "v1.0.0")
+	}
+	if st.Template.Commit != v1Commit {
+		t.Errorf("template.commit = %q, want v1.0.0 解引用后的 %q", st.Template.Commit, v1Commit)
+	}
+}
+
+// 默认不变（R2）：不给 revision ⇒ 取 HEAD、state 记 "HEAD"。与上一个用例同夹具，
+// 二者合起来才证明「给了才变、不给不变」。
+func TestInitDefaultRevisionIsHEAD(t *testing.T) {
+	src, _, headCommit := mkRevisionTemplateT(t)
+	dest := t.TempDir()
+
+	if err := Init(dest, src, "", "", false, true, false, true, false); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dest, "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "unreleased\n" {
+		t.Errorf("a.txt = %q，want HEAD 的内容 %q", got, "unreleased\n")
+	}
+	st := mustLoadState(t, dest)
+	if st.Template.Revision != "HEAD" {
+		t.Errorf("template.revision = %q, want %q", st.Template.Revision, "HEAD")
+	}
+	if st.Template.Commit != headCommit {
+		t.Errorf("template.commit = %q, want HEAD 的 %q", st.Template.Commit, headCommit)
+	}
+}
+
+// 无效 ref（R5）：template.Open 的 resolveCommit 报「模板中不存在版本」，发生在
+// 任何写入之前。checkDestUsable 先于 Open 执行、会把不存在的 dest 建出来，所以
+// 「零产物」的实况是 dest 存在但为空——这里用不存在的子路径固定该事实。
+func TestInitRevisionUnknownRefFailsBeforeWriting(t *testing.T) {
+	src, _, _ := mkRevisionTemplateT(t)
+	dest := filepath.Join(t.TempDir(), "out")
+
+	err := Init(dest, src, "", "no-such-ref", false, true, false, true, false)
+	if err == nil {
+		t.Fatal("无效 ref 应报错")
+	}
+	if !strings.Contains(err.Error(), "模板中不存在版本") {
+		t.Errorf("错误应含「模板中不存在版本」，实际: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no-such-ref") {
+		t.Errorf("错误应点名该 ref，实际: %v", err)
+	}
+	ents, rerr := os.ReadDir(dest)
+	if rerr != nil {
+		t.Fatalf("dest 应已由 checkDestUsable 建出（空目录）: %v", rerr)
+	}
+	if len(ents) != 0 {
+		t.Errorf("无效 ref 失败不得留下产物: %v", ents)
+	}
+}
+
+// dir 源静默忽略 revision（R3）：dir 源没有版本概念，Open 本就忽略该参数；
+// state.revision 保持空串，不报错、不告警。
+func TestInitRevisionIgnoredForDirSource(t *testing.T) {
+	tmpl := setupTemplate(t)
+	dest := t.TempDir()
+
+	if err := Init(dest, tmpl, "", "v9.9.9", false, true, false, true, false); err != nil {
+		t.Fatalf("dir 源带 revision 应被静默忽略: %v", err)
+	}
+	st := mustLoadState(t, dest)
+	if st.Template.Revision != "" {
+		t.Errorf("dir 源的 template.revision = %q, want 空串", st.Template.Revision)
+	}
+	if st.Template.Kind != "dir" {
+		t.Errorf("template.kind = %q, want %q", st.Template.Kind, "dir")
+	}
+}

@@ -33,6 +33,7 @@ func newInitCmd() *cobra.Command {
 	var (
 		templateSrc string
 		configPath  string
+		revision    string
 		offline     bool
 		noHooks     bool
 		force       bool
@@ -52,11 +53,12 @@ func newInitCmd() *cobra.Command {
 			if len(args) > 0 {
 				dest = args[0]
 			}
-			return Init(dest, templateSrc, configPath, "", offline, noHooks, force, yes, interactive)
+			return Init(dest, templateSrc, configPath, revision, offline, noHooks, force, yes, interactive)
 		},
 	}
 	cmd.Flags().StringVar(&templateSrc, "template", "", "模板来源（本地路径或 git URL，必填）")
 	cmd.Flags().StringVar(&configPath, "config", "", "变量文件（扁平 YAML）")
+	cmd.Flags().StringVar(&revision, "revision", "", "模板版本（tag / 分支 / commit；默认取模板默认分支的 HEAD；dir 源忽略）")
 	cmd.Flags().BoolVar(&offline, "offline", false, "不联网，只读本地模板镜像缓存；镜像缺失即报错（不会克隆）")
 	cmd.Flags().BoolVar(&noHooks, "no-hooks", false, "跳过 post_init 执行（仍记录本次内容，下次带钩子运行仍需确认）")
 	cmd.Flags().BoolVar(&force, "force", false, "允许在非空目录执行（仍不覆盖同名文件）")
