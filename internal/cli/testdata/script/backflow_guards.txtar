@@ -25,7 +25,7 @@ xinit init --template $WORK/tpl --yes nogit
 cd $WORK/nogit
 xinit-code backflow HEAD
 stderr '回流要求派生项目是 git 仓库（opt-in）'
-stderr 'README「3\.2 生成派生项目」'
+stderr 'README「3\.2 Create a derived project」'
 stdout 'exit=1'
 
 # ── 守卫 2：进行中操作——两分支（无法判定 ELOOP / merge 标记存在）──

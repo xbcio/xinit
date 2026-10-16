@@ -52,7 +52,7 @@ func Qualify(projectDir, commit string) (*Qualified, error) {
 	if _, err := runGit(projectDir, nil, "rev-parse", "--git-dir"); err != nil {
 		// %w 保真底层 git 错误：git 缺失/损坏时不能被读成「不在 git 仓库内」
 		// （那会把人引向同样失败的 git init）。
-		return nil, fmt.Errorf("回流要求派生项目是 git 仓库（opt-in）：%s 不在 git 仓库内（%w），README「3.2 生成派生项目」有这条 opt-in 说明（派生项目不必是 git 仓，回流只在 git 派生上可用）；请在该目录 git init，或放弃回流", projectDir, err)
+		return nil, fmt.Errorf("回流要求派生项目是 git 仓库（opt-in）：%s 不在 git 仓库内（%w），README「3.2 Create a derived project」有这条 opt-in 说明（派生项目不必是 git 仓，回流只在 git 派生上可用）；请在该目录 git init，或放弃回流", projectDir, err)
 	}
 	if err := checkNoOperationInProgress(projectDir); err != nil {
 		return nil, err
