@@ -7,6 +7,8 @@
 #      先建出空目录，故 out2 存在但为空）；
 #   ④ 不带 --revision 的 init 记 "HEAD"，随后不带旗标 update 退 1：选版报错须说明对齐目标
 #      必须是 vX.Y.Z 形式的 tag（锁 version.go 的报错文案；此前无任何测试锁这句）。
+#   ④b --revision 给分支名（记 "main" 原文）⇒ 默认模式同样不可用，同一句报错
+#      （备案清零：此前仅有评审手测；锁「别名 ref 非 vX.Y.Z ⇒ 首个 update 须显式 --revision」）。
 # 模板是 $WORK 下的本地 git 工作仓（isGitRepo ⇒ 直用、不走镜像 ⇒ 无需缓存接线）。
 # 所有仓路径用 $WORK 绝对路径：脚本中途会 cd 进 out，相对路径会落到错误的 cwd。
 
@@ -70,6 +72,17 @@ stdout 'exit=1'
 stderr '不是 vX\.Y\.Z 格式'
 stderr '<vX\.Y\.Z 形式的 tag>'
 stderr '对齐到该 tag 后，默认模式即可继续工作'
+cd $WORK
+
+# ── ④b 对齐到分支名（revision 记 "main" 原文）：默认 update 同样退 1、同一句选版报错 ──
+xinit init --template $WORK/w --revision main --yes out4
+grep '"revision": "main"' out4/.xinit/state.json
+exec git init -q $WORK/out4
+cd $WORK/out4
+xinit-code update
+stdout 'exit=1'
+stderr '不是 vX\.Y\.Z 格式'
+stderr '<vX\.Y\.Z 形式的 tag>'
 cd $WORK
 
 -- xinit.yml --
