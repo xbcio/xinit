@@ -216,7 +216,9 @@ func TestLoadHintReadErrorIsNotMissing(t *testing.T) {
 	// 指引不得落回缺失句（误指 init/adopt），也不得说「可能已损坏」。
 	// 夹具用「state.json 做成目录」：os.ReadFile 稳定失败于非 notexist，且
 	// Linux 容器 root 下同样失败（chmod 000 会被 root 读穿，测试会假绿）。
-	// 尾段断言（评审 O-1）锁整句尾段，MV-4 类逃逸（删「文件权限或」）自此红。
+	// 整句相等（备案清零）：此前只锁头/尾两段，连接段「（见上方错误）；」未被
+	// 锁——相等断言一并锁死；「不得落回缺失句/损坏句」由相等隐含。
+	// MV-4 类逃逸（删「文件权限或」）自此红。
 	dir := t.TempDir()
 	if err := os.MkdirAll(Path(dir), 0o755); err != nil {
 		t.Fatal(err)
@@ -229,17 +231,9 @@ func TestLoadHintReadErrorIsNotMissing(t *testing.T) {
 		t.Fatalf("夹具前提：EISDIR 不应判为不存在: %v", err)
 	}
 	hint := LoadHint(err)
-	if !strings.Contains(hint, "无法读取 .xinit/state.json") {
-		t.Errorf("读取错误指引 = %q，want 含 %q", hint, "无法读取 .xinit/state.json")
-	}
-	if strings.Contains(hint, "这不是 xinit 项目") {
-		t.Errorf("读取错误不得落回缺失句（误指 init/adopt）= %q", hint)
-	}
-	if strings.Contains(hint, "可能已损坏") {
-		t.Errorf("读取错误不得沿用损坏句 = %q", hint)
-	}
-	if !strings.Contains(hint, "请修复文件权限或路径问题后重试") {
-		t.Errorf("读取错误指引尾段 = %q，want 含 %q", hint, "请修复文件权限或路径问题后重试")
+	want := "无法读取 .xinit/state.json（见上方错误）；请修复文件权限或路径问题后重试"
+	if hint != want {
+		t.Errorf("读取错误指引 = %q，want 整句 %q", hint, want)
 	}
 }
 
