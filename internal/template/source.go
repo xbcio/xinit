@@ -40,7 +40,8 @@ type Source struct {
 
 // Open 打开一个模板源。
 //
-// revision 为空时用默认分支的 HEAD；dir 源忽略 revision（也不看 fetch/allowClone）。
+// revision 为空时用默认分支的 HEAD；dir 源忽略 revision（含以 '-' 开头的值——
+// 选项注入校验只发生在会触达 git 的路径；也不看 fetch/allowClone）。
 //
 // fetch 与 allowClone 组合决定联网与 clone 行为（两个 bool 都显式传，
 // 调用点即可看出该路径的承诺）：
@@ -53,14 +54,6 @@ type Source struct {
 //   - fetch=true → 已有镜像会更新到最新（联网失败不致命，警告后按本地缓存
 //     继续）；镜像缺失时按 allowClone 定（init 默认 true = 首次 clone）。
 func Open(src, revision, cacheRoot string, fetch, allowClone bool) (*Source, error) {
-	// revision 允许为空（空 = 用默认分支的 HEAD）：为空时不能过
-	// checkRefArg —— 它把空串一律当非法，那条规则是给必填引用名准备的。
-	if revision != "" {
-		if err := checkRefArg("revision", revision); err != nil {
-			return nil, err
-		}
-	}
-
 	info, statErr := os.Stat(src)
 	if statErr == nil && info.IsDir() {
 		if isGitRepo(src) || isBareRepo(src) {
@@ -133,6 +126,16 @@ func RepoDir(src, cacheRoot string, fetch bool) (string, error) {
 }
 
 func openGit(src, revision, cacheRoot string, fetch, allowClone bool) (*Source, error) {
+	// revision 允许为空（空 = 用默认分支的 HEAD）：为空时不能过
+	// checkRefArg —— 它把空串一律当非法，那条规则是给必填引用名准备的。
+	// 校验放在这里而非 Open 入口：只有会触达 git 的路径需要防选项注入，
+	// dir 源忽略 revision（含 '-' 开头的值；备案清零）。
+	if revision != "" {
+		if err := checkRefArg("revision", revision); err != nil {
+			return nil, err
+		}
+	}
+
 	// 镜像缺失是否允许首次 clone 由调用方定（见 Open doc 的三条组合）：
 	// init 不带 --offline 与 update/adopt/restore/backflow 传 true；init
 	// --offline 传 false（缺失即 ErrMirrorMissing）。

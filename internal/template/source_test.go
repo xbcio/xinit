@@ -143,8 +143,19 @@ func TestOpenDirSourceIgnoresRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dir 源应忽略 revision，实际报错: %v", err)
 	}
-	if s.Kind != KindDir {
-		t.Errorf("Kind = %v, want KindDir", s.Kind)
+	if s.Kind != KindDir || s.Revision != "" {
+		t.Errorf("Kind/Revision = %v/%q, want KindDir/空串", s.Kind, s.Revision)
+	}
+
+	// 备案清零（init-revision 终审 O-1）：'-' 开头的值同样忽略——选项注入
+	// 校验只发生在会触达 git 的路径，dir 源不触达。对照：git 源仍拒
+	//（TestOpenRejectsOptionLikeRevision）。
+	s2, err := Open(dir, "--weird", t.TempDir(), false, true)
+	if err != nil {
+		t.Fatalf("dir 源对 '-' 开头的 revision 同样应忽略，实际报错: %v", err)
+	}
+	if s2.Kind != KindDir || s2.Revision != "" {
+		t.Errorf("Kind/Revision = %v/%q, want KindDir/空串", s2.Kind, s2.Revision)
 	}
 }
 
