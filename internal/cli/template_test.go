@@ -220,22 +220,27 @@ func TestTemplateChangelogWordingBranches(t *testing.T) {
 		t.Errorf("互不为祖先应给出明确措辞:\n%s", out)
 	}
 
-	// 空段：版本序与拓扑序不一致——v2.0.0 打在祖先提交上，v1.5.0 打在其后代上；
-	// 升序处理时 v2.0.0 段的范围（后代→祖先）为空，输出占位行而不是静默消失
+	// 空段：tag 打在 --no-ff 合并提交上，而合并带进来的提交已归入更早的 v1.0.1 段；
+	// 该段没有非 merge 提交，输出占位行而不是静默消失
 	repo2, proj2 := initProjectT(t, map[string]string{"xinit.yml": tmplYAML, "a.txt": "one\n"})
-	commitMsgT(t, repo2, map[string]string{"a.txt": "two\n"}, "feat: two", "")
-	runGitT(t, repo2, "tag", "v2.0.0")
-	commitMsgT(t, repo2, map[string]string{"a.txt": "three\n"}, "feat: three", "v1.5.0")
-	out2, err := runTemplate(t, TemplateOptions{ProjectDir: proj2, Changelog: true, Revision: "HEAD"})
+	runGitT(t, repo2, "checkout", "-q", "-b", "maint")
+	commitMsgT(t, repo2, map[string]string{"b.txt": "hotfix\n"}, "fix: hotfix", "v1.0.1")
+	runGitT(t, repo2, "checkout", "-q", "-")
+	runGitT(t, repo2, "merge", "-q", "--no-ff", "--no-edit", "maint")
+	runGitT(t, repo2, "tag", "v1.1.0")
+	out2, err := runTemplate(t, TemplateOptions{ProjectDir: proj2, Changelog: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out2, "（没有非 merge 提交）") {
+	if !strings.Contains(out2, "\nv1.1.0\n  （没有非 merge 提交）\n") {
 		t.Errorf("无提交的段应有占位行:\n%s", out2)
+	}
+	if strings.Count(out2, "fix: hotfix") != 1 {
+		t.Errorf("合并带进来的提交只应列一次:\n%s", out2)
 	}
 
 	// 显式 sha 命中已打 tag 的 commit：末段以 sha 原文命名，不替换成 tag 名
-	sha := runGitT(t, repo2, "rev-parse", "v2.0.0")
+	sha := runGitT(t, repo2, "rev-parse", "v1.0.1")
 	out3, err := runTemplate(t, TemplateOptions{ProjectDir: proj2, Changelog: true, Revision: sha})
 	if err != nil {
 		t.Fatal(err)
@@ -243,8 +248,24 @@ func TestTemplateChangelogWordingBranches(t *testing.T) {
 	if !strings.Contains(out3, "变更（v1.0.0 → "+sha+"）:") {
 		t.Errorf("末段应以 sha 原文命名:\n%s", out3)
 	}
-	if strings.Contains(out3, "→ v2.0.0）") {
+	if strings.Contains(out3, "→ v1.0.1）") {
 		t.Errorf("点名 sha 时不得把终点名换成 tag:\n%s", out3)
+	}
+}
+
+// 版本号与历史位置不一致（v1.5.0 打在 v1.1.0 的祖先上）：按历史先后分段，
+// 段名不重复、提交只列一次（评审 I-1 的真二进制复现形态）。
+func TestTemplateChangelogVersionOrderUnlikeHistory(t *testing.T) {
+	repo, proj := initProjectT(t, map[string]string{"xinit.yml": tmplYAML, "a.txt": "one\n"})
+	commitMsgT(t, repo, map[string]string{"a.txt": "two\n"}, "feat: two", "v1.5.0")
+	commitMsgT(t, repo, map[string]string{"a.txt": "three\n"}, "feat: three", "v1.1.0")
+	out, err := runTemplate(t, TemplateOptions{ProjectDir: proj, Changelog: true, Revision: "v1.1.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "变更（v1.0.0 → v1.1.0）:\n\nv1.1.0\n  - feat: three\n\nv1.5.0\n  - feat: two\n"
+	if !strings.HasSuffix(out, want) {
+		t.Errorf("变更段应为\n%s\n实际:\n%s", want, out)
 	}
 }
 

@@ -129,15 +129,17 @@ func acquireMirrorLock(path string) (func(), error) {
 
 // resolveCommit 把一个 revision 解析成 commit sha。
 //
-// 用 ^{commit} 后缀强制解引用注解 tag —— 否则 v1.0.0 这类 tag 会返回
-// tag 对象自身的 sha，ls-tree 用不了。
+// 一律追加 ^{commit} 后缀：注解 tag 会被解引用到 commit（否则 v1.0.0 这类 tag
+// 返回 tag 对象自身的 sha，ls-tree 用不了）；用户自己写了 ^{…} 的表达式也照样
+// 追加——指向 commit 的形式（^{}、^{commit}、^{/msg}）叠加后结果不变，指向 tree/
+// blob 的（如 v1.0.0^{tree}）则在这里明确报错，不会把非 commit 的 sha 交给下游。
 func resolveCommit(repoDir, revision string) (string, error) {
-	rev := revision
-	if !strings.Contains(rev, "^{") {
-		rev = rev + "^{commit}"
-	}
-	out, err := runGit(repoDir, "rev-parse", "--verify", "--end-of-options", rev)
+	out, err := runGit(repoDir, "rev-parse", "--verify", "--end-of-options", revision+"^{commit}")
 	if err != nil {
+		// 对象存在、只是不是 commit：与「不存在」分开说，否则用户会去查拼写
+		if _, e := runGit(repoDir, "rev-parse", "--verify", "--quiet", "--end-of-options", revision); e == nil {
+			return "", fmt.Errorf("版本 %q 指向的不是 commit（--revision 只接受 tag、分支名或 commit sha）", revision)
+		}
 		return "", fmt.Errorf("模板中不存在版本 %q: %w", revision, err)
 	}
 	return strings.TrimSpace(string(out)), nil

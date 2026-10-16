@@ -28,9 +28,9 @@ func newTemplateCmd() *cobra.Command {
 		Short: "只读查看模板侧：来源、记录版本、可用更新；--changelog 列出版本间变更",
 		Long: "不带旗标：输出模板侧摘要（来源、记录版本与 commit、更高的稳定 semver tag），\n" +
 			"口径与 xinit status 的「模板侧」一段相同。\n\n" +
-			"--changelog：再列出项目记录的版本到目标版本之间的变更——按稳定 semver tag 分段，\n" +
-			"段内是该区间的提交标题（不含 merge 提交，新→旧）。目标默认是最新稳定 tag，\n" +
-			"可用 --revision 指定（tag、分支名或 sha）。\n\n" +
+			"--changelog：再列出项目记录的版本到目标版本之间的变更——按稳定 semver tag 分段\n" +
+			"（按历史先后，每个提交只列一次），段内是该段的提交标题（不含 merge 提交，新→旧）。\n" +
+			"目标默认是最新稳定 tag，可用 --revision 指定（tag、分支名或 sha）。\n\n" +
 			"默认不联网（只读本地镜像缓存，缺失时不会克隆）；--fetch 才刷新已有镜像。\n" +
 			"dir 源没有版本历史，--changelog 不适用。\n\n" +
 			"xinit 自身的变更日志见 xinit changelog。",

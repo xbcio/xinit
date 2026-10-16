@@ -176,6 +176,94 @@ func TestBuildChangelogMergesTagsOnSameCommit(t *testing.T) {
 	}
 }
 
+// 版本序与历史序不一致：c2 打 v1.5.0，其后代 c3 打 v1.1.0。分段按历史先后排，
+// 每个提交只出现一次，段名不重复（曾经按版本序排：v1.1.0 段出现两次、提交重复）。
+func TestBuildChangelogOrdersByHistoryNotVersion(t *testing.T) {
+	h := mkHistory(t)
+	runGitT(t, h.dir, "tag", "-d", "v1.1.0")
+	runGitT(t, h.dir, "tag", "v1.5.0", h.commits[1])
+	runGitT(t, h.dir, "tag", "v1.1.0", h.commits[2])
+	for _, target := range []string{"v1.1.0", h.branch} {
+		r, err := BuildChangelog(h.dir, t.TempDir(), false, h.commits[0], target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names, subj := pointsOf(r)
+		want := []string{"v1.5.0", "v1.1.0"}
+		if target == h.branch {
+			want = []string{"v1.5.0", "v1.1.0", "v2.0.0", h.branch}
+		}
+		if !reflect.DeepEqual(names, want) {
+			t.Fatalf("目标 %s：分段 = %q，want %q", target, names, want)
+		}
+		if w := []string{"fix: two"}; !reflect.DeepEqual(subj["v1.5.0"], w) {
+			t.Fatalf("目标 %s：v1.5.0 段 = %q，want %q", target, subj["v1.5.0"], w)
+		}
+		if w := []string{"feat: three"}; !reflect.DeepEqual(subj["v1.1.0"], w) {
+			t.Fatalf("目标 %s：v1.1.0 段 = %q，want %q", target, subj["v1.1.0"], w)
+		}
+	}
+}
+
+// 非线性历史：维护分支从 v1.0.0 分出打 v1.0.1，再合回主线。分支上的提交只归入
+// v1.0.1 段（最早发布它的版本），合并之后的稳定段不再重复列出。
+func TestBuildChangelogMaintenanceBranchCommitsListedOnce(t *testing.T) {
+	h := mkHistory(t)
+	runGitT(t, h.dir, "checkout", "-q", "-b", "maint", h.commits[0])
+	if err := os.WriteFile(filepath.Join(h.dir, "m.txt"), []byte("m"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitT(t, h.dir, "add", ".")
+	runGitT(t, h.dir, "commit", "-q", "-m", "fix: hotfix")
+	runGitT(t, h.dir, "tag", "v1.0.1")
+	runGitT(t, h.dir, "checkout", "-q", h.branch)
+	runGitT(t, h.dir, "merge", "-q", "--no-edit", "maint")
+	runGitT(t, h.dir, "tag", "v3.0.0")
+
+	r, err := BuildChangelog(h.dir, t.TempDir(), false, h.commits[0], "v3.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, subj := pointsOf(r)
+	if len(names) == 0 || names[len(names)-1] != "v3.0.0" {
+		t.Fatalf("末段应是 v3.0.0：%q", names)
+	}
+	seen := map[string]string{}
+	for _, name := range names {
+		for _, s := range subj[name] {
+			if prev, dup := seen[s]; dup {
+				t.Fatalf("提交 %q 同时出现在 %s 与 %s 段", s, prev, name)
+			}
+			seen[s] = name
+		}
+	}
+	if seen["fix: hotfix"] != "v1.0.1" {
+		t.Fatalf("维护分支的提交应归入 v1.0.1，实际 %q（分段 %q）", seen["fix: hotfix"], names)
+	}
+	for _, s := range []string{"fix: two", "feat: three", "chore: four", "feat: five", "wip: six"} {
+		if seen[s] == "" {
+			t.Errorf("提交 %q 漏列（分段 %q）", s, names)
+		}
+	}
+}
+
+// --revision 指向 tree：明确报「不是 commit」，不把原始 git 错误甩给用户。
+func TestBuildChangelogTargetNotACommit(t *testing.T) {
+	h := mkHistory(t)
+	_, err := BuildChangelog(h.dir, t.TempDir(), false, h.commits[0], "v2.0.0^{tree}")
+	if err == nil || !strings.Contains(err.Error(), "指向的不是 commit") {
+		t.Fatalf("指向 tree 应报「不是 commit」，got %v", err)
+	}
+	// 解析到 commit 的 ^{…} 形式照常可用
+	r, err := BuildChangelog(h.dir, t.TempDir(), false, h.commits[0], "v2.0.0^{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ToCommit != h.commits[4] {
+		t.Fatalf("v2.0.0^{} 应解析到 %s，got %s", h.commits[4], r.ToCommit)
+	}
+}
+
 func TestBuildChangelogNoStableTagForDefaultTarget(t *testing.T) {
 	dir, c1, _ := mkRepo(t)
 	runGitT(t, dir, "tag", "v1.0.0-rc1")

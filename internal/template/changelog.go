@@ -24,7 +24,7 @@ const (
 type ChangePoint struct {
 	Name     string   // 稳定 semver tag 名；末段若目标不是 tag 则为用户给的原文
 	Commit   string   // 本点的 commit sha
-	Subjects []string // 提交标题，新→旧；已剥离控制字符；不含 merge 提交
+	Subjects []string // 本段独有的提交标题，新→旧；已剥离控制字符；不含 merge 提交
 }
 
 // ChangelogResult 是 BuildChangelog 的结果。
@@ -33,7 +33,7 @@ type ChangelogResult struct {
 	ToName     string // 目标的显示名：显式给出的原文，或默认选出的最高稳定 tag
 	ToCommit   string
 	Relation   Relation
-	Points     []ChangePoint // 升序（旧→新）；Relation != RelAhead 时为空
+	Points     []ChangePoint // 按历史先后（祖先在前）；Relation != RelAhead 时为空
 }
 
 // BuildChangelog 计算 fromCommit（项目记录的 commit）到 toRef 之间的 changelog。
@@ -44,13 +44,14 @@ type ChangelogResult struct {
 // 只读：镜像缺失返回 ErrMirrorMissing，不 clone、不创建缓存根（与 status 同口径，
 // 即 RepoDir 的口径）；fetch=true 才更新已有镜像。
 //
-// 分段规则：from（不含）到 to（含）之间的每个稳定 semver tag 各成一段，段内为
-// 上一个点（不含）到该 tag（含）的非 merge 提交标题；预发布 tag 不单列，其提交并入
-// 下一个稳定段；同一 commit 上的多个稳定 tag 合并为一段，取版本序靠后的名字；
-// to 本身若不是稳定 tag（HEAD、sha、分支名），则以 toRef 原文追加末段。
-//
-// 局限：分段顺序取 semver 序而非拓扑序。若某个 tag 的版本号与其历史位置不一致
-// （例如在维护分支上给更低版本打 tag），对应段的标题可能为空，但不会出错。
+// 分段规则：from（不含）到 to（含）之间的每个稳定 semver tag 各成一段，按历史
+// 先后（拓扑序，祖先在前）排列——不按版本号，维护分支上的补丁 tag、版本号与历史
+// 位置不一致的 tag 也各归其位。每个提交只归入**第一个包含它的段**（即最早发布它的
+// 版本）：段内是该 tag 可达、但 from 与前面各段都不可达的非 merge 提交标题，所以
+// 任何提交都不会在两段里重复出现。预发布 tag 不单列，其提交并入下一个稳定段；同一
+// commit 上的多个稳定 tag 合并为一段，取版本序靠后的名字；to 本身若不是稳定 tag
+// （HEAD、sha、分支名），则以 toRef 原文追加末段。只有 tag 打在 merge 提交上、且
+// 它带进来的提交都已归入前面的段时，该段才会没有标题。
 func BuildChangelog(src, cacheRoot string, fetch bool, fromCommit, toRef string) (*ChangelogResult, error) {
 	if err := checkRefArg("from", fromCommit); err != nil {
 		return nil, err
@@ -122,21 +123,32 @@ func BuildChangelog(src, cacheRoot string, fetch bool, fromCommit, toRef string)
 			inRange[line] = true
 		}
 	}
-
-	var points []ChangePoint
+	var names []string
 	for _, name := range stable { // 已按 (版本序, 名字节序) 升序
-		if !inRange[name] {
-			continue
+		if inRange[name] {
+			names = append(names, name)
 		}
-		c, err := resolveCommit(repoDir, name)
-		if err != nil {
-			return nil, err
+	}
+	commits, err := peelToCommits(repoDir, names)
+	if err != nil {
+		return nil, err
+	}
+	tagAt := map[string]string{} // commit → 段名
+	for i, name := range names {
+		tagAt[commits[i]] = name // 同一 commit 的并列 tag：升序遍历，留下序上靠后的名字
+	}
+
+	// 区间内全部提交按拓扑序排开（祖先在前）。to 是区间里所有提交的后代，必在最后。
+	order, err := runGit(repoDir, "rev-list", "--topo-order", "--reverse",
+		"--end-of-options", from+".."+to)
+	if err != nil {
+		return nil, fmt.Errorf("排列版本区间内的提交: %w", err)
+	}
+	var points []ChangePoint
+	for _, c := range strings.Fields(string(order)) {
+		if name, ok := tagAt[c]; ok {
+			points = append(points, ChangePoint{Name: name, Commit: c})
 		}
-		if n := len(points); n > 0 && points[n-1].Commit == c {
-			points[n-1].Name = name // 同一 commit 的并列 tag：取序上靠后的名字
-			continue
-		}
-		points = append(points, ChangePoint{Name: name, Commit: c})
 	}
 	if n := len(points); n == 0 || points[n-1].Commit != to {
 		points = append(points, ChangePoint{Name: toName, Commit: to})
@@ -144,24 +156,55 @@ func BuildChangelog(src, cacheRoot string, fetch bool, fromCommit, toRef string)
 		points[n-1].Name = toName // 用户点名的目标优先于并列 tag 的名字
 	}
 
-	prev := from
+	// 每段排除 from 与前面各段可达的提交：一个提交只归入第一个包含它的段。
+	exclude := []string{"^" + from}
 	for i := range points {
-		subjects, err := commitSubjects(repoDir, prev, points[i].Commit)
+		subjects, err := commitSubjects(repoDir, points[i].Commit, exclude)
 		if err != nil {
 			return nil, err
 		}
 		points[i].Subjects = subjects
-		prev = points[i].Commit
+		exclude = append(exclude, "^"+points[i].Commit)
 	}
 	res.Points = points
 	return res, nil
 }
 
-// commitSubjects 返回 (from, to] 之间非 merge 提交的标题，新→旧。
-// 两端都是已解析的完整 sha，--end-of-options 之后的区间不会被当成选项。
-func commitSubjects(repoDir, from, to string) ([]string, error) {
-	out, err := runGit(repoDir, "log", "--no-merges", "--no-show-signature",
-		"--format=%s", "--end-of-options", from+".."+to)
+// peelToCommits 把 tag 名逐个解引用到 commit（含注解 tag、嵌套 tag），一次 git 调用。
+// 返回值与 names 一一对应。
+func peelToCommits(repoDir string, names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	var in strings.Builder
+	for _, name := range names {
+		in.WriteString("refs/tags/")
+		in.WriteString(name)
+		in.WriteString("^{commit}\n")
+	}
+	out, err := runGitStdin(repoDir, in.String(), "cat-file", "--batch-check=%(objectname)")
+	if err != nil {
+		return nil, fmt.Errorf("解析版本区间内的 tag: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != len(names) {
+		return nil, fmt.Errorf("解析版本区间内的 tag: 期望 %d 行，得到 %d 行", len(names), len(lines))
+	}
+	for i, line := range lines {
+		// 成功行只有 sha；失败行形如 "<输入> missing"（例如 tag 不指向 commit）
+		if strings.ContainsRune(line, ' ') {
+			return nil, fmt.Errorf("tag %q 无法解析到 commit: %s", names[i], line)
+		}
+	}
+	return lines, nil
+}
+
+// commitSubjects 返回 tip 可达、exclude（"^<sha>" 形式）均不可达的非 merge 提交标题，
+// 新→旧。参数都是已解析的完整 sha，--end-of-options 之后不会被当成选项。
+func commitSubjects(repoDir, tip string, exclude []string) ([]string, error) {
+	args := append([]string{"log", "--no-merges", "--no-show-signature",
+		"--format=%s", "--end-of-options", tip}, exclude...)
+	out, err := runGit(repoDir, args...)
 	if err != nil {
 		return nil, fmt.Errorf("读取提交标题: %w", err)
 	}
