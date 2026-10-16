@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -54,10 +55,28 @@ func newRootCmd() *cobra.Command {
 	return root
 }
 
+// annoNoGit 标在不碰 git 的命令上（如 changelog）：Execute 对它们跳过 RequireGit，
+// 没装 git 的机器上也能用。
+const annoNoGit = "xinit/no-git"
+
 // Execute 是 main 的唯一入口。
 func Execute() error {
-	if err := RequireGit(); err != nil {
-		return err
+	root := newRootCmd()
+	if needsGit(root, os.Args[1:]) {
+		if err := RequireGit(); err != nil {
+			return err
+		}
 	}
-	return newRootCmd().Execute()
+	return root.Execute()
+}
+
+// needsGit 判断这次调用是否需要先检查 git：只有能确定落到带 annoNoGit 的
+// 命令时才跳过，解析不了的一律按需要处理（保守）。
+func needsGit(root *cobra.Command, args []string) bool {
+	cmd, _, err := root.Find(args)
+	if err != nil || cmd == nil {
+		return true
+	}
+	_, skip := cmd.Annotations[annoNoGit]
+	return !skip
 }

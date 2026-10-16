@@ -22,11 +22,13 @@ func newChangelogCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "changelog [版本]",
 		Short: "显示 xinit 自身的变更日志",
-		Long: "显示随本二进制内嵌的 xinit 变更日志；不联网、不读 git、不依赖当前目录。\n\n" +
+		Long: "显示随本二进制内嵌的 xinit 变更日志；不联网、不依赖当前目录，也不需要 git。\n\n" +
 			"不带参数输出全文；给出版本（1.0.0 或 v1.0.0，Unreleased 不区分大小写）\n" +
 			"只输出该版本的章节。\n\n" +
 			"模板自己的变更历史见 xinit template --changelog。",
 		Args: cobra.MaximumNArgs(1),
+		// 只读内嵌文本，不需要 git：Execute 据此跳过启动时的 git 检查
+		Annotations: map[string]string{annoNoGit: ""},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			version := ""
 			if len(args) == 1 {
@@ -53,9 +55,30 @@ func changelogText(doc, version string) (string, error) {
 
 	want := normalizeChangelogLabel(version)
 	lines := strings.Split(doc, "\n")
+	// 代码块（``` 或 ~~~ 围栏）里的 "## " 行不是标题，既不算版本也不截断章节
+	heading := make([]bool, len(lines))
+	fence := ""
+	for i, line := range lines {
+		t := strings.TrimLeft(line, " ")
+		if fence != "" {
+			if strings.HasPrefix(t, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			fence = t[:3]
+			continue
+		}
+		heading[i] = strings.HasPrefix(line, "## ")
+	}
+
 	start := -1
 	var labels []string
 	for i, line := range lines {
+		if !heading[i] {
+			continue
+		}
 		m := changelogHeadingRe.FindStringSubmatch(line)
 		if m == nil {
 			continue
@@ -71,7 +94,7 @@ func changelogText(doc, version string) (string, error) {
 
 	end := len(lines)
 	for i := start + 1; i < len(lines); i++ {
-		if strings.HasPrefix(lines[i], "## ") {
+		if heading[i] {
 			end = i
 			break
 		}

@@ -38,3 +38,11 @@ xinit changelog
 xinit changelog 1.0.0
 exec sh -c 'find . -type f ! -name "*snap*.txt" | LC_ALL=C sort > after.snap.txt'
 cmp before.snap.txt after.snap.txt
+
+# ── ⑤ 不需要 git：PATH 里只有 xinit、没有 git 时 changelog 照常工作，其它命令仍被启动检查拦下 ──
+! exists $XINIT_BIN/git
+env PATH=$XINIT_BIN
+xinit changelog 1.0.0
+stdout '^## \[1\.0\.0\] - '
+! xinit status
+stderr '未找到 git'

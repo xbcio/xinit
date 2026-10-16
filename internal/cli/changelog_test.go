@@ -88,6 +88,45 @@ func TestChangelogCmdSectionStopsAtNextHeading(t *testing.T) {
 	}
 }
 
+// 代码块里以 "## " 开头的行不是标题：既不截断章节，也不算作可用版本。
+func TestChangelogCmdIgnoresHeadingsInCodeFences(t *testing.T) {
+	doc := "# 变更日志\n\n## [1.1.0]\n\n示例：\n\n```text\n## [9.9.9] 不是标题\n```\n\n" +
+		"~~~\n## 也不是\n~~~\n\n- 围栏之后的条目\n\n## [1.0.0]\n\n- 旧\n"
+	got, err := runChangelog(t, doc, "1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "围栏之后的条目") || strings.Contains(got, "- 旧") {
+		t.Fatalf("章节应止于下一个真正的标题；got %q", got)
+	}
+	_, err = runChangelog(t, doc, "9.9.9")
+	if err == nil || !strings.Contains(err.Error(), "可用版本: 1.1.0, 1.0.0") {
+		t.Fatalf("代码块里的版本不得算作可用版本；got %v", err)
+	}
+}
+
+// changelog 不需要 git：Execute 对它跳过启动检查；其余命令（含解析不了的输入）照查。
+func TestNeedsGit(t *testing.T) {
+	root := newRootCmd()
+	for _, c := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"changelog"}, false},
+		{[]string{"changelog", "1.0.0"}, false},
+		{[]string{"changelog", "--help"}, false},
+		{[]string{"status"}, true},
+		{[]string{"template", "--changelog"}, true},
+		{[]string{"backup", "prune", "--keep", "1"}, true},
+		{nil, true},
+		{[]string{"no-such-cmd"}, true},
+	} {
+		if got := needsGit(root, c.args); got != c.want {
+			t.Errorf("needsGit(%q) = %v，want %v", c.args, got, c.want)
+		}
+	}
+}
+
 func TestChangelogCmdUnreleasedIsCaseInsensitive(t *testing.T) {
 	got, err := runChangelog(t, sampleChangelog, "unreleased")
 	if err != nil {

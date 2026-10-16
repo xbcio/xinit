@@ -131,6 +131,9 @@ func TestScripts(t *testing.T) {
 			for _, kv := range cacheIsolationEnv(filepath.Join(env.Getenv("WORK"), "home")) {
 				env.Setenv(kv[0], kv[1])
 			}
+			// XINIT_BIN：testscript 放 xinit/xinit-code 的目录（它被前置到 PATH 首段）。
+			// 脚本可 env PATH=$XINIT_BIN 得到「只有 xinit、没有 git」的 PATH。
+			env.Setenv("XINIT_BIN", strings.SplitN(env.Getenv("PATH"), string(filepath.ListSeparator), 2)[0])
 			return nil
 		},
 		Condition: func(cond string) (bool, error) {
