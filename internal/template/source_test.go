@@ -92,14 +92,46 @@ func TestOpenRejectsNonexistentRevision(t *testing.T) {
 	}
 }
 
+// 备案清零（评审 M-1）：此前只断言「有错」——删掉 openGit 的 guard 后
+// resolveCommit 的 --end-of-options 也会让它报错，测试照样绿。现在点名
+// checkRefArg 的报错文案，并用裸仓夹具锁住 guard 先于一切 git/镜像动作
+// （删掉 guard 后会先 clone 建出缓存根，条目断言随之变红）。
 func TestOpenRejectsOptionLikeRevision(t *testing.T) {
 	dir, _ := newRepo(t, map[string]struct {
 		data string
 		mode os.FileMode
 	}{"a.go": {"x", 0o644}})
 
-	if _, err := Open(dir, "--upload-pack=evil", t.TempDir(), true, true); err == nil {
+	// 本地 git 仓：就地使用，不经镜像。
+	_, err := Open(dir, "--upload-pack=evil", t.TempDir(), true, true)
+	if err == nil {
 		t.Fatal("以 - 开头的 revision 应被拒绝")
+	}
+	if !strings.Contains(err.Error(), "不能以 '-' 开头") {
+		t.Errorf("错误应来自 checkRefArg（点名 '-' 开头），实际: %v", err)
+	}
+
+	// 裸仓：走镜像的路径。guard 若晚于 ensureMirror/clone，这里会先建出
+	// 缓存根——「父目录一个条目都没有」即锁住「早于一切 git 调用」。
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	if out, err := exec.Command("git", "clone", "-q", "--bare", dir, bare).CombinedOutput(); err != nil {
+		t.Fatalf("clone --bare: %v\n%s", err, out)
+	}
+	parent := t.TempDir()
+	cache := filepath.Join(parent, "cache-root") // 尚不存在
+	_, err = Open(bare, "--upload-pack=evil", cache, true, true)
+	if err == nil {
+		t.Fatal("裸仓 + 以 - 开头的 revision 应被拒绝")
+	}
+	if !strings.Contains(err.Error(), "不能以 '-' 开头") {
+		t.Errorf("错误应来自 checkRefArg，实际: %v", err)
+	}
+	ents, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 0 {
+		t.Errorf("guard 必须发生在镜像/clone 之前，不得创建缓存根或任何条目: %v", ents)
 	}
 }
 
