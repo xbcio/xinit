@@ -21,7 +21,7 @@
 - `xinit restore <path>...`：把记账路径从 `.xinit/base/` 恢复到工作树，预检不过即零写入。
 - `xinit backflow <commit>`：把派生项目共享面的改动回送给模板——三方合并翻译、夹带扫描、导出标准补丁。
 - `xinit backup prune --keep <N>`：显式清理 `.xinit/backup/` 旧份（不自动清理）。
-- `xinit template [--changelog] [--revision <ref>] [--fetch]`：只读查看模板侧。不带旗标输出摘要（来源、记录版本与 commit、更高的稳定 tag，与 `status` 的「模板侧」同口径）；`--changelog` 再按稳定 semver tag 分段列出记录版本到目标版本（默认最新稳定 tag）之间的提交标题。提交标题输出前会剥离控制字符。
+- `xinit template [--changelog] [--revision <ref>] [--fetch]`：只读查看模板侧。不带旗标输出摘要（来源、记录版本与 commit、更高的稳定 tag，与 `status` 的「模板侧」同口径）；`--changelog` 再按稳定 semver tag 分段（按历史先后，每个提交只列一次）列出记录版本到目标版本（默认最新稳定 tag）之间的提交标题。提交标题输出前会剥离控制字符。
 - `xinit changelog [版本]`：显示 xinit 自身内嵌的变更日志，可只取某个版本的章节；不联网、不依赖当前目录。
 - `xinit --version`：输出版本号。`make build` / `make install` 通过 `git describe` 注入；未注入时回退到 Go 内嵌的构建信息。
 
@@ -51,5 +51,5 @@
 
 ### 依赖
 
-- 需要 `git ≥ 2.38`，启动时检查，不满足即退出。
+- 需要 `git ≥ 2.38`，启动时检查，不满足即退出（`changelog` 不需要 git）。
 - 不承诺回滚：冲突即停下报告，由用户手工解决后用 `--accept` 声明；失败后可从 `.xinit/backup/` 手工恢复。
