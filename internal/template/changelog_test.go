@@ -76,6 +76,11 @@ func TestBuildChangelogDefaultTargetIsLatestStableTag(t *testing.T) {
 	if r.ToName != "v2.0.0" || r.ToCommit != h.commits[4] {
 		t.Fatalf("目标 = %s@%s，want v2.0.0@%s", r.ToName, r.ToCommit, h.commits[4])
 	}
+	// 备案清零（评审 O-3）：FromCommit 此前无任何消费者（生产与测试皆无），
+	// D1「非死字段」对它不成立——在此锁成结果契约（from 的解析值 = 记录 commit）。
+	if r.FromCommit != h.commits[0] {
+		t.Fatalf("FromCommit = %s，want %s", r.FromCommit, h.commits[0])
+	}
 	names, subj := pointsOf(r)
 	if want := []string{"v1.1.0", "v2.0.0"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("分段 = %q，want %q（升序；预发布 rc1 不单列）", names, want)
