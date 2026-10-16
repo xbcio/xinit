@@ -62,7 +62,7 @@ See [Development](#12-development) for all `make` targets.
 
 ## 3. Getting started
 
-Every command and its output below come from a real session (macOS + git 2.50.1) and can be followed along directly. (Command output is reproduced verbatim from those runs — xinit's own messages are currently in Chinese.)
+Every command below comes from a real session (macOS + git 2.50.1) and can be followed along directly. xinit's messages are currently emitted in Chinese; the output blocks below show them rendered in English for readability.
 
 ### 3.1 Prepare a template repository
 
@@ -97,13 +97,13 @@ go 1.25
 
 ```
 # main.go
-// Package main 是 xkitora 服务的入口。
+// Package main is the entry point of the xkitora service.
 package main
 
 import "fmt"
 
 func main() {
-	fmt.Println("xkitora 服务启动")
+	fmt.Println("xkitora service starting")
 }
 ```
 
@@ -111,7 +111,7 @@ func main() {
 # README.md.tmpl
 # {{ .app_slug }}
 
-由最小模板生成。
+Generated from the minimal template.
 ```
 
 Commit and **tag**:
@@ -119,7 +119,7 @@ Commit and **tag**:
 ```bash
 git init -q -b main
 git add -A
-git commit -m "feat: 最小模板 v1.0.0"
+git commit -m "feat: minimal template v1.0.0"
 git tag v1.0.0        # always tag; why is explained in 3.3
 ```
 
@@ -145,7 +145,7 @@ app_slug: order-api
 Output and result (this session **did** create a git repository):
 
 ```
-已生成 3 个文件到 /path/to/order-api
+Generated 3 files into /path/to/order-api
 ```
 
 ```
@@ -157,7 +157,7 @@ go 1.25
 $ cat README.md
 # order-api
 
-由最小模板生成。
+Generated from the minimal template.
 
 $ tail -2 .git/info/exclude
 # *~
@@ -174,7 +174,7 @@ $ git status --porcelain --ignored
 
 ### 3.3 The daily loop (change template → `diff` → `update`)
 
-After `init`, first do one **explicit version alignment** (the closing step for a `"HEAD"` record; skip it if `init` already carried `--revision <vX.Y.Z-form tag>`). The output below comes from a different session that **did not** create a git repository, hence the extra `当前目录不是 git 仓库` warning — create the repository as recommended in 3.2 and it won't appear:
+After `init`, first do one **explicit version alignment** (the closing step for a `"HEAD"` record; skip it if `init` already carried `--revision <vX.Y.Z-form tag>`). The output below comes from a different session that **did not** create a git repository, hence the extra `current directory is not a git repository` warning — create the repository as recommended in 3.2 and it won't appear:
 
 ```bash
 cd order-api
@@ -182,41 +182,41 @@ xinit update --revision v1.0.0
 ```
 
 ```
-xinit: 警告: 当前目录不是 git 仓库：出问题只能靠 .xinit/backup/ 还原
+xinit: warning: current directory is not a git repository: recovery relies solely on .xinit/backup/
 xinit update: /path/to/minimal-template
-版本: HEAD → v1.0.0
-汇总: 写入 0、删除 0、chmod 0、冲突 0
+Version: HEAD → v1.0.0
+Summary: writes 0, deletes 0, chmod 0, conflicts 0
 ```
 
 This round needs no template change (all `Noop`); its purpose is to flip the recorded version from `"HEAD"` to `v1.0.0`. **From then on the default mode (no `--revision`) works.** (If `init` carried `--revision <vX.Y.Z-form tag>`, you start in that state and can skip this step.)
 
 > If you did create a git repository as in 3.2 but **have not committed** the files `init` generated, this round adds one more warning:
-> `工作树有 3 处未提交改动；update 会直接改写工作树，建议先提交（或用 --force 跳过检查）`
+> `the working tree has 3 uncommitted changes; update rewrites the working tree in place — commit first (or pass --force to skip the check)`
 > — the 3 are the three new untracked files (`.xinit/` is in `.git/info/exclude` and not counted). Run `git add -A && git commit` first and the warning is gone.
 
 Then it's the regular loop. Change one thing on the template side and tag it:
 
 ```bash
 cd $WORK/minimal-template
-printf '\n// 版本：1.1.0\n' >> main.go
-git add -A && git commit -m "feat: 打印版本注释（v1.1.0）" && git tag v1.1.0
+printf '\n// version: 1.1.0\n' >> main.go
+git add -A && git commit -m "feat: print version comment (v1.1.0)" && git tag v1.1.0
 ```
 
 On the derived side, preview first, then apply (a local change was made to `go.mod` at the same time — a different file from the template's change):
 
 ```bash
 cd $WORK/order-api
-printf '\n// 本地：构建标签\n' >> go.mod
+printf '\n// local: build tag\n' >> go.mod
 
 xinit diff          # preview only: exit code 5 = there are actions, 0 = all Noop
 ```
 
 ```
 xinit diff: /path/to/minimal-template
-版本: v1.0.0 → v1.1.0
+Version: v1.0.0 → v1.1.0
   write                main.go
-汇总: 写入 1、删除 0、chmod 0、冲突 0
-（diff 只读预览：以上为预测，未写任何文件、未改 state）
+Summary: writes 1, deletes 0, chmod 0, conflicts 0
+(diff is a read-only preview: the above is a prediction — no files written, no state changed)
 ```
 
 ```bash
@@ -224,12 +224,12 @@ xinit update
 ```
 
 ```
-xinit: 警告: 当前目录不是 git 仓库：出问题只能靠 .xinit/backup/ 还原
+xinit: warning: current directory is not a git repository: recovery relies solely on .xinit/backup/
 xinit update: /path/to/minimal-template
-版本: v1.0.0 → v1.1.0
+Version: v1.0.0 → v1.1.0
   write                main.go
-汇总: 写入 1、删除 0、chmod 0、冲突 0
-备份: .xinit/backup/20261010-094906
+Summary: writes 1, deletes 0, chmod 0, conflicts 0
+Backup: .xinit/backup/20261010-094906
 ```
 
 The template's change landed in `main.go`, and the local change to `go.mod` was kept as-is.
@@ -244,11 +244,11 @@ xinit adopt --template $WORK/minimal-template --config $WORK/order-api.vars.yml
 
 ```
 xinit adopt: /path/to/minimal-template@v1.1.0
-基线已重建：3 个文件（.xinit/base/ 与 .xinit/state.json）
-本地改动 1 个文件（磁盘与模板渲染结果不同）：update 起按「本地改过」保留——内容改动的（磁盘侧为常规文件），模板之后也改到它时走合并/冲突（行 6/7；本地版本与模板新内容已一致时行 4 静默收敛）；删除的，模板之后也改到它时保留删除并告警（行 10）
+Baseline rebuilt: 3 files (.xinit/base/ and .xinit/state.json)
+Local changes: 1 file (disk differs from the template render): from update on they are kept as "locally changed" — content edits (disk side is a regular file) go through merge/conflict when the template later touches them too (rows 6/7; row 4 converges silently when the local version already equals the template's new content); for deletions, when the template later touches them too, the deletion is kept with a warning (row 10)
   local-diff           main.go
-警告：--revision 选错版本时，两版之间模板的改动在磁盘上不存在，会被当成
-「本地把模板改回去了」而永久保留——那些模板更新从此不会再被应用（§5.3）。
+Warning: if --revision picks the wrong version, the template's changes between
+the two versions do not exist on disk and are treated as "the local copy reverted the template" and kept forever — those template updates will never be applied again (§5.3).
 ```
 
 `--template` and `--config` are required: `vars` is one of the three elements for rebuilding the baseline (template + vars + version) — without it there is no rendered result to compare against.
@@ -261,7 +261,7 @@ If the template declares hooks, `adopt` neither runs them nor writes a trust rec
 
 Apart from `init`, `backflow <commit>`, `restore <path>...` and `changelog [version]`, every command operates on the **current directory** and takes no positional arguments (`restore`'s positional arguments are recorded relative paths inside the project; `changelog`'s positional argument is a version label). `changelog` shows xinit's own changelog and does not depend on the current directory.
 
-> The tables below are a flag quick-reference; **`xinit <command> --help` is authoritative**. For readability the tables omit the internal chapter numbers found in the `--help` text (e.g. `（§10.3）`); outputs quoted later in this README do keep such numbers — they are only internal documentation indices and do not affect usage.
+> The tables below are a flag quick-reference; **`xinit <command> --help` is authoritative**. For readability the tables omit the internal chapter numbers found in the `--help` text; outputs quoted later in this README do keep such numbers — they are only internal documentation indices and do not affect usage.
 
 ### `xinit init [target-dir]` — generate a new project from a template
 
@@ -324,10 +324,10 @@ Without flags it prints a **template-side summary**: template source, the projec
 ```
 $ xinit template --changelog
 xinit template: /path/to/tpl
-模板侧:
-  记录版本: v1.0.0（commit acc24f24f653f937cdc168f43ba8bbc94c7a4c0c）
-  可用更新 2 个: v1.1.0, v1.2.0（最新 v1.2.0）
-变更（v1.0.0 → v1.2.0）:
+Template side:
+  Recorded version: v1.0.0 (commit acc24f24f653f937cdc168f43ba8bbc94c7a4c0c)
+  Updates available: 2: v1.1.0, v1.2.0 (latest v1.2.0)
+Changes (v1.0.0 → v1.2.0):
 
 v1.2.0
   - fix: gamma
@@ -350,7 +350,7 @@ How the changelog is computed:
 - When `--revision` is not a stable tag (branch name, sha, `HEAD`, a prerelease tag like `v1.2.0-rc1`), the final section is named with your original text; it must resolve to a commit (`v1.0.0^{tree}`-style expressions that point at a tree are rejected).
 - When the recorded version is not `vX.Y.Z` (e.g. `init` recorded `HEAD` because no version was pinned), the range header shows the 8-character short commit as the starting point.
 - When the range has nothing to list you get an explicit explanation rather than empty output: the recorded version is already the latest stable version, is ahead of the latest stable tag, `--revision` points at an older version (a downgrade target), or the two are not on the same line of history.
-- When a tag sits on a merge commit and the commits brought in by the merge were all assigned to earlier sections, that section has no subjects and shows a placeholder line 「（没有非 merge 提交）」.
+- When a tag sits on a merge commit and the commits brought in by the merge were all assigned to earlier sections, that section has no subjects and shows a placeholder line "(no non-merge commits)".
 - Commit subjects come from the template repository (possibly third-party): control characters (including ESC escape sequences) and Unicode bidi override characters are stripped before output.
 
 **A dir source has no version history**, so `--changelog` fails outright; the summary without `--changelog` works as usual. By default **no network**: only the local mirror cache is read — when the mirror is missing the summary degrades to an explanation and `--changelog` fails (neither clones). **Read-only**: no project lock, no files written inside the project (when a template mirror exists, a temporary lock file is created/deleted inside the cached mirror directory); exit code only 0 / 1 (see §8).
@@ -390,7 +390,7 @@ Restores 1–n recorded paths (keys of `files` in `.xinit/state.json`, i.e. the 
 Three-state semantics (every `<path>` must be a recorded path):
 
 - **Target missing** → restore from base (bytes plus exec bit);
-- **Target byte-identical to base** → no change (idempotent success, prints "无变化：<路径>");
+- **Target byte-identical to base** → no change (idempotent success, prints "no change: <path>");
 - **Target exists with different content** → **refused by default** (exit 1, not a single byte written; the paths are reported with a hint to use `--force`); only with `--force` is it overwritten — resetting the path back to the template's recorded version.
 
 | Flag | Meaning |
@@ -445,8 +445,8 @@ Deletes the **older** backup directories in `.xinit/backup/`, keeping only the n
 
 **The default answer always equals the status quo** (the tool never does anything irreversible on the default path):
 
-- **Conflicts**: prompts one by one as `<path>（<conflict type>）改用模板版？[y/N] `. Answering `y` / `yes` = **switch to the template version** — the template version is written to the working tree (your previous content is backed up to `.xinit/backup/` first) and the path converges this round; **pressing Enter alone = keep local**, i.e. the status-quo report and exit 2 from §6. (When entries in `.xinit/conflicts/` are still judged conflicting this round, that round reports and exits early without asking.)
-- **vars**: the prompt looks like `<prompt word> [<default>]: ` (without a default: `<prompt word>（必填）: ` or `<prompt word>（可留空）: `). Enter alone = take the default; a value that fails `pattern` (empty answers are judged as the default), or an empty answer to a required variable, prints the reason and re-prompts; **end of input (EOF) aborts** — exit 1, no files generated, and the error message names `--config` as the remedy.
+- **Conflicts**: prompts one by one as `<path> (<conflict type>) switch to the template version? [y/N] `. Answering `y` / `yes` = **switch to the template version** — the template version is written to the working tree (your previous content is backed up to `.xinit/backup/` first) and the path converges this round; **pressing Enter alone = keep local**, i.e. the status-quo report and exit 2 from §6. (When entries in `.xinit/conflicts/` are still judged conflicting this round, that round reports and exits early without asking.)
+- **vars**: the prompt looks like `<prompt word> [<default>]: ` (without a default: `<prompt word> (required): ` or `<prompt word> (may be left empty): `). Enter alone = take the default; a value that fails `pattern` (empty answers are judged as the default), or an empty answer to a required variable, prints the reason and re-prompts; **end of input (EOF) aborts** — exit 1, no files generated, and the error message names `--config` as the remedy.
 - **Trust confirmation**: Enter alone / end of input = refusal (exit 4, zero writes).
 
 **EOF semantics deliberately differ between the two sides**: `init`'s vars collection **aborts** on end of input — silently adopting half an answer set would produce a variable set you never confirmed; `update`'s conflict prompts treat **everything remaining as "keep local"** on end of input (already-answered ones are honored), never losing data.
@@ -478,7 +478,7 @@ A sequence (not a mapping); per entry:
 - **Application order: `--config` values > interactive answers > `default`** (interactive answers can only come from `init`'s [Interactive prompts](#interactive-prompts)); then each `pattern` is checked in turn, and a mismatch fails naming the variable, the actual value and the pattern:
 
   ```
-  xinit: 变量 "app_slug" 的值 "Order-API" 不匹配 pattern "^[a-z][a-z0-9-]*$"
+  xinit: variable "app_slug": value "Order-API" does not match pattern "^[a-z][a-z0-9-]*$"
   ```
 
 ### `substitute`
@@ -535,11 +535,11 @@ Semantics: on these paths a template version with **changed content** (where the
 hooks:
   post_init: |
     set -e
-    echo "post_init: 生成 deploy/bindings.gen.txt"
+    echo "post_init: generating deploy/bindings.gen.txt"
     printf 'generated-by: template-v1.3.0\n' > deploy/bindings.gen.txt
   post_update: |
     set -e
-    echo "post_update: 重新生成 bindings（v1.3.0）"
+    echo "post_update: regenerating bindings (v1.3.0)"
     printf 'generated-by: template-v1.3.0\n' > deploy/bindings.gen.txt
     printf 'build %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > deploy/.buildinfo
 ```
@@ -580,7 +580,7 @@ manifest_version: 1
 
 vars:
   - name: project_name
-    prompt: "项目显示名（Go 标识符风格）"
+    prompt: "Project display name (Go-identifier style)"
     default: "SvcKit"
   - name: app_slug
     default: "{{ .project_name | lower }}"
@@ -618,27 +618,27 @@ Behavior on conflict (exit code **2**). Below is a real run (template repository
 ```
 $ xinit update
 xinit update: /path/to/my-service-template
-版本: v1.1.0 → v1.2.0
-（本轮仍待解决：state 里的版本记录保持 v1.1.0，收敛后重跑再推进；§10.2 第 9 步）
+Version: v1.1.0 → v1.2.0
+(still unresolved this round: the version recorded in state stays v1.1.0 — converge and re-run to advance; §10.2 step 9)
   merge-conflict       docs/notes.md
-汇总: 写入 0、删除 0、chmod 0、冲突 1
-冲突（1 条）需要你处理：
+Summary: writes 0, deletes 0, chmod 0, conflicts 1
+Conflicts (1) need your attention:
   conflict             docs/notes.md
   accept?              xinit update --accept 'docs/notes.md'
-出路一：手工解决冲突，使内容与模板一致（或等模板回退），重跑 update 即收敛；
-        若解决结果与模板不同，用上面的 xinit update --accept <路径> 声明已解决（把你看到并认可的版本记为 base，§10.3）。
-出路二：把路径写进 .xinit/prune.txt，使其脱离管理（模板对它的改动不再同步）。
-参考：模板新内容已写到 .xinit/conflicts/<路径>。
+Option 1: resolve the conflict by hand so the content matches the template (or wait for the template to revert), then re-run update to converge;
+        if the resolution differs from the template, declare it resolved with the xinit update --accept <path> above (records the version you saw and approved as base, §10.3).
+Option 2: write the path into .xinit/prune.txt to take it out of management (the template's changes to it are no longer synced).
+Reference: the template's new content was written to .xinit/conflicts/<path>.
 ```
 
-Type conflicts (symlink / directory obstacles) cannot be `--accept`ed (§10.3) — when a section is entirely type conflicts, 「出路一」 is replaced with "类型冲突无 `--accept` 出口——写进 `.xinit/prune.txt`（脱离管理），或移走障碍物".
+Type conflicts (symlink / directory obstacles) cannot be `--accept`ed (§10.3) — when a section is entirely type conflicts, "Option 1" is replaced with "type conflicts have no `--accept` way out — write the path into `.xinit/prune.txt` (leave management), or move the obstacle aside".
 
 Key points:
 
 - **The disk is never modified**; the template version of a conflicting path is written to `.xinit/conflicts/<path>` for you to merge by hand.
 - **The recorded version does not advance** (it stays the old version), so re-running `update` after convergence automatically selects the same new tag again.
 - The presence or absence of `.xinit/conflicts/` **is** "are there unresolved conflicts": entries that are resolvable and no longer conflicting get cleaned up, and the directory disappears once all are resolved.
-- **On a real terminal it asks one by one** (same under a pipe with `--interactive`): `<path>（<conflict type>）改用模板版？[y/N] ` — answering `y` = overwrite local with the template version (your previous content is backed up to `.xinit/backup/` first, and the path converges this round); **Enter alone = keep local**, which is the status-quo behavior above (single-key exit). See [Interactive prompts](#interactive-prompts).
+- **On a real terminal it asks one by one** (same under a pipe with `--interactive`): `<path> (<conflict type>) switch to the template version? [y/N] ` — answering `y` = overwrite local with the template version (your previous content is backed up to `.xinit/backup/` first, and the path converges this round); **Enter alone = keep local**, which is the status-quo behavior above (single-key exit). See [Interactive prompts](#interactive-prompts).
 
 **Two ways out:**
 
@@ -658,8 +658,8 @@ After converging, one more run should be all `Noop`:
 
 ```
 $ xinit update
-版本: v1.2.0 → v1.2.0
-汇总: 写入 0、删除 0、chmod 0、冲突 0
+Version: v1.2.0 → v1.2.0
+Summary: writes 0, deletes 0, chmod 0, conflicts 0
 ```
 
 ## 7. The `.xinit/` directory
@@ -783,7 +783,7 @@ The manifest's `hooks` are **arbitrary shell commands from the upstream reposito
 5. **`git ≥ 2.38` is a hard dependency**: checked at startup, exit if unmet (`changelog` does not touch git and skips the check).
 6. **Projects initialized with pre-M9 versions**: if the template source was given as a relative path from outside the project directory (a relative path that cannot resolve inside the project directory), `state.template.source` recorded that relative path — running `update` inside the project directory then falls into the git-URL branch and fails (historical behavior). Change `template.source` in `.xinit/state.json` to an absolute path to recover; since M9, `init`/`adopt` always record absolute paths for local path sources.
 7. **Template source directory moved/renamed**: `state.template.source` records an absolute path — after moving the template directory, change `template.source` in `.xinit/state.json` to the new absolute path to recover.
-8. **Path character tightening (since M11, §22.4)**: no segment of a managed path may contain `\` or `:` (separator / drive-letter and ADS semantics on Windows). Dir-source files that used to be renderable (e.g. `a\b.txt`, `a:b.txt`) are explicitly rejected since M11 — rename them, or switch to a git template source; such filenames cannot exist in git sources, which are unaffected. Also, path-validation error wording was unified with the single-point predicates (e.g. 「不能是绝对路径」 → 「是绝对路径: …」); the criteria are unchanged — mind any scripts comparing these messages.
+8. **Path character tightening (since M11, §22.4)**: no segment of a managed path may contain `\` or `:` (separator / drive-letter and ADS semantics on Windows). Dir-source files that used to be renderable (e.g. `a\b.txt`, `a:b.txt`) are explicitly rejected since M11 — rename them, or switch to a git template source; such filenames cannot exist in git sources, which are unaffected. Also, path-validation error wording was unified with the single-point predicates (e.g. "must not be an absolute path" → "is an absolute path: ..."); the criteria are unchanged — mind any scripts comparing these messages.
 9. **Dir-source version anchors include the exec bit (§22.7 R4c)**: the dir-source tree hash includes executable-bit information — after copying a template directory across platforms (e.g. macOS → Windows) exec recording may flip, and `update` may report "template version changed"-type output while the template content is actually unchanged (ignore it, or switch to a git source).
 10. **Permission relaxation on failed write paths (§22.8, an explicit trade-off)**: on unix, when a target file is read-only and its directory is not writable, the atomic write (`update` persistence) clears the file's read-only bit before the rename fails and does **not** restore it after the failure — i.e. on the failure path the file may become writable (the success path is unaffected: "the clear targets the destination's bits" is §22.8's trade-off, not a defect). If you notice permission changes after such a failure, just `chmod` again as needed.
 
