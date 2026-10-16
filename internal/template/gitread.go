@@ -31,7 +31,9 @@ type TreeEntry struct {
 // runGit 执行一个 git 子进程。repoDir 为空时不传 -C（给 clone 用）。
 //
 // 参数安全三层：
-//   - 调用方先用 checkRefArg 拒绝以 '-' 开头的 revision / source；
+//   - 调用方先用 checkRefArg 拒绝以 '-' 开头的 revision（openGit、
+//     BuildChangelog、isAncestorAt、ListTree 等触达 git 的入口各自校验）；
+//     source 不作为 ref 传给 git——clone 以 -- 分隔（见 cloneMirror）；
 //   - 位置参数前加 --end-of-options（实测 ls-tree 与 rev-parse 都支持，
 //     且 '--upload-pack=evil' 会被拒绝、rc=128）；
 //   - 禁用 ext:: 传输协议。

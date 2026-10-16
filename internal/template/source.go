@@ -41,7 +41,7 @@ type Source struct {
 // Open 打开一个模板源。
 //
 // revision 为空时用默认分支的 HEAD；dir 源忽略 revision（含以 '-' 开头的值——
-// 选项注入校验只发生在会触达 git 的路径；也不看 fetch/allowClone）。
+// Open 内只有 openGit 会做选项注入校验，dir 源不触达 git；也不看 fetch/allowClone）。
 //
 // fetch 与 allowClone 组合决定联网与 clone 行为（两个 bool 都显式传，
 // 调用点即可看出该路径的承诺）：
