@@ -264,6 +264,24 @@ func TestBuildChangelogTargetNotACommit(t *testing.T) {
 	}
 }
 
+// peelToCommits 的防御分支（备案清零，评审 O-9）：tag 解引用不到 commit
+// （如指向 tree 对象）时点名报错。BuildChangelog 正常流经 for-each-ref
+// --merged 过滤（非 commit 的 ref 实测不会进区间）——此分支为纵深防御，
+// 直调锁定错误形态：cat-file 调用方式若改动导致输出行数/内容变化，
+// 这里会红而不是静默降级。
+func TestPeelToCommitsRejectsNonCommitTag(t *testing.T) {
+	h := mkHistory(t)
+	tree := runGitT(t, h.dir, "rev-parse", h.commits[4]+"^{tree}")
+	runGitT(t, h.dir, "tag", "v9.9.9", tree)
+	_, err := peelToCommits(h.dir, []string{"v9.9.9"})
+	if err == nil {
+		t.Fatal("指向 tree 的 tag 应被拒绝")
+	}
+	if !strings.Contains(err.Error(), "无法解析到 commit") || !strings.Contains(err.Error(), "v9.9.9") {
+		t.Errorf("错误应点名 tag 且说明无法解析到 commit，got %v", err)
+	}
+}
+
 func TestBuildChangelogNoStableTagForDefaultTarget(t *testing.T) {
 	dir, c1, _ := mkRepo(t)
 	runGitT(t, dir, "tag", "v1.0.0-rc1")
