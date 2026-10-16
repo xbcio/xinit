@@ -180,3 +180,53 @@ func TestIsGitTrackedOnUntrackedPath(t *testing.T) {
 		t.Error("不存在的路径不应报告为已跟踪")
 	}
 }
+
+// M10 T3-M3（备案清零）：失败路径此前无行为测试（终审曾裁「结构性判据足够」，
+// 本批补上读取侧行为面）。两支夹具都落在「读取」错误面：exclude 做成目录
+// （EISDIR）/ info 做成文件（ENOTDIR）——os.ReadFile 在两者都稳定失败于非
+// notexist（chmod 000 会被 Linux 容器 root 读穿，不可用）。写入侧失败经
+// WriteFileAtomic 的既有测试面 + 结构化传播覆盖（无注入接缝，不造新缝）。
+func TestEnsureGitExcludedReadErrorPropagates(t *testing.T) {
+	cases := []struct {
+		name   string
+		damage func(t *testing.T, dir string)
+	}{
+		{"exclude 为目录", func(t *testing.T, dir string) {
+			p, ok := GitExcludePath(dir)
+			if !ok {
+				t.Fatal("夹具前提：initRepo 应为 git 仓")
+			}
+			if err := os.RemoveAll(p); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(p, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"info 为文件", func(t *testing.T, dir string) {
+			p, ok := GitExcludePath(dir)
+			if !ok {
+				t.Fatal("夹具前提：initRepo 应为 git 仓")
+			}
+			if err := os.RemoveAll(filepath.Dir(p)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Dir(p), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := initRepo(t)
+			tc.damage(t, dir)
+			err := EnsureGitExcluded(dir)
+			if err == nil {
+				t.Fatal("读不到 exclude 时应报错（调用点据此中止/回滚，不得静默）")
+			}
+			if !strings.Contains(err.Error(), "读取") {
+				t.Errorf("错误应来自读取分支，got %v", err)
+			}
+		})
+	}
+}
